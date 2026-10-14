@@ -991,6 +991,8 @@ class SettingsResolver:
         )
         pages_per_batch = batch["pagesPerBatch"]
         context_batch_count = batch["contextBatchCount"]
+        knowledge_mode = batch.get("knowledgeMode", False)
+        extra_entities = batch.get("extraEntities", ["characters", "locations", "abilities", "items"] if knowledge_mode else [])
 
         vlm_section = provider("insight_vlm", "vlm")
         chat_settings = dict(effective["chat"])
@@ -1040,6 +1042,8 @@ class SettingsResolver:
                 "contextBatchCount": context_batch_count,
                 "architecturePreset": architecture_preset,
                 "layers": layers,
+                "knowledgeMode": knowledge_mode,
+                "extraEntities": list(extra_entities),
             },
             **sections,
             "prompts": frozen_prompts,

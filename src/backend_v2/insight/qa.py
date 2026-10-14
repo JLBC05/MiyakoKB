@@ -54,8 +54,12 @@ from src.backend_v2.storage.schema import (
     analysis_artifacts,
     analysis_layer_result_pages,
     analysis_layer_results,
+    analysis_page_results,
+    analysis_runs,
     books,
+    chapters,
     credential_versions,
+    pages,
     process_epochs,
     transient_requests,
     vector_generations,
@@ -892,7 +896,74 @@ class InsightQAWorkerService:
                 candidates,
                 run_id=request_payload["sourceRunId"],
             )
+        self._monitor_character_extraction_rate(
+            run_id=request_payload["sourceRunId"],
+            candidates=candidates,
+        )
         return {"mode": "exact", "candidates": candidates}
+
+    def _monitor_character_extraction_rate(
+        self,
+        *,
+        run_id: str | None,
+        candidates: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Monitor chapter character extraction rate; flag warning if < 30%."""
+        if not run_id:
+            return
+        try:
+            with self.engine.connect() as connection:
+                # Query all page results for this run along with their chapter_id
+                stmt = (
+                    select(
+                        pages.c.chapter_id,
+                        analysis_page_results.c.payload_json,
+                    )
+                    .join(
+                        pages,
+                        pages.c.id == analysis_page_results.c.page_id_snapshot,
+                    )
+                    .where(
+                        analysis_page_results.c.run_id == run_id,
+                        analysis_page_results.c.status.in_(("staging", "published")),
+                    )
+                )
+                rows = list(connection.execute(stmt).fetchall())
+            if not rows:
+                return
+
+            chapter_stats: dict[str, dict[str, int]] = {}
+            for chapter_id, payload_raw in rows:
+                if not chapter_id:
+                    chapter_id = "default_chapter"
+                stats = chapter_stats.setdefault(chapter_id, {"total": 0, "extracted": 0})
+                stats["total"] += 1
+
+                payload: dict[str, Any] = {}
+                if isinstance(payload_raw, str):
+                    try:
+                        payload = json.loads(payload_raw)
+                    except Exception:
+                        pass
+                elif isinstance(payload_raw, Mapping):
+                    payload = dict(payload_raw)
+
+                chars = payload.get("characters")
+                if isinstance(chars, list) and len(chars) > 0:
+                    stats["extracted"] += 1
+
+            for chapter_id, stats in chapter_stats.items():
+                if stats["total"] > 0:
+                    rate = stats["extracted"] / stats["total"]
+                    if rate < 0.30:
+                        warning_msg = (
+                            f"[QA检索层监控] 话 {chapter_id} 角色抽取率仅为 {rate:.1%} "
+                            f"({stats['extracted']}/{stats['total']})，低于 30%，标记为：可能抽取失败"
+                        )
+                        LOGGER.warning(warning_msg)
+                        user_log("warning", warning_msg)
+        except Exception as exc:
+            LOGGER.debug("character extraction rate monitor failed: %s", exc)
 
     def _query_chroma(
         self,

@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+import json
 import re
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.engine import Connection, Engine
+from src.backend_v2.storage.schema import analysis_runs
+
 
 ALLOWED_IMPORTANCE = frozenset({"high", "medium", "normal"})
-PAGE_FIELDS = frozenset(
+CORE_PAGE_FIELDS = frozenset(
     {
         "page_number",
         "page_summary",
@@ -17,9 +22,10 @@ PAGE_FIELDS = frozenset(
         "warnings",
     }
 )
+PAGE_FIELDS = CORE_PAGE_FIELDS
 EVENT_FIELDS = frozenset({"summary", "importance", "event_type"})
 WARNING_FIELDS = frozenset({"code", "message"})
-PERSISTED_FIELDS = frozenset(
+CORE_PERSISTED_FIELDS = frozenset(
     {
         "page_id",
         "source_asset_id",
@@ -31,10 +37,34 @@ PERSISTED_FIELDS = frozenset(
         "warnings",
     }
 )
+PERSISTED_FIELDS = CORE_PERSISTED_FIELDS
 
 
 class InvalidPageAnalysis(ValueError):
     pass
+
+
+def _validate_entity_list(items: object, field_name: str) -> list[dict[str, Any]]:
+    """Validate that extra entity field is a list[dict] where each dict contains a non-empty name."""
+    if not isinstance(items, list):
+        raise InvalidPageAnalysis(f"{field_name} must be an array")
+    normalized_list: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, Mapping):
+            raise InvalidPageAnalysis(f"{field_name}[{index}] must be an object")
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise InvalidPageAnalysis(
+                f"{field_name}[{index}].name must be a non-empty string"
+            )
+        normalized_item: dict[str, Any] = {}
+        for k, v in item.items():
+            if not isinstance(k, str) or not k:
+                raise InvalidPageAnalysis(f"{field_name}[{index}] key must be a non-empty string")
+            normalized_item[k] = v
+        normalized_item["name"] = name.strip()
+        normalized_list.append(normalized_item)
+    return normalized_list
 
 
 def normalize_page_analysis(
@@ -44,6 +74,7 @@ def normalize_page_analysis(
     source_asset_id: str,
     source_checksum: str,
     page_number: int,
+    extra_entities: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Return only the canonical persisted page-analysis fields."""
 
@@ -53,21 +84,43 @@ def normalize_page_analysis(
         source_checksum=source_checksum,
         page_number=page_number,
     )
-    page = normalize_model_page(_extract_page(raw), page_number=page_number)
-    return {
+    extra_keys = tuple(extra_entities or ())
+    page = normalize_model_page(
+        _extract_page(raw),
+        page_number=page_number,
+        extra_entities=extra_keys,
+    )
+    result = {
         "page_id": page_id,
         "source_asset_id": source_asset_id,
         "source_checksum": source_checksum,
         "page_number_snapshot": page_number,
-        **{key: page[key] for key in PAGE_FIELDS - {"page_number"}},
+        **{key: page[key] for key in CORE_PAGE_FIELDS - {"page_number"}},
     }
+    for key in extra_keys:
+        if key in page:
+            result[key] = page[key]
+    return result
 
 
-def normalize_model_page(page: Mapping[str, Any], *, page_number: int) -> dict[str, Any]:
+def normalize_model_page(
+    page: Mapping[str, Any],
+    *,
+    page_number: int,
+    extra_entities: Sequence[str] | None = None,
+) -> dict[str, Any]:
     """The same model fields are checked during generation and publication."""
-    if set(page) != PAGE_FIELDS:
+    extra_keys = set(extra_entities or ())
+    allowed_fields = CORE_PAGE_FIELDS | extra_keys
+    if not CORE_PAGE_FIELDS.issubset(set(page)):
+        missing = sorted(CORE_PAGE_FIELDS - set(page))
         raise InvalidPageAnalysis(
-            "page analysis must contain exactly the current fields"
+            f"page analysis missing required core fields: {', '.join(missing)}"
+        )
+    if not set(page).issubset(allowed_fields):
+        unknown = sorted(set(page) - allowed_fields)
+        raise InvalidPageAnalysis(
+            f"page analysis contains unknown fields: {', '.join(unknown)}"
         )
     if (
         isinstance(page["page_number"], bool)
@@ -130,38 +183,58 @@ def normalize_model_page(page: Mapping[str, Any], *, page_number: int) -> dict[s
         )
         warnings.append({"code": code, "message": message})
 
-    return {
+    result: dict[str, Any] = {
         "page_number": page_number,
         "page_summary": summary,
         "key_events": events,
         "continuity_notes": continuity,
         "warnings": warnings,
     }
+    for key in sorted(extra_keys):
+        raw_val = page.get(key, [])
+        result[key] = _validate_entity_list(raw_val, key)
+
+    return result
 
 
-def validate_persisted_page_analysis(raw: object) -> dict[str, Any]:
-    """Validate the one current persisted page-analysis shape without fallback."""
-
-    if not isinstance(raw, Mapping) or set(raw) != PERSISTED_FIELDS:
+def validate_persisted_page_analysis(
+    raw: object,
+    *,
+    extra_entities: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Validate persisted page-analysis shape supporting configured extra entities."""
+    extra_keys = set(extra_entities or ())
+    expected_fields = CORE_PERSISTED_FIELDS | extra_keys
+    if not isinstance(raw, Mapping):
+        raise InvalidPageAnalysis("persisted page analysis must be an object")
+    if not CORE_PERSISTED_FIELDS.issubset(set(raw)):
+        missing = sorted(CORE_PERSISTED_FIELDS - set(raw))
         raise InvalidPageAnalysis(
-            "persisted page analysis fields do not match the current schema"
+            f"persisted page analysis missing core fields: {', '.join(missing)}"
         )
+    if not set(raw).issubset(expected_fields):
+        unknown = sorted(set(raw) - expected_fields)
+        raise InvalidPageAnalysis(
+            f"persisted page analysis fields do not match schema: {', '.join(unknown)}"
+        )
+    model_page_input: dict[str, Any] = {
+        "page_number": raw["page_number_snapshot"],
+        "page_summary": raw["page_summary"],
+        "key_events": raw["key_events"],
+        "continuity_notes": raw["continuity_notes"],
+        "warnings": raw["warnings"],
+    }
+    for k in extra_keys:
+        if k in raw:
+            model_page_input[k] = raw[k]
+
     normalized = normalize_page_analysis(
-        {
-            "pages": [
-                {
-                    "page_number": raw["page_number_snapshot"],
-                    "page_summary": raw["page_summary"],
-                    "key_events": raw["key_events"],
-                    "continuity_notes": raw["continuity_notes"],
-                    "warnings": raw["warnings"],
-                }
-            ]
-        },
+        {"pages": [model_page_input]},
         page_id=raw["page_id"],
         source_asset_id=raw["source_asset_id"],
         source_checksum=raw["source_checksum"],
         page_number=raw["page_number_snapshot"],
+        extra_entities=tuple(extra_keys),
     )
     if dict(raw) != normalized:
         raise InvalidPageAnalysis("persisted page analysis is not canonical")
@@ -212,3 +285,56 @@ def _require_identity(
         raise InvalidPageAnalysis("source_checksum must be a lowercase SHA-256 digest")
     if isinstance(page_number, bool) or not isinstance(page_number, int) or page_number < 1:
         raise InvalidPageAnalysis("page_number must be a positive integer")
+
+
+def get_run_extra_entities(
+    run_id: str,
+    target: Connection | Engine,
+) -> tuple[str, ...]:
+    """Read extra_entities configuration from analysis_runs.config_json for the specified run."""
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("run_id must be a non-empty string")
+    stmt = select(analysis_runs.c.config_json).where(analysis_runs.c.id == run_id)
+    if isinstance(target, Engine):
+        with target.connect() as conn:
+            raw_json = conn.execute(stmt).scalar_one_or_none()
+    else:
+        raw_json = target.execute(stmt).scalar_one_or_none()
+
+    if raw_json is None:
+        return ()
+
+    if isinstance(raw_json, (bytes, bytearray)):
+        raw_json = raw_json.decode("utf-8")
+    if isinstance(raw_json, str):
+        config = json.loads(raw_json)
+    elif isinstance(raw_json, Mapping):
+        config = raw_json
+    else:
+        config = {}
+
+    analysis_cfg = config.get("analysis")
+    if isinstance(analysis_cfg, Mapping):
+        knowledge_mode = analysis_cfg.get("knowledgeMode")
+        extra_entities = analysis_cfg.get("extraEntities")
+    else:
+        knowledge_mode = config.get("knowledgeMode")
+        extra_entities = config.get("extraEntities")
+
+    if extra_entities is not None:
+        if isinstance(extra_entities, (list, tuple)):
+            return tuple(str(x) for x in extra_entities if isinstance(x, str) and x.strip())
+    elif knowledge_mode:
+        return ("characters", "locations", "abilities", "items")
+    return ()
+
+
+def deserialize_page_analysis(
+    payload: object,
+    *,
+    run_id: str,
+    target: Connection | Engine,
+) -> dict[str, Any]:
+    """Uniform entry point to deserialize and validate page analysis using run's dynamic configuration."""
+    extra_entities = get_run_extra_entities(run_id, target)
+    return validate_persisted_page_analysis(payload, extra_entities=extra_entities)

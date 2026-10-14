@@ -11,7 +11,11 @@ from typing import Any, Protocol
 
 from sqlalchemy import Engine
 
-from src.backend_v2.insight.page_schema import normalize_model_page, normalize_page_analysis
+from src.backend_v2.insight.page_schema import (
+    get_run_extra_entities,
+    normalize_model_page,
+    normalize_page_analysis,
+)
 from src.backend_v2.insight.provider_runtime import frozen_vlm_config
 from src.backend_v2.insight.repository import InsightConflict, InsightRepository
 from src.backend_v2.jobs.repository import (
@@ -76,6 +80,19 @@ class ProviderInsightAlgorithms:
                 f"{previous_context}"
             )
         page_number_json = json.dumps(list(page_numbers), ensure_ascii=False)
+        analysis_cfg = config.get("analysis") if isinstance(config.get("analysis"), Mapping) else {}
+        extra_entities = list(analysis_cfg.get("extraEntities") or config.get("extraEntities") or [])
+        knowledge_mode = bool(analysis_cfg.get("knowledgeMode") or config.get("knowledgeMode") or extra_entities)
+        if knowledge_mode and not extra_entities:
+            extra_entities = ["characters", "locations", "abilities", "items"]
+
+        extra_template_parts = ""
+        if extra_entities:
+            parts = []
+            for ent in extra_entities:
+                parts.append(f'"{ent}":[{{"name":"..."}}]')
+            extra_template_parts = "," + ",".join(parts)
+
         page_templates = ",".join(
             (
                 '{"page_number":'
@@ -83,17 +100,48 @@ class ProviderInsightAlgorithms:
                 ',"page_summary":"...","key_events":'
                 '[{"summary":"...","importance":"high|medium|normal",'
                 '"event_type":"optional"}],"continuity_notes":"...",'
-                '"warnings":[{"code":"...","message":"..."}]}'
+                '"warnings":[{"code":"...","message":"..."}]'
+                f"{extra_template_parts}"
+                "}"
             )
             for page_number in page_numbers
         )
+        common_guidelines = (
+            "\n【生成质量与评估标准】\n"
+            "1. 生成顺序与摘要质量：必须先完整生成 page_summary，再提取其他字段。"
+            "page_summary 必须具备足够的信息量（涵盖时间/地点/核心人物动作/关键对白意图），不得出现一句空泛带过的敷衍描述。\n"
+            "2. key_events 的 importance 判定标准（严格执行）：\n"
+            "   - high: 推动主线剧情或故事走向的核心转折、主线任务触发、生死战斗、重要角色初次亮相。\n"
+            "   - medium: 承上启下的剧情推进、常规信息获悉/线索汇报、关键日常冲突。\n"
+            "   - normal: 纯日常对话、逗趣插曲、非关键背景互动。\n"
+        )
+
+        if knowledge_mode:
+            forbidden = "scene、mood、panels、dialogues、speaker_name、original_text、translated_text"
+            extraction_rules = (
+                f"{common_guidelines}"
+                "\n【知识实体提取规则】\n"
+                f"必须提取的实体字段：{', '.join(extra_entities)}。\n"
+                "每个实体列表必须是对象数组，且每个对象必须包含非空的 'name' 字段。\n"
+                "实体分类与边界定义（严禁混淆）：\n"
+                "  - items（物品）：仅收录可随身携带、可移动、具备独立实体属性的具体物品/道具/咒物（如：手机、特级咒物、宿傩之指、硬币）。严禁将建筑物、房间、固定设施、家具或环境结构归入 items！\n"
+                "  - locations（地点）：收录场景发生的具体地理位置、建筑、房间、固定设施或环境结构。"
+                "【地点粒度与命名规则（严格执行）】：同一场景只保留一个条目，采用完整层级路径命名（例如：'杉泽第三高中·家庭科准备室'、'杉泽第三高中·操场百叶箱'），严禁拆分成'学校'和'房间'两条独立记录！同一场景在连续页面中必须保持完全一致的命名与粒度。\n"
+                "  - abilities（能力/招式）：收录明确施展或提及的技能、术式、咒术、超常能力（如：十种影法术·蟾蜍）。\n"
+                "  - 确定性原则：实体归属不确定或边界模糊时，宁可留空 []，绝不要归入错误的字段中。\n"
+                "强制判定：只要本页有角色、对话、战斗或能力展示，即使不是重大转折，也必须提取实体。只有纯风景页或纯过渡页才允许返回空列表 []。\n"
+            )
+        else:
+            forbidden = "scene、mood、panels、dialogues、speaker_name、original_text、translated_text、characters 或 character_mentions"
+            extraction_rules = f"{common_guidelines}\n"
+
         strict_suffix = (
-            f"\n\n按图片给出的顺序分析这 {len(page_numbers)} 页，"
+            f"\n\n{extraction_rules}"
+            f"按图片给出的顺序分析这 {len(page_numbers)} 页，"
             f"对应页码依次为 {page_number_json}。只输出 JSON："
             f'{{"pages":[{page_templates}]}}。'
             "pages 必须逐页完整覆盖上述页码且不得重复。"
-            "不要输出 scene、mood、panels、dialogues、speaker_name、"
-            "original_text、translated_text、characters 或 character_mentions。"
+            f"不要输出 {forbidden}。"
         )
         client = VLMClient(vlm_config)
         valid_pages: dict[int, dict[str, Any]] = {}
@@ -105,7 +153,11 @@ class ProviderInsightAlgorithms:
                 if number in valid_pages:
                     continue
                 try:
-                    valid_pages[number] = normalize_model_page(page, page_number=number)
+                    valid_pages[number] = normalize_model_page(
+                        page,
+                        page_number=number,
+                        extra_entities=extra_entities,
+                    )
                 except ValueError as exc:
                     errors.append(f"第 {number} 页：{exc}")
             missing = [number for number in page_numbers if number not in valid_pages]
@@ -312,6 +364,7 @@ class InsightAnalysisWorkerService:
                     )
                 raw_by_page[raw_page_number] = raw_page
 
+            run_extra_entities = get_run_extra_entities(run_id, self.engine)
             successes: dict[str, dict[str, Any]] = {}
             failures: dict[str, str] = {}
             for pending_target, page_number in zip(
@@ -331,6 +384,7 @@ class InsightAnalysisWorkerService:
                         source_asset_id=str(pending_target["source_asset_id"]),
                         source_checksum=str(pending_target["source_checksum"]),
                         page_number=page_number,
+                        extra_entities=run_extra_entities,
                     )
                 except Exception as exc:
                     failures[target_page_id] = self.jobs.redact_attempt_message(

@@ -21,6 +21,8 @@ from src.backend_v2.timestamps import iso_utc as _iso, utcnow
 from src.backend_v2.redaction import redact_sensitive_text
 from src.backend_v2.insight.page_schema import (
     InvalidPageAnalysis,
+    deserialize_page_analysis,
+    get_run_extra_entities,
     validate_persisted_page_analysis,
 )
 from src.backend_v2.jobs.repository import decode_job_progress
@@ -266,10 +268,19 @@ def _page_analysis(
     page_number: object | None = None,
     source_asset_id: object | None = None,
     source_checksum: object | None = None,
+    run_id: str | None = None,
+    connection: Connection | Engine | None = None,
 ) -> dict[str, Any]:
     parsed = _json_object(value, field)
     try:
-        payload = validate_persisted_page_analysis(parsed)
+        if run_id is not None and connection is not None:
+            payload = deserialize_page_analysis(
+                parsed,
+                run_id=run_id,
+                target=connection,
+            )
+        else:
+            payload = validate_persisted_page_analysis(parsed)
     except InvalidPageAnalysis as exc:
         raise InsightConflict(
             f"stored {field} is invalid"
@@ -490,6 +501,21 @@ class InsightRepository:
         config: Mapping[str, Any],
         targets: Sequence[Mapping[str, Any]],
     ) -> None:
+        existing = connection.execute(
+            select(analysis_runs.c.id, analysis_runs.c.config_json).where(
+                analysis_runs.c.id == run_id
+            )
+        ).mappings().one_or_none()
+        if existing is not None:
+            has_results = connection.execute(
+                select(func.count(analysis_page_results.c.id)).where(
+                    analysis_page_results.c.run_id == run_id
+                )
+            ).scalar_one() > 0
+            if has_results:
+                raise InsightConflict(
+                    "cannot re-initialize or update config_json for run with existing results"
+                )
         now = utcnow()
         connection.execute(
             insert(analysis_runs).values(
@@ -873,7 +899,11 @@ class InsightRepository:
         if scope not in ANALYSIS_RUN_SCOPES:
             raise InsightConflict("analysis run scope is invalid")
         try:
-            canonical_payload = validate_persisted_page_analysis(payload)
+            canonical_payload = deserialize_page_analysis(
+                payload,
+                run_id=run_id,
+                target=connection,
+            )
         except InvalidPageAnalysis as exc:
             raise InsightConflict("analysis page payload is invalid") from exc
         if (
@@ -987,7 +1017,11 @@ class InsightRepository:
                 minimum=1,
             )
             try:
-                payload = validate_persisted_page_analysis(copy["payload"])
+                payload = deserialize_page_analysis(
+                    copy["payload"],
+                    run_id=run_id,
+                    target=connection,
+                )
             except InvalidPageAnalysis as exc:
                 raise InsightConflict(
                     f"analysis retry copy {index} payload is invalid"
@@ -1739,6 +1773,8 @@ class InsightRepository:
                 page_number=page_number,
                 source_asset_id=source_asset_id,
                 source_checksum=source_checksum,
+                run_id=run_id,
+                connection=connection,
             )
             result_rows[result_page_id] = {**row, "id": result_id}
         expected_result_pages = {
@@ -2385,6 +2421,8 @@ class InsightRepository:
                     row["source_checksum"],
                     "recent analysis source checksum",
                 ),
+                run_id=_required_string(row["run_id"], "recent analysis run id"),
+                connection=connection,
             )
             items.append(
                 {
@@ -2877,6 +2915,8 @@ class InsightRepository:
                     result["source_checksum"],
                     "analysis page source checksum",
                 ),
+                run_id=_required_string(result["run_id"], "analysis page result run id"),
+                connection=connection,
             )
             stale_reasons = []
             if analysis["source_asset_id"] != source_asset_id:

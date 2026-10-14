@@ -701,16 +701,34 @@ def _validate_insight(payload: dict[str, Any]) -> None:
     analysis = _object(payload["analysis"], "insight.analysis")
     _exact_keys(analysis, {"batch"}, "insight.analysis")
     batch = _object(analysis["batch"], "insight.analysis.batch")
-    _exact_keys(
-        batch,
-        {
-            "pagesPerBatch",
-            "contextBatchCount",
-            "architecturePreset",
-            "customLayers",
-        },
-        "insight.analysis.batch",
-    )
+    allowed_batch_keys = {
+        "pagesPerBatch",
+        "contextBatchCount",
+        "architecturePreset",
+        "customLayers",
+        "knowledgeMode",
+        "extraEntities",
+    }
+    unknown_batch_keys = set(batch) - allowed_batch_keys
+    if unknown_batch_keys:
+        raise ValueError(f"insight.analysis.batch has unknown keys: {', '.join(sorted(unknown_batch_keys))}")
+    required_batch_keys = {
+        "pagesPerBatch",
+        "contextBatchCount",
+        "architecturePreset",
+        "customLayers",
+    }
+    missing_batch_keys = required_batch_keys - set(batch)
+    if missing_batch_keys:
+        raise ValueError(f"insight.analysis.batch is missing keys: {', '.join(sorted(missing_batch_keys))}")
+    if "knowledgeMode" in batch and not isinstance(batch["knowledgeMode"], bool):
+        raise ValueError("insight knowledgeMode must be boolean")
+    if "extraEntities" in batch:
+        if not isinstance(batch["extraEntities"], list):
+            raise ValueError("insight extraEntities must be an array")
+        for ent in batch["extraEntities"]:
+            if not isinstance(ent, str) or not ent.strip():
+                raise ValueError("insight extraEntities entries must be non-empty strings")
     _integer(
         batch["pagesPerBatch"],
         "insight.analysis.batch.pagesPerBatch",

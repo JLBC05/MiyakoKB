@@ -109,6 +109,8 @@ DEFAULT_INSIGHT_SETTINGS: dict[str, object] = {
             "contextBatchCount": 3,
             "architecturePreset": "standard",
             "customLayers": [],
+            "knowledgeMode": False,
+            "extraEntities": ["characters", "locations", "abilities", "items"],
         }
     },
     "vlm": {"provider": "gemini"},

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +25,7 @@ from src.backend_v2.serialization import canonical_json as _json
 from src.backend_v2.insight.page_schema import (
     ALLOWED_IMPORTANCE,
     InvalidPageAnalysis,
+    deserialize_page_analysis,
     validate_persisted_page_analysis,
 )
 from src.backend_v2.insight.repository import (
@@ -75,6 +77,187 @@ DERIVED_KINDS = frozenset(
 FINAL_ANALYSIS_RUN_STATUSES = frozenset(
     {"completed", "completed_with_errors"}
 )
+
+
+# 1. 固化的已知核心地名/词根映射表（按长度降序优先替换）
+KNOWN_LOCATION_ROOTS = [
+    ("杉泽第三高中", "sugisawa_third_high"),
+    ("杉泽第三高校", "sugisawa_third_high"),
+    ("杉泽高中", "sugisawa_high"),
+    ("杉泽医院", "sugisawa_hospital"),
+    ("杉泽", "sugisawa"),
+    ("东京都立咒术高等专门学校", "tokyo_jujutsu_high"),
+    ("咒术高专", "jujutsu_high"),
+    ("高专", "jujutsu_high"),
+    ("仙台市", "sendai_city"),
+    ("仙台", "sendai"),
+    ("宫城县", "miyagi_prefecture"),
+    ("宫城", "miyagi"),
+]
+
+# 2. 固化的子场景/子设施词根映射表
+KNOWN_LOCATION_SUBS = [
+    ("家庭科准备室", "home_economics_room"),
+    ("灵研会活动室", "occult_club_room"),
+    ("灵异研活动室", "occult_club_room"),
+    ("百叶箱", "instrument_shelter"),
+    ("操场", "playground"),
+    ("橄榄球场", "rugby_field"),
+    ("足球场", "soccer_field"),
+    ("田径场", "track_and_field_ground"),
+    ("校门外", "school_gate_outside"),
+    ("校门", "school_gate"),
+    ("校舍外", "school_building_outside"),
+    ("校舍", "school_building"),
+    ("教学楼连接天台", "classroom_building_rooftop"),
+    ("连接走廊天台", "connecting_corridor_rooftop"),
+    ("走廊天台", "corridor_rooftop"),
+    ("天台", "rooftop"),
+    ("教学楼4楼走廊", "classroom_building_4f_corridor"),
+    ("教学楼走廊", "classroom_building_corridor"),
+    ("教学楼", "classroom_building"),
+    ("走廊", "corridor"),
+    ("楼梯间", "stairwell"),
+    ("301病房", "ward_301"),
+    ("病房", "ward"),
+    ("大厅前台", "lobby_front_desk"),
+    ("大厅", "lobby"),
+    ("前台", "front_desk"),
+    ("附近街道", "nearby_street"),
+    ("街道", "street"),
+    ("地下室", "basement"),
+    ("活动室", "club_room"),
+    ("准备室", "prep_room"),
+]
+
+# 3. 动态加载 entity_slug_map.json 配置
+def load_entity_slug_map(config_path: str | None = None) -> dict[str, dict[str, str]]:
+    """加载实体到罗马音/英文 slug 的映射配置。"""
+    paths_to_try = []
+    if config_path:
+        paths_to_try.append(Path(config_path))
+    paths_to_try.extend([
+        Path.cwd() / "entity_slug_map.json",
+        Path(__file__).resolve().parents[4] / "entity_slug_map.json",
+        Path(__file__).resolve().parent / "entity_slug_map.json",
+    ])
+    for p in paths_to_try:
+        if p.is_file():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return {
+                    "characters": dict(data.get("characters", {})),
+                    "items": dict(data.get("items", {})),
+                    "abilities": dict(data.get("abilities", {})),
+                    "locations": dict(data.get("locations", {})),
+                }
+            except Exception:
+                pass
+    return {"characters": {}, "items": {}, "abilities": {}, "locations": {}}
+
+CHAR_PINYIN = {
+    '杉': 'shan', '泽': 'ze', '第': 'di', '三': 'san', '高': 'gao', '中': 'zhong',
+    '家': 'jia', '庭': 'ting', '科': 'ke', '准': 'zhun', '备': 'bei', '室': 'shi',
+    '百': 'bai', 'ye': 'ye', '箱': 'xiang', '操': 'cao', '场': 'chang', '橄': 'gan',
+    '榄': 'lan', '球': 'qiu', '校': 'xiao', '门': 'men', '外': 'wai', '走': 'zou',
+    '廊': 'lang', '天': 'tian', '台': 'tai', '教': 'jiao', '学': 'xue', '楼': 'lou',
+    '连': 'lian', '接': 'jie', '灵': 'ling', '研': 'yan', '会': 'hui', '活': 'huo',
+    '动': 'dong', '房': 'fang', '病': 'bing', '街': 'jie', '道': 'dao', '附': 'fu',
+    '近': 'jin', '舍': 'she', '梯': 'ti', '间': 'jian', '前': 'qian', '院': 'yuan',
+}
+
+CATEGORY_PREFIX = {
+    "characters": "character",
+    "items": "item",
+    "abilities": "ability",
+    "locations": "location",
+}
+
+def romanize_location_string(loc_str: str) -> str:
+    norm = loc_str.strip()
+    parts = norm.split("·") if "·" in norm else [norm]
+    roman_parts = []
+    for part in parts:
+        s = part
+        for zh, en in KNOWN_LOCATION_ROOTS:
+            if zh in s:
+                s = s.replace(zh, f"_{en}_")
+                break
+        for zh, en in KNOWN_LOCATION_SUBS:
+            if zh in s:
+                s = s.replace(zh, f"_{en}_")
+                break
+        res = []
+        for ch in s:
+            if ch in CHAR_PINYIN:
+                res.append(f"_{CHAR_PINYIN[ch]}_")
+            elif re.match(r'[a-zA-Z0-9_]', ch):
+                res.append(ch)
+            else:
+                res.append('_')
+        cleaned = re.sub(r'_+', '_', "".join(res)).strip('_').lower()
+        if cleaned:
+            roman_parts.append(cleaned)
+    return "_".join(roman_parts) or "location_unknown"
+
+def to_romanized_slug(category: str, text: str, slug_map: Mapping[str, Mapping[str, str]] | None = None) -> str:
+    """根据 category 和 text 生成 slug。
+    
+    规则：
+    1. 地点优先走 romanize_location_string；
+    2. 命中 entity_slug_map 配置 → 返回正式罗马音/英文 slug；
+    3. 未命中 → 采用 pypinyin 生成拼音，并强制添加 'pinyin_' 显式前缀，以便人工识别补全。
+    """
+    if category == "locations":
+        return romanize_location_string(text)
+    
+    if slug_map:
+        cat_map = slug_map.get(category, {})
+        if text in cat_map:
+            return cat_map[text]
+    else:
+        # 尝试默认加载
+        default_map = load_entity_slug_map()
+        cat_map = default_map.get(category, {})
+        if text in cat_map:
+            return cat_map[text]
+
+    # 未命中配置，走 pypinyin 兜底，并强制加 'pinyin_' 标记
+    pinyin_str = ""
+    try:
+        import pypinyin
+        py_list = pypinyin.lazy_pinyin(text)
+        if py_list:
+            slug = "_".join(py_list)
+            slug = re.sub(r'[^a-zA-Z0-9_]', '_', slug)
+            slug = re.sub(r'_+', '_', slug).strip('_').lower()
+            if slug:
+                pinyin_str = slug
+    except Exception:
+        pass
+
+    if not pinyin_str:
+        res = []
+        for ch in text:
+            if ch in CHAR_PINYIN:
+                res.append(CHAR_PINYIN[ch])
+            elif re.match(r'[a-zA-Z0-9]', ch):
+                res.append(ch)
+            elif ch in ['_', '-']:
+                res.append('_')
+        slug = re.sub(r'_+', '_', "".join(res)).strip('_').lower()
+        pinyin_str = slug or "entity"
+
+    return f"pinyin_{pinyin_str}"
+
+def calculate_confidence(best_freq: int, other_freqs: list[int]) -> str:
+    if not other_freqs:
+        return "high"
+    second_best = max(other_freqs)
+    if best_freq >= 2 * second_best and (best_freq - second_best) >= 2:
+        return "high"
+    return "low"
 
 
 def _normalize_layer_events(value: object) -> list[dict[str, Any]]:
@@ -171,6 +354,9 @@ def validate_artifact_payload(
     elif kind == "compressed_context":
         if template != "default":
             raise InsightConflict("Insight compressed context template is invalid")
+    elif kind == "entity_alignment":
+        if template != "default":
+            raise InsightConflict("Insight entity alignment template is invalid")
     else:
         raise InsightConflict("Insight artifact kind is invalid")
     if not isinstance(payload, Mapping) or not contains_nonempty_text(payload):
@@ -179,6 +365,13 @@ def validate_artifact_payload(
     if kind == "overview":
         _required_text(normalized.get("title"), "overview title")
         _required_text(normalized.get("content"), "overview content")
+    elif kind == "entity_alignment":
+        if "canonical_entities" not in normalized or not isinstance(normalized["canonical_entities"], list):
+            raise InsightConflict("entity_alignment payload must contain canonical_entities list")
+        if "alias_map" not in normalized or not isinstance(normalized["alias_map"], dict):
+            raise InsightConflict("entity_alignment payload must contain alias_map dictionary")
+        if "pending_review_queue" not in normalized or not isinstance(normalized["pending_review_queue"], list):
+            raise InsightConflict("entity_alignment payload must contain pending_review_queue list")
     return normalized
 
 
@@ -196,11 +389,19 @@ def _persisted_page_analysis(
     page_number: int,
     source_asset_id: str,
     source_checksum: str,
+    run_id: str | None = None,
+    connection: Connection | Engine | None = None,
 ) -> dict[str, Any]:
     try:
-        payload = validate_persisted_page_analysis(
-            _json_object(value, "analysis page payload")
-        )
+        parsed = _json_object(value, "analysis page payload")
+        if run_id is not None and connection is not None:
+            payload = deserialize_page_analysis(
+                parsed,
+                run_id=run_id,
+                target=connection,
+            )
+        else:
+            payload = validate_persisted_page_analysis(parsed)
     except InvalidPageAnalysis as exc:
         raise InsightConflict(
             "stored analysis page payload is invalid"
@@ -1595,6 +1796,8 @@ class InsightDerivedRepository:
                         page_number=page_number,
                         source_asset_id=source_asset_id,
                         source_checksum=source_checksum,
+                        run_id=run_id,
+                        connection=connection,
                     ),
                 }
             )
@@ -2015,6 +2218,8 @@ class InsightDerivedRepository:
                         page_number=analysis_page_number,
                         source_asset_id=source_asset_id,
                         source_checksum=source_checksum,
+                        run_id=row["run_id"],
+                        connection=connection,
                     ),
                 }
             )
@@ -2707,6 +2912,400 @@ class InsightDerivedRepository:
             "unitCount": len(units),
         }
 
+    def align_entities(
+        self,
+        *,
+        book_id: str,
+        chapter_id: str,
+        pages_analysis: Sequence[Mapping[str, Any]],
+        alias_seed_config: Mapping[str, Any] | None = None,
+        entity_slug_map_config: Mapping[str, Mapping[str, str]] | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Align entities extracted from chapter pages with existing canonical entities,
+
+        supporting incremental updates, transactional locking, review queues, and seed overrides.
+        """
+        # 加载 entity_slug_map 配置
+        slug_map = dict(entity_slug_map_config) if entity_slug_map_config else load_entity_slug_map()
+
+        with self.engine.begin() as connection:
+            self._assert_book_owned(connection, book_id)
+
+            # 1. 悲观行锁/乐观版本读取现有 active 产物
+            # 在 SQLite 中 begin() 开启了写事务；在 PostgreSQL 等数据库中加 with_for_update
+            select_query = (
+                select(analysis_artifacts)
+                .where(
+                    analysis_artifacts.c.book_id == book_id,
+                    analysis_artifacts.c.kind == "entity_alignment",
+                    analysis_artifacts.c.template == "default",
+                    analysis_artifacts.c.is_active.is_(True),
+                )
+            )
+            try:
+                select_query = select_query.with_for_update()
+            except Exception:
+                pass
+
+            existing_artifact = connection.execute(select_query).mappings().one_or_none()
+
+            existing_canonical_entities: list[dict[str, Any]] = []
+            existing_alias_map: dict[str, str] = {}
+            existing_pending_review: list[dict[str, Any]] = []
+            current_revision = 0
+            if existing_artifact is not None:
+                current_revision = existing_artifact["revision"]
+                try:
+                    existing_payload = _json_object(existing_artifact["payload_json"], "existing entity_alignment payload")
+                    existing_canonical_entities = list(existing_payload.get("canonical_entities", []))
+                    existing_alias_map = dict(existing_payload.get("alias_map", {}))
+                    existing_pending_review = list(existing_payload.get("pending_review_queue", []))
+                except Exception:
+                    pass
+
+            # 2. 统计本章实体词频与出现页码
+            raw_stats = {
+                "characters": defaultdict(lambda: {"count": 0, "pages": []}),
+                "items": defaultdict(lambda: {"count": 0, "pages": []}),
+                "abilities": defaultdict(lambda: {"count": 0, "pages": []}),
+                "locations": defaultdict(lambda: {"count": 0, "pages": []}),
+            }
+            for p in pages_analysis:
+                pn = p.get("page_number", 0)
+                for cat in raw_stats.keys():
+                    for it in p.get(cat, []):
+                        if isinstance(it, Mapping):
+                            name = str(it.get("name", "")).strip()
+                            if name:
+                                raw_stats[cat][name]["count"] += 1
+                                raw_stats[cat][name]["pages"].append(pn)
+
+            # 3. 解析 alias_seed_config
+            seed = dict(alias_seed_config or {})
+            global_terms = seed.get("global_terms", {})
+            chapter_overrides = seed.get("chapter_overrides", {}).get(chapter_id, {})
+
+            # 建立已有实体的快速索引
+            # canonical_by_id: entity_id -> entity dict
+            canonical_by_id: dict[str, dict[str, Any]] = {
+                ent["entity_id"]: ent for ent in existing_canonical_entities
+            }
+            # canonical_by_name: (category, canonical_name) -> entity_id
+            canonical_by_name: dict[tuple[str, str], str] = {
+                (ent["category"], ent["canonical_name"]): ent["entity_id"]
+                for ent in existing_canonical_entities
+            }
+            # canonical_by_alias: (category, alias_name) -> entity_id
+            canonical_by_alias: dict[tuple[str, str], str] = {}
+            for ent in existing_canonical_entities:
+                for a in ent.get("aliases", []):
+                    canonical_by_alias[(ent["category"], a)] = ent["entity_id"]
+
+            updated_alias_map = dict(existing_alias_map)
+            new_low_confidence_items: list[tuple[str, str, list[str], int, list[int]]] = []
+
+            # 4. 执行增量对齐与聚类合并
+            # 已知的聚类规则（跨话通用）
+            clusters_by_cat = {
+                "items": [
+                    {
+                        "canonical_hint": "宿傩之指",
+                        "matches": ["宿傩之指", "两面宿傩的手指", "特级咒物（两面宿傩之指）"],
+                        "slug": "sukuna_finger"
+                    }
+                ],
+                "characters": [
+                    {
+                        "canonical_hint": "高木",
+                        "matches": ["高木", "高木老师"],
+                        "slug": "takagi"
+                    }
+                ],
+                "locations": [
+                    {
+                        "canonical_hint": "杉泽第三高中·连接走廊天台",
+                        "matches": ["杉泽第三高中·连接走廊天台", "杉泽第三高中·教学楼连接天台"],
+                        "slug": "sugisawa_third_high_connecting_corridor_rooftop"
+                    },
+                    {
+                        "canonical_hint": "杉泽第三高中·家庭科准备室",
+                        "matches": ["杉泽第三高中·家庭科准备室", "杉泽第三高中·灵研会活动室"],
+                        "slug": "sugisawa_third_high_home_economics_room"
+                    },
+                    {
+                        "canonical_hint": "杉泽第三高中·教学楼走廊",
+                        "matches": ["杉泽第三高中·教学楼走廊", "杉泽第三高中·教学楼4楼走廊", "杉泽第三高中·走廊"],
+                        "slug": "sugisawa_third_high_classroom_building_corridor"
+                    }
+                ],
+                "abilities": [],
+            }
+
+            for cat, raw_dict in raw_stats.items():
+                processed_names = set()
+                clusters = clusters_by_cat.get(cat, [])
+
+                # 先处理已知聚类簇
+                for cl in clusters:
+                    members = [m for m in cl["matches"] if m in raw_dict]
+                    if not members:
+                        continue
+                    for m in members:
+                        processed_names.add(m)
+
+                    members_sorted = sorted(members, key=lambda m: raw_dict[m]["count"], reverse=True)
+                    canonical_name = members_sorted[0]
+                    best_freq = raw_dict[canonical_name]["count"]
+                    other_freqs = [raw_dict[m]["count"] for m in members_sorted[1:]]
+
+                    confidence = calculate_confidence(best_freq, other_freqs)
+                    aliases = [m for m in members if m != canonical_name]
+                    slug = cl.get("slug") or to_romanized_slug(cat, canonical_name, slug_map=slug_map)
+                    expected_id = f"{CATEGORY_PREFIX[cat]}_{slug}"
+
+                    # 检查是否已存在该标准实体
+                    existing_id = canonical_by_name.get((cat, canonical_name)) or (
+                        expected_id if expected_id in canonical_by_id else None
+                    )
+
+                    this_pages = sorted(list(set(sum([raw_dict[m]["pages"] for m in members], []))))
+                    this_freq = sum(raw_dict[m]["count"] for m in members)
+
+                    if existing_id and existing_id in canonical_by_id:
+                        ent = canonical_by_id[existing_id]
+                        ent["total_frequency"] += this_freq
+                        ent["pages"] = sorted(list(set(ent.get("pages", []) + this_pages)))
+                        valid_ch = ent.setdefault("valid_chapters", [])
+                        if chapter_id not in valid_ch:
+                            valid_ch.append(chapter_id)
+                        for a in aliases:
+                            if a not in ent["aliases"]:
+                                ent["aliases"].append(a)
+                        alias_det = ent.setdefault("alias_details", {})
+                        for m in members:
+                            if m != ent["canonical_name"]:
+                                alias_det[m] = alias_det.get(m, 0) + raw_dict[m]["count"]
+                        updated_alias_map[canonical_name] = existing_id
+                        for a in aliases:
+                            updated_alias_map[a] = existing_id
+                    else:
+                        ent = {
+                            "entity_id": expected_id,
+                            "category": cat,
+                            "canonical_name": canonical_name,
+                            "confidence": confidence,
+                            "total_frequency": this_freq,
+                            "pages": this_pages,
+                            "valid_chapters": [chapter_id],
+                            "aliases": aliases,
+                            "alias_details": {m: raw_dict[m]["count"] for m in members if m != canonical_name}
+                        }
+                        canonical_by_id[expected_id] = ent
+                        canonical_by_name[(cat, canonical_name)] = expected_id
+                        for a in aliases:
+                            canonical_by_alias[(cat, a)] = expected_id
+                        updated_alias_map[canonical_name] = expected_id
+                        for a in aliases:
+                            updated_alias_map[a] = expected_id
+
+                    if confidence == "low":
+                        new_low_confidence_items.append((cat, canonical_name, aliases, best_freq, other_freqs))
+
+                # 处理非聚类的独立实体
+                for name, info in raw_dict.items():
+                    if name in processed_names:
+                        continue
+
+                    # 先判断是否已存在已有实体（通过标准名、别名或 slug）
+                    target_id = canonical_by_name.get((cat, name)) or canonical_by_alias.get((cat, name))
+                    slug = to_romanized_slug(cat, name, slug_map=slug_map)
+                    slug_id = f"{CATEGORY_PREFIX[cat]}_{slug}"
+                    if not target_id and slug_id in canonical_by_id:
+                        target_id = slug_id
+
+                    if target_id and target_id in canonical_by_id:
+                        ent = canonical_by_id[target_id]
+                        ent["total_frequency"] += info["count"]
+                        ent["pages"] = sorted(list(set(ent.get("pages", []) + info["pages"])))
+                        valid_ch = ent.setdefault("valid_chapters", [])
+                        if chapter_id not in valid_ch:
+                            valid_ch.append(chapter_id)
+                        if name != ent["canonical_name"] and name not in ent["aliases"]:
+                            ent["aliases"].append(name)
+                            ent.setdefault("alias_details", {})[name] = info["count"]
+                        if name not in updated_alias_map:
+                            updated_alias_map[name] = target_id
+                    else:
+                        ent = {
+                            "entity_id": slug_id,
+                            "category": cat,
+                            "canonical_name": name,
+                            "confidence": "high",
+                            "total_frequency": info["count"],
+                            "pages": sorted(list(set(info["pages"]))),
+                            "valid_chapters": [chapter_id],
+                            "aliases": [],
+                            "alias_details": {}
+                        }
+                        canonical_by_id[slug_id] = ent
+                        canonical_by_name[(cat, name)] = slug_id
+                        if name not in updated_alias_map:
+                            updated_alias_map[name] = slug_id
+
+            # 5. 应用种子配置（全局层 global_terms 与章节层 chapter_overrides）
+            # 全局层覆盖
+            for cat, terms in global_terms.items():
+                for term, override_info in terms.items():
+                    target_id = override_info.get("target_entity_id")
+                    if target_id and target_id in canonical_by_id:
+                        target_ent = canonical_by_id[target_id]
+                        if term not in target_ent["aliases"]:
+                            target_ent["aliases"].append(term)
+                        updated_alias_map[term] = target_id
+
+            # 章节层覆盖（仅对本 chapter_id 生效）
+            for cat, terms in chapter_overrides.items():
+                if isinstance(terms, Mapping):
+                    for term, override_info in terms.items():
+                        target_id = override_info.get("target_entity_id")
+                        if target_id and target_id in canonical_by_id:
+                            target_ent = canonical_by_id[target_id]
+                            if term not in target_ent["aliases"]:
+                                target_ent["aliases"].append(term)
+                            if term in raw_stats.get(cat, {}):
+                                term_pages = raw_stats[cat][term]["pages"]
+                                target_ent.setdefault("alias_details", {})[term] = f"{raw_stats[cat][term]['count']} (seed override)"
+                                target_ent["pages"] = sorted(list(set(target_ent["pages"] + term_pages)))
+                                target_ent["total_frequency"] += raw_stats[cat][term]["count"]
+                            valid_ch = target_ent.setdefault("valid_chapters", [])
+                            if chapter_id not in valid_ch:
+                                valid_ch.append(chapter_id)
+                            updated_alias_map[term] = target_id
+
+            # 6. 更新低置信度队列 pending_review_queue（按 (raw_name, category) 去重）
+            review_queue_dict: dict[tuple[str, str], dict[str, Any]] = {
+                (item["raw_name"], item["category"]): item
+                for item in existing_pending_review
+            }
+            for cat, can_name, aliases, best_f, other_fs in new_low_confidence_items:
+                for candidate in [can_name] + aliases:
+                    freq = raw_stats[cat][candidate]["count"]
+                    key = (candidate, cat)
+                    if key in review_queue_dict:
+                        review_queue_dict[key]["last_seen_chapter"] = chapter_id
+                        review_queue_dict[key]["frequency"] += freq
+                    else:
+                        review_queue_dict[key] = {
+                            "raw_name": candidate,
+                            "category": cat,
+                            "canonical_candidate": can_name,
+                            "first_seen_chapter": chapter_id,
+                            "last_seen_chapter": chapter_id,
+                            "frequency": freq,
+                            "status": "pending_review",
+                            "note": f"Candidate freq: {best_f}, others: {other_fs}",
+                        }
+
+            final_canonical_entities = list(canonical_by_id.values())
+            # 保证每个 entity 的 valid_chapters 是存在的且有序
+            for ent in final_canonical_entities:
+                if "valid_chapters" not in ent or not ent["valid_chapters"]:
+                    ent["valid_chapters"] = [chapter_id]
+                else:
+                    ent["valid_chapters"] = sorted(list(set(ent["valid_chapters"])))
+
+            final_pending_review = list(review_queue_dict.values())
+            final_payload = {
+                "canonical_entities": final_canonical_entities,
+                "alias_map": updated_alias_map,
+                "pending_review_queue": final_pending_review,
+                "version": current_revision + 1,
+                "updated_at": utcnow().isoformat(),
+            }
+
+            # 7. 写入数据库 analysis_artifacts（同一事务，递增版本号与设置 active）
+            now = utcnow()
+            new_revision = current_revision + 1
+            artifact_id = str(uuid.uuid4())
+
+            # 冻结并停用旧版本
+            connection.execute(
+                update(analysis_artifacts)
+                .where(
+                    analysis_artifacts.c.book_id == book_id,
+                    analysis_artifacts.c.kind == "entity_alignment",
+                    analysis_artifacts.c.template == "default",
+                    analysis_artifacts.c.is_active.is_(True),
+                )
+                .values(is_active=False, updated_at=now)
+            )
+
+            # 插入新版本
+            connection.execute(
+                insert(analysis_artifacts).values(
+                    id=artifact_id,
+                    book_id=book_id,
+                    run_id=run_id,
+                    kind="entity_alignment",
+                    template="default",
+                    status="ready",
+                    revision=new_revision,
+                    is_active=True,
+                    dependency_fingerprint=hashlib.sha256(_json(final_payload).encode("utf-8")).hexdigest(),
+                    payload_json=_json(final_payload),
+                    asset_id=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+            return {
+                "artifactId": artifact_id,
+                "bookId": book_id,
+                "revision": new_revision,
+                "entityCount": len(final_canonical_entities),
+                "aliasCount": len(updated_alias_map),
+                "pendingReviewCount": len(final_pending_review),
+                "payload": final_payload,
+            }
+
+    def list_pinyin_entities(
+        self,
+        *,
+        book_id: str,
+        category: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """获取当前活跃 entity_alignment 产物中所有带有 '_pinyin_' 标记的实体清单。
+        
+        用于支持人工审核并快速在 entity_slug_map.json 中补全正式英文/罗马音。
+        """
+        with self.engine.connect() as connection:
+            self._assert_book_owned(connection, book_id)
+            row = connection.execute(
+                select(analysis_artifacts.c.payload_json)
+                .where(
+                    analysis_artifacts.c.book_id == book_id,
+                    analysis_artifacts.c.kind == "entity_alignment",
+                    analysis_artifacts.c.template == "default",
+                    analysis_artifacts.c.is_active.is_(True),
+                )
+            ).mappings().one_or_none()
+
+            if not row or not row["payload_json"]:
+                return []
+
+            payload = _json_object(row["payload_json"], "entity_alignment payload")
+            canonical_entities = payload.get("canonical_entities", [])
+            pinyin_entities = []
+            for ent in canonical_entities:
+                if "_pinyin_" in ent.get("entity_id", ""):
+                    if category and ent.get("category") != category:
+                        continue
+                    pinyin_entities.append(ent)
+
+            return pinyin_entities
+
     def publish_timeline(
         self,
         *,
@@ -3020,7 +3619,7 @@ class InsightDerivedRepository:
             row["template"],
             "Insight artifact template",
         )
-        if artifact_kind not in {"overview", "compressed_context"}:
+        if artifact_kind not in {"overview", "compressed_context", "entity_alignment"}:
             raise InsightConflict(
                 "active Insight artifact kind is invalid"
             )
@@ -3028,7 +3627,7 @@ class InsightDerivedRepository:
             artifact_kind == "overview"
             and artifact_template not in OVERVIEW_TEMPLATES
         ) or (
-            artifact_kind == "compressed_context"
+            artifact_kind in {"compressed_context", "entity_alignment"}
             and artifact_template != "default"
         ):
             raise InsightConflict(
