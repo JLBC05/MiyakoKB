@@ -1,0 +1,119 @@
+import * as XLSX from 'xlsx'
+
+export interface TranslationConstraintColumn {
+  key: string
+  label: string
+}
+
+export type TranslationConstraintTableRow = Record<string, string>
+
+export function exportRowsToJson(rows: TranslationConstraintTableRow[]): string {
+  return JSON.stringify(rows, null, 2)
+}
+
+export function importRowsFromJson(
+  json: string,
+  columns: readonly TranslationConstraintColumn[],
+): TranslationConstraintTableRow[] {
+  const parsed = JSON.parse(json)
+  if (!Array.isArray(parsed)) {
+    throw new Error('JSON 内容必须是数组')
+  }
+
+  return parsed.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`JSON 第 ${index + 1} 行必须是对象`)
+    }
+    return normalizeImportedRow(item as Record<string, unknown>, columns, index + 1)
+  })
+}
+
+export function exportRowsToXlsxBuffer(
+  rows: TranslationConstraintTableRow[],
+  columns: readonly TranslationConstraintColumn[],
+): ArrayBuffer {
+  const data = rows.map(row => {
+    const record: Record<string, string> = {}
+    for (const column of columns) {
+      record[column.label] = row[column.key] ?? ''
+    }
+    return record
+  })
+
+  const worksheet = XLSX.utils.json_to_sheet(data)
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1')
+  return XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+}
+
+export function importRowsFromXlsxBuffer(
+  buffer: ArrayBuffer,
+  columns: readonly TranslationConstraintColumn[],
+): TranslationConstraintTableRow[] {
+  const workbook = XLSX.read(buffer, { type: 'array' })
+  const firstSheetName = workbook.SheetNames[0]
+  if (!firstSheetName) {
+    return []
+  }
+
+  const worksheet = workbook.Sheets[firstSheetName]
+  if (!worksheet) {
+    return []
+  }
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
+    defval: '',
+  })
+  return rows.map((row, index) => normalizeImportedRow(row, columns, index + 2))
+}
+
+export function normalizeImportedRow(
+  row: Record<string, unknown>,
+  columns: readonly TranslationConstraintColumn[],
+  rowNumber?: number,
+): TranslationConstraintTableRow {
+  const normalized: TranslationConstraintTableRow = {}
+  for (const column of columns) {
+    const direct = row[column.key]
+    const labeled = row[column.label]
+    const value = direct ?? labeled ?? ''
+    if (typeof value !== 'string') {
+      const prefix = rowNumber === undefined ? '' : `第 ${rowNumber} 行`
+      throw new Error(`${prefix}${column.label}必须是文本`)
+    }
+    normalized[column.key] = value
+  }
+  return normalized
+}
+
+export function getStringField(row: object, field: string): string {
+  const value = (row as Record<string, unknown>)[field]
+  return typeof value === 'string' ? value : ''
+}
+
+export function validateRegexEntries<Row extends object>(
+  rows: readonly Row[],
+  options: {
+    patternField: string
+    matchModeField?: string
+  },
+): string | null {
+  const { patternField, matchModeField = 'matchMode' } = options
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index] || {}
+    if ((getStringField(row, matchModeField) || 'text') !== 'regex') {
+      continue
+    }
+
+    const pattern = getStringField(row, patternField)
+    if (!pattern) {
+      continue
+    }
+
+    try {
+      new RegExp(pattern)
+    } catch (error) {
+      return `第 ${index + 1} 行正则无效: ${error instanceof Error ? error.message : '未知错误'}`
+    }
+  }
+  return null
+}

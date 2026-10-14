@@ -1,0 +1,255 @@
+"""
+颜色提取器模块
+
+基于 48px OCR 模型的颜色预测能力，实现智能颜色识别功能。
+
+设计理念：
+- **强制提取**：翻译时自动提取所有气泡的文字和背景颜色
+- **灵活使用**：用户可选择使用自动颜色、默认颜色或自定义颜色
+- **完整数据**：始终保留完整的颜色信息，编辑时可随时切换
+
+使用方法:
+    from src.core.color_extractor import get_color_extractor, ColorExtractionResult
+    
+    extractor = get_color_extractor()
+    if extractor.initialize('cuda'):
+        colors = extractor.extract_colors(image, bubble_coords, textlines_per_bubble)
+        for i, color in enumerate(colors):
+            print(f"气泡 {i}: fg={color.fg_color}, bg={color.bg_color}")
+"""
+
+import logging
+from typing import List, Tuple, Dict, Optional
+from PIL import Image
+
+from src.shared.memory_errors import is_memory_allocation_error
+
+logger = logging.getLogger("ColorExtractor")
+
+# 单例实例
+_color_extractor_instance = None
+
+
+def _resolve_preferred_device(device: Optional[str] = None) -> str:
+    """
+    解析颜色提取使用的设备。
+
+    与项目中其他本地模型保持一致：默认优先使用 CUDA，否则回退到 CPU。
+    """
+    if device:
+        return device
+
+    try:
+        import torch
+
+        return 'cuda' if torch.cuda.is_available() else 'cpu'
+    except Exception as error:
+        if is_memory_allocation_error(error):
+            raise
+        return 'cpu'
+
+
+class ColorExtractionResult:
+    """颜色提取结果"""
+    
+    def __init__(
+        self,
+        fg_color: Optional[Tuple[int, int, int]] = None,
+        bg_color: Optional[Tuple[int, int, int]] = None,
+        confidence: float = 0.0
+    ):
+        """
+        Args:
+            fg_color: 前景色 RGB (0-255)，例如 (15, 20, 25)
+            bg_color: 背景色 RGB (0-255)，例如 (248, 250, 252)
+            confidence: 置信度 0-1
+        """
+        self.fg_color = fg_color
+        self.bg_color = bg_color
+        self.confidence = confidence
+    
+    def to_dict(self) -> Dict:
+        """转换为字典（用于 API 响应）"""
+        return {
+            'fg_color': list(self.fg_color) if self.fg_color else None,
+            'bg_color': list(self.bg_color) if self.bg_color else None,
+            'confidence': self.confidence
+        }
+    
+    
+    def __repr__(self):
+        return f"ColorExtractionResult(fg={self.fg_color}, bg={self.bg_color}, conf={self.confidence:.2f})"
+
+
+class ColorExtractor:
+    """
+    48px 模型颜色提取器
+    
+    复用 48px OCR 模型的颜色预测能力，为每个气泡提取文字颜色和背景颜色。
+    """
+    
+    def __init__(self):
+        self._ocr_handler = None
+        self._initialized = False
+        self._device = 'cpu'
+
+    def _handler_is_ready(self) -> bool:
+        """Return whether the underlying 48px model is still loaded."""
+        return (
+            self._ocr_handler is not None
+            and self._ocr_handler.initialized
+            and self._ocr_handler.model is not None
+        )
+    
+    def initialize(self, device: Optional[str] = None) -> bool:
+        """
+        初始化颜色提取器
+        
+        Args:
+            device: 计算设备 ('cpu', 'cuda', 'mps')
+        
+        Returns:
+            是否初始化成功
+        """
+        device = _resolve_preferred_device(device)
+
+        if self._initialized and self._ocr_handler is not None:
+            if self._handler_is_ready():
+                if self._device == device:
+                    return True
+                if not self._ocr_handler.initialize(device):
+                    logger.error(f"48px OCR 模型切换到 {device} 失败，颜色提取不可用")
+                    return False
+                self._device = device
+                logger.debug(f"颜色提取器已切换到设备: {device}")
+                return True
+            # Worker 的空闲/手动模型释放会重置底层 48px 单例。
+            # 上层颜色提取器必须随之失效，以便本次调用重新获取并懒加载模型。
+            self._initialized = False
+            self._ocr_handler = None
+        
+        try:
+            from src.interfaces.ocr_48px import get_48px_ocr_handler
+            
+            self._ocr_handler = get_48px_ocr_handler()
+            if not self._ocr_handler.initialize(device):
+                logger.error("48px OCR 模型初始化失败，颜色提取不可用")
+                return False
+            
+            self._device = device
+            self._initialized = True
+            logger.debug(f"颜色提取器已初始化 (设备: {device})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"颜色提取器初始化失败: {e}", exc_info=True)
+            if is_memory_allocation_error(e):
+                raise
+            return False
+    
+    @property
+    def is_initialized(self) -> bool:
+        """是否已初始化"""
+        return self._initialized and self._handler_is_ready()
+    
+    def extract_colors(
+        self,
+        image: Image.Image,
+        bubble_coords: List[Tuple[int, int, int, int]],
+        textlines_per_bubble: Optional[List[List[Dict]]] = None,
+    ) -> List[ColorExtractionResult]:
+        """
+        提取每个气泡的颜色
+        
+        这是设计文档中"强制提取"功能的入口。
+        Args:
+            image: PIL 图像
+            bubble_coords: 气泡坐标列表 [(x1, y1, x2, y2), ...]
+            textlines_per_bubble: 每个气泡对应的原始文本行列表（可选）
+                格式: [[{'polygon': [[x,y], ...], 'direction': 'h'}, ...], ...]
+        
+        Returns:
+            List[ColorExtractionResult]: 每个气泡的颜色提取结果
+        """
+        if not bubble_coords:
+            return []
+
+        if not self.is_initialized:
+            raise RuntimeError("48px OCR 未初始化，无法提取颜色")
+        
+        try:
+            # 调用 48px OCR 的颜色提取方法
+            raw_results = self._ocr_handler.extract_colors_for_bubbles(
+                image, bubble_coords, textlines_per_bubble
+            )
+        except Exception:
+            logger.exception("颜色提取失败")
+            raise
+
+        if len(raw_results) != len(bubble_coords):
+            raise RuntimeError(
+                "颜色提取结果数量不匹配: "
+                f"expected={len(bubble_coords)}, actual={len(raw_results)}"
+            )
+
+        return [
+            ColorExtractionResult(raw.fg_color, raw.bg_color, raw.confidence)
+            for raw in raw_results
+        ]
+    
+
+
+def get_color_extractor() -> ColorExtractor:
+    """
+    获取颜色提取器单例
+    
+    Returns:
+        ColorExtractor 实例
+    """
+    global _color_extractor_instance
+    if _color_extractor_instance is None:
+        _color_extractor_instance = ColorExtractor()
+    return _color_extractor_instance
+
+
+def extract_bubble_colors(
+    image: Image.Image,
+    bubble_coords: List[Tuple[int, int, int, int]],
+    textlines_per_bubble: Optional[List[List[Dict]]] = None,
+    device: Optional[str] = None
+) -> List[Dict]:
+    """
+    便捷函数：提取气泡颜色并返回字典格式
+    
+    这是供外部直接调用的便捷方法，自动处理初始化。
+    
+    Args:
+        image: PIL 图像
+        bubble_coords: 气泡坐标列表
+        textlines_per_bubble: 每个气泡的文本行信息
+        device: 计算设备
+    
+    Returns:
+        [
+            {
+                'fg_color': [r, g, b] or None,
+                'bg_color': [r, g, b] or None,
+                'confidence': float
+            },
+            ...
+        ]
+    """
+    if not bubble_coords:
+        return []
+
+    extractor = get_color_extractor()
+    resolved_device = _resolve_preferred_device(device)
+
+    if not extractor.is_initialized or extractor._device != resolved_device:
+        if not extractor.initialize(resolved_device):
+            raise RuntimeError(
+                f"48px OCR 初始化失败，无法提取颜色: device={resolved_device}"
+            )
+    
+    results = extractor.extract_colors(image, bubble_coords, textlines_per_bubble)
+    return [r.to_dict() for r in results]

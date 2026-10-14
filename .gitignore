@@ -1,0 +1,114 @@
+# ============================================
+# Saber-Translator .gitignore
+# ============================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- 虚拟环境 ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# --- 日志 ---
+logs/
+*.log
+
+# --- 模型文件 ---
+models/
+
+# --- 用户数据 ---
+data/
+data-v2/
+# 存储迁移控制目录：锁、进程登记、日志及恢复状态
+.*.saber-storage/
+
+# --- 本地部署状态（仅存在于部署机器，不进入仓库） ---
+/data-public/
+/backups/
+/local-deploy/
+/FIRST_ADMIN.txt
+
+# --- 配置文件 ---
+/config/
+
+# --- PyInstaller ---
+*.manifest
+*.exe
+
+# --- 临时文件 ---
+*.tmp
+*.bak
+*.cache
+.tmp-*/
+Thumbs.db
+.DS_Store
+
+# --- 根目录工具依赖与缓存 ---
+/node_modules/
+/browser-extension/node_modules/
+/browser-extension/release/
+
+# --- 浏览器商店截图中间产物 ---
+/browser-extension/store-assets/00-demo-*.png
+/browser-extension/store-assets/01-extension-ready.png
+/browser-extension/store-assets/02-candidate-*.png
+/browser-extension/store-assets/small-promo-440x280.png
+/browser-extension/store-assets/crop.html
+
+# --- Jupyter Notebook ---
+.ipynb_checkpoints/
+
+# --- 文档 ---
+docs/*
+!docs/storage-migrations.md
+!docs/storage-audit-report.md
+!docs/refactor/
+!docs/refactor/**
+!vue-frontend/docs/
+!vue-frontend/docs/**
+
+# --- AI 助手配置 ---
+.claude/
+.gemini/
+.playwright-mcp/
+.ace-tool/
+CLAUDE.md
+.windsurfchatopen/
+.windsurfrules
+
+# --- 本地审阅产物 ---
+/audit/refactor/
+
+# --- Git worktrees ---
+.worktrees/

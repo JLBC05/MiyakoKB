@@ -1,0 +1,1181 @@
+"""Static plugin v3 manifest and hook data contracts."""
+
+from __future__ import annotations
+
+import ast
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+import math
+import re
+from typing import Any
+
+from src.backend_v2.translation.detector_config import (
+    DETECTOR_CONFIG_FIELDS,
+    validate_detector_config,
+)
+
+
+PLUGIN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
+PACKAGE_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
+HOOK_STEPS = (
+    "job",
+    "pipeline",
+    "detect",
+    "ocr",
+    "color",
+    "translate",
+    "ai_translate",
+    "inpaint",
+    "render",
+)
+HOOK_NAMES = frozenset(
+    f"{phase}_{step}"
+    for step in HOOK_STEPS
+    for phase in ("before", "after")
+)
+ATOMIC_STEPS = frozenset(HOOK_STEPS[2:])
+PLUGIN_MODES = frozenset(
+    {"standard", "hq", "proofread", "remove_text"}
+)
+CONFIG_TYPES = frozenset({"text", "number", "boolean", "select"})
+CONFIG_FIELD_FIELDS = frozenset(
+    {
+        "type",
+        "label",
+        "description",
+        "placeholder",
+        "default",
+        "minimum",
+        "maximum",
+        "options",
+    }
+)
+CONFIG_OPTION_FIELDS = frozenset({"value", "label"})
+MANIFEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "plugin_id",
+        "display_name",
+        "package_version",
+        "entrypoint",
+        "hooks",
+        "supported_steps",
+        "supported_modes",
+        "priority",
+        "failure_policy",
+        "author",
+        "description",
+        "default_enabled",
+        "config_schema",
+    }
+)
+ATOMIC_PAYLOAD_FIELDS = {
+    ("detect", "before"): frozenset(
+        {"pageId", "sourceAssetId", "detectorConfig"}
+    ),
+    ("detect", "after"): frozenset(
+        {"pageId", "bubbles", "textMaskAssetId"}
+    ),
+    ("ocr", "before"): frozenset(
+        {"pageId", "sourceAssetId", "bubbles", "ocrConfig"}
+    ),
+    ("ocr", "after"): frozenset(
+        {"pageId", "originalTexts", "ocrResults"}
+    ),
+    ("color", "before"): frozenset(
+        {"pageId", "sourceAssetId", "bubbles"}
+    ),
+    ("color", "after"): frozenset({"pageId", "colors"}),
+    ("translate", "before"): frozenset(
+        {"pageId", "originalTexts", "translationConfig"}
+    ),
+    ("translate", "after"): frozenset(
+        {"pageId", "originalTexts", "translations", "textboxTexts"}
+    ),
+    ("ai_translate", "before"): frozenset(
+        {"pageId", "originalTexts", "translations"}
+    ),
+    ("ai_translate", "after"): frozenset(
+        {"pageId", "originalTexts", "translations"}
+    ),
+    ("inpaint", "before"): frozenset(
+        {
+            "pageId",
+            "sourceAssetId",
+            "inputAssetId",
+            "textMaskAssetId",
+            "bubbles",
+            "method",
+            "fillColor",
+        }
+    ),
+    ("inpaint", "after"): frozenset(
+        {"pageId", "cleanAssetId", "documentRevision"}
+    ),
+    ("render", "before"): frozenset(
+        {"pageId", "inputAssetId", "bubbles", "renderConfig"}
+    ),
+    ("render", "after"): frozenset(
+        {
+            "pageId",
+            "translatedAssetId",
+            "documentRevision",
+        }
+    ),
+}
+ATOMIC_FIELD_KINDS = {
+    "pageId": "text",
+    "sourceAssetId": "text",
+    "inputAssetId": "text",
+    "textMaskAssetId": "nullable_text",
+    "cleanAssetId": "text",
+    "translatedAssetId": "text",
+    "detectorConfig": "object",
+    "ocrConfig": "object",
+    "translationConfig": "object",
+    "renderConfig": "object",
+    "bubbles": "array",
+    "originalTexts": "array",
+    "ocrResults": "array",
+    "colors": "array",
+    "translations": "array",
+    "textboxTexts": "array",
+    "method": "text",
+    "fillColor": "nullable_text",
+    "documentRevision": "number",
+}
+
+
+class PluginContractError(ValueError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class PluginManifest:
+    plugin_id: str
+    display_name: str
+    package_version: str
+    entrypoint: str
+    hooks: tuple[str, ...]
+    supported_steps: tuple[str, ...]
+    supported_modes: tuple[str, ...]
+    priority: int
+    failure_policy: str
+    author: str
+    description: str
+    default_enabled: bool
+    config_schema: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 3,
+            "plugin_id": self.plugin_id,
+            "display_name": self.display_name,
+            "package_version": self.package_version,
+            "entrypoint": self.entrypoint,
+            "hooks": list(self.hooks),
+            "supported_steps": list(self.supported_steps),
+            "supported_modes": list(self.supported_modes),
+            "priority": self.priority,
+            "failure_policy": self.failure_policy,
+            "author": self.author,
+            "description": self.description,
+            "default_enabled": self.default_enabled,
+            "config_schema": self.config_schema,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PluginContext:
+    job_id: str | None
+    batch_id: str | None
+    book_id: str | None
+    chapter_id: str | None
+    page_id: str | None
+    mode: str
+    step: str
+    scope: str
+    config: Mapping[str, Any]
+    repository: object
+    assets: object
+    logger: object
+
+
+def parse_manifest(raw: Mapping[str, Any]) -> PluginManifest:
+    fields = set(raw)
+    missing = MANIFEST_FIELDS - fields
+    unknown = fields - MANIFEST_FIELDS
+    if missing or unknown:
+        raise PluginContractError(
+            "plugin manifest field mismatch: "
+            f"missing={sorted(missing)}, unknown={sorted(unknown)}"
+        )
+    schema_version = raw["schema_version"]
+    if schema_version != 3:
+        raise PluginContractError("plugin manifest schema_version must be 3")
+    plugin_id = _required_string(raw["plugin_id"], "plugin_id")
+    if not PLUGIN_ID_PATTERN.fullmatch(plugin_id):
+        raise PluginContractError("plugin_id is invalid")
+    display_name = _required_string(raw["display_name"], "display_name")
+    if not display_name or len(display_name) > 200:
+        raise PluginContractError(
+            "display_name must contain 1-200 characters"
+        )
+    package_version = _required_string(
+        raw["package_version"],
+        "package_version",
+    )
+    if not PACKAGE_VERSION_PATTERN.fullmatch(package_version):
+        raise PluginContractError("package_version is invalid")
+    entrypoint = _required_string(raw["entrypoint"], "entrypoint")
+    _validate_entrypoint(entrypoint)
+    hooks = _string_tuple(raw["hooks"], "hooks")
+    if not hooks or any(value not in HOOK_NAMES for value in hooks):
+        raise PluginContractError("manifest hooks contain unsupported values")
+    if len(set(hooks)) != len(hooks):
+        raise PluginContractError("manifest hooks must be unique")
+    supported_steps = _string_tuple(
+        raw["supported_steps"],
+        "supported_steps",
+    )
+    if not supported_steps or any(
+        value not in HOOK_STEPS for value in supported_steps
+    ):
+        raise PluginContractError("supported_steps contains invalid values")
+    if len(set(supported_steps)) != len(supported_steps):
+        raise PluginContractError("supported_steps must be unique")
+    hook_steps = {hook.split("_", 1)[1] for hook in hooks}
+    undeclared_steps = hook_steps - set(supported_steps)
+    if undeclared_steps:
+        raise PluginContractError(
+            "manifest hooks require missing supported_steps: "
+            + ", ".join(sorted(undeclared_steps))
+        )
+    supported_modes = _string_tuple(
+        raw["supported_modes"],
+        "supported_modes",
+    )
+    if not supported_modes or any(
+        value not in PLUGIN_MODES for value in supported_modes
+    ):
+        raise PluginContractError("supported_modes contains invalid values")
+    if len(set(supported_modes)) != len(supported_modes):
+        raise PluginContractError("supported_modes must be unique")
+    priority = raw["priority"]
+    if isinstance(priority, bool) or not isinstance(priority, int):
+        raise PluginContractError("priority must be an integer")
+    failure_policy = _required_string(
+        raw["failure_policy"],
+        "failure_policy",
+    )
+    if failure_policy not in {"continue", "fail"}:
+        raise PluginContractError(
+            "failure_policy must be continue or fail"
+        )
+    config_schema = raw["config_schema"]
+    if not isinstance(config_schema, Mapping):
+        raise PluginContractError("config_schema must be an object")
+    normalized_schema = normalize_config_schema(config_schema)
+    author = _string(raw["author"], "author")
+    description = _string(raw["description"], "description")
+    if len(author) > 200:
+        raise PluginContractError("author is too long")
+    return PluginManifest(
+        plugin_id=plugin_id,
+        display_name=display_name,
+        package_version=package_version,
+        entrypoint=entrypoint,
+        hooks=hooks,
+        supported_steps=supported_steps,
+        supported_modes=supported_modes,
+        priority=priority,
+        failure_policy=failure_policy,
+        author=author,
+        description=description,
+        default_enabled=_boolean(raw["default_enabled"], "default_enabled"),
+        config_schema=normalized_schema,
+    )
+
+
+def normalize_config_schema(
+    raw: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key, field in raw.items():
+        if (
+            not isinstance(key, str)
+            or not key
+            or key != key.strip()
+            or not isinstance(field, Mapping)
+        ):
+            raise PluginContractError("config_schema field is invalid")
+        name = key
+        fields = set(field)
+        unknown = fields - CONFIG_FIELD_FIELDS
+        if unknown:
+            raise PluginContractError(
+                f"config_schema.{name} contains unsupported fields: "
+                + ", ".join(sorted(str(value) for value in unknown))
+            )
+        if "default" not in field:
+            raise PluginContractError(
+                f"config_schema.{name}.default is required"
+            )
+        field_type = field.get("type")
+        if not isinstance(field_type, str) or field_type not in CONFIG_TYPES:
+            raise PluginContractError(
+                f"config_schema.{name}.type is unsupported"
+            )
+        for metadata_field in ("label", "description", "placeholder"):
+            if metadata_field in field and not isinstance(
+                field[metadata_field], str
+            ):
+                raise PluginContractError(
+                    f"config_schema.{name}.{metadata_field} must be text"
+                )
+        item = dict(field)
+        if field_type == "select":
+            item["options"] = _normalize_select_options(
+                field.get("options"),
+                field=name,
+            )
+        elif "options" in field:
+            raise PluginContractError(
+                f"config_schema.{name}.options is only valid for select"
+            )
+        if field_type == "number":
+            minimum = (
+                _finite_number(
+                    field["minimum"],
+                    f"config_schema.{name}.minimum",
+                )
+                if "minimum" in field
+                else None
+            )
+            maximum = (
+                _finite_number(
+                    field["maximum"],
+                    f"config_schema.{name}.maximum",
+                )
+                if "maximum" in field
+                else None
+            )
+            if minimum is not None:
+                item["minimum"] = minimum
+            if maximum is not None:
+                item["maximum"] = maximum
+            if (
+                minimum is not None
+                and maximum is not None
+                and minimum > maximum
+            ):
+                raise PluginContractError(
+                    f"config_schema.{name}.minimum exceeds maximum"
+                )
+        elif "minimum" in field or "maximum" in field:
+            raise PluginContractError(
+                f"config_schema.{name} numeric bounds require number type"
+            )
+        _validate_config_value(
+            item,
+            item["default"],
+            label=f"config_schema.{name}.default",
+        )
+        normalized[name] = item
+    return normalized
+
+
+def _normalize_select_options(
+    value: object,
+    *,
+    field: str,
+) -> list[dict[str, str | int | float]]:
+    if not isinstance(value, list) or not value:
+        raise PluginContractError(
+            f"config_schema.{field}.options is required"
+        )
+    result: list[dict[str, str | int | float]] = []
+    seen: set[tuple[type[object], object]] = set()
+    for index, option in enumerate(value):
+        if not isinstance(option, Mapping) or set(option) != CONFIG_OPTION_FIELDS:
+            raise PluginContractError(
+                f"config_schema.{field}.options[{index}] fields are invalid"
+            )
+        option_value = option["value"]
+        if (
+            isinstance(option_value, bool)
+            or not isinstance(option_value, (str, int, float))
+            or (
+                isinstance(option_value, float)
+                and not math.isfinite(option_value)
+            )
+        ):
+            raise PluginContractError(
+                f"config_schema.{field}.options[{index}].value is invalid"
+            )
+        label = option["label"]
+        if not isinstance(label, str) or not label:
+            raise PluginContractError(
+                f"config_schema.{field}.options[{index}].label must be text"
+            )
+        identity = (type(option_value), option_value)
+        if identity in seen:
+            raise PluginContractError(
+                f"config_schema.{field}.options values must be unique"
+            )
+        seen.add(identity)
+        result.append({"value": option_value, "label": label})
+    return result
+
+
+def _finite_number(value: object, label: str) -> int | float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+    ):
+        raise PluginContractError(f"{label} must be a finite number")
+    return value
+
+
+def _validate_config_value(
+    field: Mapping[str, Any],
+    value: object,
+    *,
+    label: str,
+) -> None:
+    field_type = field["type"]
+    if field_type == "text":
+        if not isinstance(value, str):
+            raise PluginContractError(f"{label} must be text")
+        return
+    if field_type == "number":
+        number = _finite_number(value, label)
+        minimum = field.get("minimum")
+        maximum = field.get("maximum")
+        if minimum is not None and number < minimum:
+            raise PluginContractError(f"{label} is below minimum")
+        if maximum is not None and number > maximum:
+            raise PluginContractError(f"{label} exceeds maximum")
+        return
+    if field_type == "boolean":
+        if not isinstance(value, bool):
+            raise PluginContractError(f"{label} must be boolean")
+        return
+    if field_type == "select":
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (str, int, float))
+            or (isinstance(value, float) and not math.isfinite(value))
+        ):
+            raise PluginContractError(f"{label} is not a select value")
+        values = [option["value"] for option in field["options"]]
+        if not any(type(value) is type(option) and value == option for option in values):
+            raise PluginContractError(
+                f"{label} is not one of the allowed options"
+            )
+        return
+    raise PluginContractError(f"{label} has an unsupported field type")
+
+
+def default_config(schema: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): field["default"]
+        for key, field in schema.items()
+        if isinstance(field, Mapping)
+    }
+
+
+def validate_config(
+    schema: Mapping[str, Any],
+    config: Mapping[str, Any],
+) -> dict[str, Any]:
+    missing = set(schema) - set(config)
+    unknown = set(config) - set(schema)
+    if missing or unknown:
+        raise PluginContractError(
+            "plugin config field mismatch: "
+            f"missing={sorted(str(value) for value in missing)}, "
+            f"unknown={sorted(str(value) for value in unknown)}"
+        )
+    result: dict[str, Any] = {}
+    for key, value in config.items():
+        field = schema[key]
+        _validate_config_value(field, value, label=f"config.{key}")
+        result[str(key)] = value
+    return result
+
+
+def validate_hook_data(value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise PluginContractError("plugin hook result must be an object")
+    _assert_hook_json(value, ancestors=set())
+    return dict(value)
+
+
+def validate_atomic_hook_data(
+    step: str,
+    phase: str,
+    value: object,
+) -> dict[str, Any]:
+    """Validate the stable domain payload exposed by one atomic v3 hook."""
+
+    if step not in ATOMIC_STEPS:
+        raise PluginContractError(f"unsupported atomic plugin step: {step}")
+    if phase not in {"before", "after"}:
+        raise PluginContractError(f"unsupported plugin hook phase: {phase}")
+    data = validate_hook_data(value)
+    allowed = ATOMIC_PAYLOAD_FIELDS[(step, phase)]
+    missing = allowed - set(data)
+    unknown = set(data) - allowed
+    if missing or unknown:
+        raise PluginContractError(
+            f"{phase}_{step} field mismatch: "
+            f"missing={sorted(str(field) for field in missing)}, "
+            f"unknown={sorted(str(field) for field in unknown)}"
+        )
+    _require_text(data, "pageId")
+
+    if step == "detect":
+        if phase == "before":
+            _require_text(data, "sourceAssetId")
+            _require_mapping(data, "detectorConfig")
+            try:
+                validate_detector_config(data["detectorConfig"])
+            except ValueError as exc:
+                raise PluginContractError(str(exc)) from exc
+        else:
+            _require_mapping_list(data, "bubbles")
+            _require_optional_text(data, "textMaskAssetId")
+    elif step == "ocr":
+        if phase == "before":
+            _require_text(data, "sourceAssetId")
+            _require_mapping_list(data, "bubbles")
+            _require_mapping(data, "ocrConfig")
+        else:
+            original_texts = _require_text_list(data, "originalTexts")
+            ocr_results = _require_list(data, "ocrResults")
+            _require_same_length(
+                original_texts,
+                ocr_results,
+                "originalTexts",
+                "ocrResults",
+            )
+    elif step == "color":
+        if phase == "before":
+            _require_text(data, "sourceAssetId")
+            _require_mapping_list(data, "bubbles")
+        else:
+            colors = _require_mapping_list(data, "colors")
+            for index, color in enumerate(colors):
+                if set(color) != {"fgColor", "bgColor", "confidence"}:
+                    raise PluginContractError(
+                        f"colors[{index}] fields are invalid"
+                    )
+                _require_rgb(color, "fgColor", index=index)
+                _require_rgb(color, "bgColor", index=index)
+                confidence = color["confidence"]
+                if (
+                    isinstance(confidence, bool)
+                    or not isinstance(confidence, (int, float))
+                    or not math.isfinite(confidence)
+                    or not 0 <= confidence <= 1
+                ):
+                    raise PluginContractError(
+                        f"colors[{index}].confidence must be from 0 to 1"
+                    )
+    elif step in {"translate", "ai_translate"}:
+        original_texts = _require_text_list(data, "originalTexts")
+        if phase == "before":
+            if "translations" in data:
+                translations = _require_text_list(data, "translations")
+                _require_same_length(
+                    original_texts,
+                    translations,
+                    "originalTexts",
+                    "translations",
+                )
+            if "translationConfig" in data:
+                _require_mapping(data, "translationConfig")
+        else:
+            translations = _require_text_list(data, "translations")
+            _require_same_length(
+                original_texts,
+                translations,
+                "originalTexts",
+                "translations",
+            )
+            if "textboxTexts" in data:
+                textbox_texts = _require_text_list(data, "textboxTexts")
+                if textbox_texts and len(textbox_texts) != len(original_texts):
+                    raise PluginContractError(
+                        "textboxTexts length must be empty or match originalTexts"
+                    )
+    elif step == "inpaint":
+        if phase == "before":
+            _require_text(data, "sourceAssetId")
+            _require_text(data, "inputAssetId")
+            _require_optional_text(data, "textMaskAssetId")
+            _require_mapping_list(data, "bubbles")
+            method = _require_text(data, "method")
+            fill_color = data.get("fillColor")
+            if method == "solid":
+                _require_text(data, "fillColor")
+            elif fill_color is not None:
+                raise PluginContractError(
+                    f"inpaint method {method} does not accept fillColor"
+                )
+        else:
+            _require_text(data, "cleanAssetId")
+            _require_positive_integer(data, "documentRevision")
+    elif step == "render":
+        if phase == "before":
+            _require_text(data, "inputAssetId")
+            _require_mapping_list(data, "bubbles")
+            _require_mapping(data, "renderConfig")
+        else:
+            _require_text(data, "translatedAssetId")
+            _require_positive_integer(data, "documentRevision")
+    return data
+
+
+def validate_hook_source_contract(
+    manifest: PluginManifest,
+    source: str,
+    *,
+    filename: str,
+) -> None:
+    """Catch literal top-level hook fields that cannot exist at runtime."""
+
+    try:
+        tree = ast.parse(source, filename=filename)
+    except SyntaxError as exc:
+        raise PluginContractError(
+            f"plugin entrypoint has invalid Python syntax: {exc}"
+        ) from exc
+    class_name = manifest.entrypoint.rsplit(":", 1)[1]
+    plugin_class = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+        ),
+        None,
+    )
+    if plugin_class is None:
+        raise PluginContractError(
+            f"plugin entrypoint class is missing: {class_name}"
+        )
+    methods = {
+        node.name: node
+        for node in plugin_class.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    constructor = methods.get("__init__")
+    if constructor is not None:
+        if isinstance(constructor, ast.AsyncFunctionDef):
+            raise PluginContractError(
+                "plugin __init__ must be synchronous and callable without arguments"
+            )
+        _validate_method_call_shape(
+            constructor,
+            required_bound_arguments=0,
+            label="plugin __init__",
+        )
+    for hook in manifest.hooks:
+        callback = methods.get(hook)
+        if callback is None:
+            raise PluginContractError(
+                f"manifest declares missing hook {hook}"
+            )
+        if isinstance(callback, ast.AsyncFunctionDef):
+            raise PluginContractError(
+                f"{hook} must be synchronous"
+            )
+        if any(
+            (
+                isinstance(decorator, ast.Name)
+                and decorator.id in {"staticmethod", "classmethod"}
+            )
+            or (
+                isinstance(decorator, ast.Attribute)
+                and decorator.attr in {"staticmethod", "classmethod"}
+            )
+            for decorator in callback.decorator_list
+        ):
+            raise PluginContractError(
+                f"{hook} must be a normal instance method"
+            )
+        _validate_method_call_shape(
+            callback,
+            required_bound_arguments=2,
+            label=hook,
+        )
+        step = hook.split("_", 1)[1]
+        if step not in ATOMIC_STEPS:
+            continue
+        phase = hook.split("_", 1)[0]
+        positional = [*callback.args.posonlyargs, *callback.args.args]
+        aliases = {positional[2].arg}
+        changed = True
+        while changed:
+            changed = False
+            for node in ast.walk(callback):
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    continue
+                value = node.value
+                if value is None or not _copies_hook_mapping(
+                    value,
+                    aliases,
+                ):
+                    continue
+                targets = (
+                    node.targets
+                    if isinstance(node, ast.Assign)
+                    else [node.target]
+                )
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Name)
+                        and target.id not in aliases
+                    ):
+                        aliases.add(target.id)
+                        changed = True
+        allowed = ATOMIC_PAYLOAD_FIELDS[(step, phase)]
+        if hook == "before_detect":
+            _validate_detector_source(callback, aliases)
+        for node in ast.walk(callback):
+            if (
+                not isinstance(node, ast.Subscript)
+                or not isinstance(node.value, ast.Name)
+                or node.value.id not in aliases
+            ):
+                continue
+            key = _literal_subscript_key(node.slice)
+            if key is not None and key not in allowed:
+                raise PluginContractError(
+                    f"{hook} uses unsupported data field: {key}"
+                )
+        _validate_literal_hook_field_types(
+            callback,
+            hook=hook,
+            aliases=aliases,
+            allowed=allowed,
+        )
+
+
+def _validate_method_call_shape(
+    method: ast.FunctionDef,
+    *,
+    required_bound_arguments: int,
+    label: str,
+) -> None:
+    positional = [*method.args.posonlyargs, *method.args.args]
+    defaults = method.args.defaults
+    required_positional = len(positional) - len(defaults)
+    expected_required = required_bound_arguments + 1
+    if (
+        len(positional) < expected_required
+        or required_positional > expected_required
+        or any(
+            default is None
+            for default in method.args.kw_defaults
+        )
+    ):
+        if required_bound_arguments == 0:
+            raise PluginContractError(
+                "plugin __init__ must be callable without arguments; "
+                "hook context is passed to each hook"
+            )
+        raise PluginContractError(
+            f"{label} must be callable as {label}(context, data)"
+        )
+
+
+def _validate_detector_source(callback: ast.AST, payload_aliases: set[str]) -> None:
+    """Catch literal unsupported detector keys; runtime validates dynamic data."""
+    config_aliases: set[str] = set()
+
+    def is_config(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in config_aliases
+        if isinstance(node, ast.Subscript):
+            return (
+                isinstance(node.value, ast.Name)
+                and node.value.id in payload_aliases
+                and _literal_subscript_key(node.slice) == "detectorConfig"
+            )
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in {"dict", "deepcopy"} and node.args:
+                return is_config(node.args[0])
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "copy":
+                return is_config(node.func.value)
+        return False
+
+    def check(key: str | None) -> None:
+        if key is not None and key not in DETECTOR_CONFIG_FIELDS:
+            raise PluginContractError(f"before_detect uses unsupported detectorConfig field: {key}")
+
+    assignments = [node for node in ast.walk(callback) if isinstance(node, (ast.Assign, ast.AnnAssign))]
+    changed = True
+    while changed:
+        changed = False
+        for node in assignments:
+            if node.value is None or not is_config(node.value):
+                continue
+            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                if isinstance(target, ast.Name) and target.id not in config_aliases:
+                    config_aliases.add(target.id)
+                    changed = True
+    for node in ast.walk(callback):
+        if isinstance(node, ast.Subscript) and is_config(node.value):
+            check(_literal_subscript_key(node.slice))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and is_config(node.func.value):
+            if node.func.attr == "update":
+                for keyword in node.keywords:
+                    check(keyword.arg)
+                for argument in node.args:
+                    if isinstance(argument, ast.Dict):
+                        for key in argument.keys:
+                            if key is not None:
+                                check(_literal_subscript_key(key))
+    for node in assignments:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if isinstance(node.value, ast.Dict) and any(is_config(target) for target in targets):
+            for key in node.value.keys:
+                if key is not None:
+                    check(_literal_subscript_key(key))
+
+
+def _copies_hook_mapping(
+    value: ast.expr,
+    aliases: set[str],
+) -> bool:
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id in {"dict", "deepcopy"}
+        and value.args
+    ):
+        argument = value.args[0]
+        return (
+            isinstance(argument, ast.Name)
+            and argument.id in aliases
+        ) or _copies_hook_mapping(argument, aliases)
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == "copy"
+        and isinstance(value.func.value, ast.Name)
+        and value.func.value.id in aliases
+    ):
+        return True
+    return False
+
+
+def _literal_subscript_key(value: ast.expr) -> str | None:
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return value.value
+    return None
+
+
+def _validate_literal_hook_field_types(
+    callback: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    hook: str,
+    aliases: set[str],
+    allowed: frozenset[str],
+) -> None:
+    for node in ast.walk(callback):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in aliases
+            and node.args
+        ):
+            key = _literal_subscript_key(node.args[0])
+            if key in allowed and len(node.args) >= 2:
+                _assert_literal_field_kind(
+                    hook,
+                    key,
+                    node.args[1],
+                )
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if value is None:
+            continue
+        targets = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+        )
+        for target in targets:
+            if (
+                not isinstance(target, ast.Subscript)
+                or not isinstance(target.value, ast.Name)
+                or target.value.id not in aliases
+            ):
+                continue
+            key = _literal_subscript_key(target.slice)
+            if key in allowed:
+                _assert_literal_field_kind(hook, key, value)
+
+
+def _assert_literal_field_kind(
+    hook: str,
+    field: str,
+    value: ast.expr,
+) -> None:
+    actual = _literal_expression_kind(value)
+    expected = ATOMIC_FIELD_KINDS[field]
+    compatible = (
+        actual is None
+        or actual == expected
+        or (
+            expected == "nullable_text"
+            and actual in {"text", "null"}
+        )
+    )
+    if not compatible:
+        raise PluginContractError(
+            f"{hook} treats {field} as {actual}; expected {expected}"
+        )
+
+
+def _literal_expression_kind(value: ast.expr) -> str | None:
+    if isinstance(value, (ast.List, ast.ListComp)):
+        return "array"
+    if isinstance(value, (ast.Dict, ast.DictComp)):
+        return "object"
+    if isinstance(value, (ast.Tuple, ast.Set, ast.SetComp)):
+        return "non_json_collection"
+    if isinstance(value, ast.Constant):
+        if value.value is None:
+            return "null"
+        if isinstance(value.value, str):
+            return "text"
+        if isinstance(value.value, bool):
+            return "boolean"
+        if isinstance(value.value, (int, float)):
+            return "number"
+    if isinstance(value, ast.Call):
+        function_name = (
+            value.func.id
+            if isinstance(value.func, ast.Name)
+            else None
+        )
+        return {
+            "list": "array",
+            "dict": "object",
+            "str": "text",
+            "int": "number",
+            "float": "number",
+        }.get(function_name)
+    return None
+
+
+def _require_text(data: Mapping[str, Any], field: str) -> str:
+    value = data.get(field)
+    if not isinstance(value, str) or not value:
+        raise PluginContractError(f"{field} must be non-empty text")
+    return value
+
+
+def _require_optional_text(
+    data: Mapping[str, Any],
+    field: str,
+) -> str | None:
+    value = data.get(field)
+    if value is not None and (not isinstance(value, str) or not value):
+        raise PluginContractError(f"{field} must be text or null")
+    return value
+
+
+def _require_mapping(
+    data: Mapping[str, Any],
+    field: str,
+) -> Mapping[str, Any]:
+    value = data.get(field)
+    if not isinstance(value, Mapping):
+        raise PluginContractError(f"{field} must be an object")
+    return value
+
+
+def _require_list(
+    data: Mapping[str, Any],
+    field: str,
+) -> list[Any]:
+    value = data.get(field)
+    if not isinstance(value, list):
+        raise PluginContractError(f"{field} must be an array")
+    return value
+
+
+def _require_mapping_list(
+    data: Mapping[str, Any],
+    field: str,
+) -> list[Mapping[str, Any]]:
+    values = _require_list(data, field)
+    if any(not isinstance(value, Mapping) for value in values):
+        raise PluginContractError(f"{field} must contain only objects")
+    return values
+
+
+def _require_text_list(
+    data: Mapping[str, Any],
+    field: str,
+) -> list[str]:
+    values = _require_list(data, field)
+    if any(not isinstance(value, str) for value in values):
+        raise PluginContractError(f"{field} must contain only text")
+    return values
+
+
+def _require_same_length(
+    first: Sequence[object],
+    second: Sequence[object],
+    first_name: str,
+    second_name: str,
+) -> None:
+    if len(first) != len(second):
+        raise PluginContractError(
+            f"{second_name} length must match {first_name}"
+        )
+
+
+def _require_positive_integer(
+    data: Mapping[str, Any],
+    field: str,
+) -> int:
+    value = data.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise PluginContractError(f"{field} must be a positive integer")
+    return value
+
+
+def _require_rgb(
+    data: Mapping[str, Any],
+    field: str,
+    *,
+    index: int,
+) -> None:
+    value = data.get(field)
+    if value is None:
+        return
+    if (
+        not isinstance(value, (list, tuple))
+        or len(value) != 3
+        or any(
+            isinstance(channel, bool)
+            or not isinstance(channel, int)
+            or channel < 0
+            or channel > 255
+            for channel in value
+        )
+    ):
+        raise PluginContractError(
+            f"colors[{index}].{field} must be RGB integers or null"
+        )
+
+
+def _assert_hook_json(
+    value: object,
+    *,
+    ancestors: set[int],
+) -> None:
+    if isinstance(value, Mapping):
+        identity = id(value)
+        if identity in ancestors:
+            raise PluginContractError("plugin hook data contains a cycle")
+        ancestors.add(identity)
+        for key, child in value.items():
+            if not isinstance(key, str):
+                raise PluginContractError(
+                    "plugin hook data object keys must be text"
+                )
+            lowered = key.lower()
+            if "base64" in lowered or lowered in {
+                "image_data",
+                "imagebytes",
+                "image_bytes",
+            }:
+                raise PluginContractError(
+                    "plugin hook data must use asset references, not Base64"
+                )
+            _assert_hook_json(child, ancestors=ancestors)
+        ancestors.remove(identity)
+    elif isinstance(value, list):
+        identity = id(value)
+        if identity in ancestors:
+            raise PluginContractError("plugin hook data contains a cycle")
+        ancestors.add(identity)
+        for child in value:
+            _assert_hook_json(child, ancestors=ancestors)
+        ancestors.remove(identity)
+    elif isinstance(value, bytes):
+        raise PluginContractError(
+            "plugin hook data must use asset references, not bytes"
+        )
+    elif isinstance(value, str):
+        candidate = value.lstrip()
+        if candidate.startswith("data:") and ";base64," in candidate[:100]:
+            raise PluginContractError(
+                "plugin hook data must use asset references, not Base64"
+            )
+    elif value is None or isinstance(value, (bool, int)):
+        return
+    elif isinstance(value, float):
+        if not math.isfinite(value):
+            raise PluginContractError(
+                "plugin hook data numbers must be finite"
+            )
+    else:
+        raise PluginContractError("plugin hook data must be JSON-compatible")
+
+
+def _string_tuple(value: object, field: str) -> tuple[str, ...]:
+    if (
+        not isinstance(value, list)
+        or not all(isinstance(item, str) for item in value)
+    ):
+        raise PluginContractError(f"{field} must be an array")
+    return tuple(value)
+
+
+def _string(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise PluginContractError(f"{field} must be a string")
+    return value.strip()
+
+
+def _required_string(value: object, field: str) -> str:
+    result = _string(value, field)
+    if not result:
+        raise PluginContractError(f"{field} must not be empty")
+    return result
+
+
+def _boolean(value: object, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise PluginContractError(f"{field} must be boolean")
+    return value
+
+
+def _validate_entrypoint(value: str) -> None:
+    if ":" not in value:
+        raise PluginContractError(
+            "entrypoint must use relative/module.py:Class format"
+        )
+    module_path, class_name = value.rsplit(":", 1)
+    normalized = module_path.replace("\\", "/")
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or ".." in normalized.split("/")
+        or not normalized.endswith(".py")
+        or not class_name.isidentifier()
+    ):
+        raise PluginContractError("entrypoint is invalid")

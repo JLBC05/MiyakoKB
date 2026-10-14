@@ -1,0 +1,470 @@
+<script setup lang="ts">
+import ProductActionRow from '@/components/product/ProductActionRow.vue'
+import ProductBreadcrumbTrail from '@/components/product/ProductBreadcrumbTrail.vue'
+import ProductChipList from '@/components/product/ProductChipList.vue'
+import type { ProductChipItem } from '@/components/product/ProductChipList.vue'
+import ProductFolderCard from '@/components/product/ProductFolderCard.vue'
+import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
+import type { ProductThumbnailGridItem } from '@/components/product/ProductThumbnailGrid.vue'
+import VirtualThumbnailGrid from '@/components/virtual/VirtualThumbnailGrid.vue'
+import UiButton from '@/components/ui/UiButton.vue'
+import UiField from '@/components/ui/UiField.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
+import UiInput from '@/components/ui/UiInput.vue'
+import { computed, ref, watch } from 'vue'
+
+import BaseModal from '@/components/common/BaseModal.vue'
+import { useFolderTree } from '@/composables/useFolderTree'
+import { useThumbnailSelection } from '@/composables/useThumbnailSelection'
+import { useImageStore } from '@/stores/imageStore'
+import type { ImageData } from '@/types/image'
+import {
+  clampPageSelection,
+  createPageSelectionSummary,
+  normalizePageSelection,
+  parsePageSelectionText,
+} from '@/utils/pageSelection'
+
+const props = defineProps<{
+  modelValue: boolean
+  selectedPages: number[]
+}>()
+
+const emit = defineEmits<{
+  (e: 'update:modelValue', value: boolean): void
+  (e: 'confirm', pages: number[]): void
+}>()
+
+const imageStore = useImageStore()
+
+const images = computed(() => imageStore.images)
+const totalImages = computed(() => images.value.length)
+
+const {
+  useTreeMode,
+  breadcrumbs,
+  currentSubfolders,
+  currentImages,
+  currentFolderPath,
+  enterFolder,
+  goUp,
+  navigateTo,
+  getFolderImageCount,
+  resetToRoot,
+} = useFolderTree(images)
+
+const {
+  getImageGlobalIndex,
+  getStatusType,
+  getThumbnailTitle,
+  isTranslated,
+  failedPages,
+  completedPages,
+  pendingPages,
+  labeledPages,
+} = useThumbnailSelection(images)
+
+const draftSelectedPages = ref<number[]>([])
+const pageSelectionText = ref('')
+const pageSelectionInputError = ref('')
+
+watch(
+  () => props.modelValue,
+  (isOpen) => {
+    if (isOpen) {
+      draftSelectedPages.value = clampPageSelection(props.selectedPages, totalImages.value)
+      pageSelectionText.value = ''
+      pageSelectionInputError.value = ''
+      resetToRoot()
+    }
+  },
+  { immediate: true }
+)
+
+watch(totalImages, (count) => {
+  draftSelectedPages.value = clampPageSelection(draftSelectedPages.value, count)
+})
+
+const normalizedDraftSelection = computed(() => normalizePageSelection(draftSelectedPages.value))
+const selectedPageSet = computed(() => new Set(normalizedDraftSelection.value))
+const selectedCount = computed(() => normalizedDraftSelection.value.length)
+const draftSummary = computed(() => createPageSelectionSummary(normalizedDraftSelection.value))
+const summaryChipItems = computed<ProductChipItem[]>(() => [
+  { id: 'total', label: `共 ${totalImages.value} 张`, tone: 'neutral' },
+  { id: 'selected', label: `已选 ${selectedCount.value} 张`, tone: 'primary' },
+])
+const flatThumbnailItems = computed<ProductThumbnailGridItem[]>(() => {
+  return images.value.map((image, index) => buildThumbnailItem(image, index))
+})
+const currentFolderThumbnailItems = computed<ProductThumbnailGridItem[]>(() => {
+  return currentImages.value.map((image) => buildThumbnailItem(image, getImageGlobalIndex(image)))
+})
+
+function closeModal(): void {
+  emit('update:modelValue', false)
+}
+
+function confirmSelection(): void {
+  emit('confirm', normalizedDraftSelection.value)
+  closeModal()
+}
+
+function togglePage(page: number): void {
+  const next = new Set(normalizedDraftSelection.value)
+  if (next.has(page)) {
+    next.delete(page)
+  } else {
+    next.add(page)
+  }
+  draftSelectedPages.value = [...next]
+}
+
+function isSelected(page: number): boolean {
+  return selectedPageSet.value.has(page)
+}
+
+function selectAllPages(): void {
+  draftSelectedPages.value = Array.from({ length: totalImages.value }, (_, index) => index + 1)
+}
+
+function clearSelection(): void {
+  draftSelectedPages.value = []
+}
+
+function replaceSelection(pages: number[]): void {
+  draftSelectedPages.value = clampPageSelection(pages, totalImages.value)
+}
+
+function updatePageSelectionText(value: string | number): void {
+  pageSelectionText.value = String(value)
+  pageSelectionInputError.value = ''
+}
+
+function applyPageSelectionText(): void {
+  const result = parsePageSelectionText(pageSelectionText.value, totalImages.value)
+  pageSelectionInputError.value = result.error
+  if (!result.error) {
+    draftSelectedPages.value = result.pages
+  }
+}
+
+function handleThumbnailClick(index: number): void {
+  togglePage(index + 1)
+}
+
+function handleThumbnailSelect(id: string | number): void {
+  if (typeof id !== 'number') return
+  handleThumbnailClick(id)
+}
+
+function handleFolderClick(folderPath: string): void {
+  enterFolder(folderPath)
+}
+
+function handleBreadcrumbClick(path: string): void {
+  navigateTo(path)
+}
+
+function buildThumbnailItem(image: ImageData, index: number): ProductThumbnailGridItem {
+  const page = index + 1
+  const selected = isSelected(page)
+  const statusType = getStatusType(image)
+  return {
+    id: index,
+    src: image.thumbnailSourceUrl,
+    alt: image.fileName,
+    label: String(page),
+    selected,
+    selectedBadge: selected ? '已选' : undefined,
+    marked: isTranslated(image),
+    cornerLabel: statusType === 'failed'
+      ? '!'
+      : statusType === 'labeled'
+        ? '标'
+        : statusType === 'processing'
+          ? '处理中'
+          : undefined,
+    fallbackLabel: String(page),
+    ariaLabel: `${selected ? '取消选择' : '选择'}第 ${page} 页：${image.fileName}`,
+    disabledTitle: getThumbnailTitle(image),
+  }
+}
+</script>
+
+<template>
+  <BaseModal
+    :model-value="modelValue"
+    title="指定翻译页码"
+    size="full"
+    custom-class="page-selection-modal"
+    width="95vw"
+    height="90vh"
+    header-padding="20px"
+    footer-padding="14px 20px"
+    scroll-mode="auto"
+    @close="closeModal"
+  >
+    <div class="page-selection-shell">
+      <ProductStatusBanner
+        class="page-selection-summary-banner"
+        tone="neutral"
+        role="note"
+        title="页码选择"
+      >
+        {{ draftSummary }}
+        <template #actions>
+          <ProductChipList
+            aria-label="页码选择统计"
+            :items="summaryChipItems"
+          />
+        </template>
+      </ProductStatusBanner>
+
+      <div class="page-selection-input-card">
+        <UiField
+          variant="dialog"
+          label="直接输入页码"
+          control-id="page-selection-input"
+          hint="支持单页和范围，例如：1,3,5-10"
+          :error="pageSelectionInputError"
+        >
+          <div class="page-selection-input-row">
+            <UiInput
+              id="page-selection-input"
+              :model-value="pageSelectionText"
+              :error="pageSelectionInputError"
+              type="text"
+              placeholder="例如：1,3,5-10"
+              @update:model-value="updatePageSelectionText"
+              @keydown.enter.prevent="applyPageSelectionText"
+            />
+            <UiButton
+              variant="primary"
+              type="button"
+              data-testid="apply-page-selection-input"
+              @click="applyPageSelectionText"
+            >
+              应用
+            </UiButton>
+          </div>
+        </UiField>
+      </div>
+
+      <ProductActionRow
+        class="page-selection-shortcuts"
+        aria-label="页码选择快捷操作"
+        justify="start"
+      >
+        <UiButton variant="secondary" size="sm" type="button" @click="selectAllPages">全选</UiButton>
+        <UiButton variant="secondary" size="sm" type="button" @click="clearSelection">清空</UiButton>
+        <UiButton variant="danger" size="sm" type="button" @click="replaceSelection(failedPages)">失败页</UiButton>
+        <UiButton variant="secondary" size="sm" type="button" @click="replaceSelection(pendingPages)">未翻译页</UiButton>
+        <UiButton variant="secondary" size="sm" type="button" @click="replaceSelection(completedPages)">已翻译页</UiButton>
+        <UiButton variant="secondary" size="sm" type="button" @click="replaceSelection(labeledPages)">手动标注页</UiButton>
+      </ProductActionRow>
+
+      <section class="page-selection-browser-card">
+        <template v-if="useTreeMode">
+          <ProductBreadcrumbTrail
+            class="page-selection-breadcrumb"
+            :items="breadcrumbs"
+            @select="handleBreadcrumbClick"
+          />
+
+          <UiButton
+            v-if="currentFolderPath"
+            variant="secondary"
+            tone="primary"
+            size="sm"
+            block
+            type="button"
+            class="page-selection-folder-back-button"
+            @click="goUp"
+          >
+            <UiIcon class="page-selection-folder-back-icon" name="chevron-right" size="14" />
+            <span>返回上级</span>
+          </UiButton>
+
+          <div v-if="currentSubfolders.length > 0" class="page-selection-folder-grid">
+            <ProductFolderCard
+              v-for="subfolder in currentSubfolders"
+              :key="subfolder.path"
+              class="page-selection-folder-card"
+              :count="getFolderImageCount(subfolder)"
+              :count-id="subfolder.path"
+              :folder-name="subfolder.name"
+              :aria-label="`打开文件夹 ${subfolder.name}`"
+              @select="handleFolderClick(subfolder.path)"
+            />
+          </div>
+
+          <VirtualThumbnailGrid
+            v-if="currentFolderThumbnailItems.length > 0"
+            class="page-selection-thumbnail-grid"
+            aria-label="选择翻译页码"
+            :max-height="560"
+            :min-item-width="150"
+            :overscan-rows="1"
+            :items="currentFolderThumbnailItems"
+            @select="handleThumbnailSelect"
+          />
+        </template>
+
+        <template v-else>
+          <VirtualThumbnailGrid
+            class="page-selection-thumbnail-grid"
+            aria-label="选择翻译页码"
+            :max-height="560"
+            :min-item-width="150"
+            :overscan-rows="1"
+            :items="flatThumbnailItems"
+            @select="handleThumbnailSelect"
+          />
+        </template>
+      </section>
+    </div>
+
+    <template #footer>
+      <ProductActionRow
+        variant="dialog"
+        aria-label="指定翻译页码操作"
+      >
+        <UiButton variant="secondary" type="button" @click="closeModal">取消</UiButton>
+        <UiButton
+          variant="primary"
+          type="button"
+          data-testid="confirm-page-selection-button"
+          @click="confirmSelection"
+        >
+          确定
+        </UiButton>
+      </ProductActionRow>
+    </template>
+  </BaseModal>
+</template>
+
+<style scoped>
+.page-selection-shell {
+  --page-selection-modal-border-default: var(--color-border-muted);
+  --page-selection-modal-border-subtle: var(--color-border-soft);
+  --page-selection-modal-border-focus: var(--color-status-warning);
+  --page-selection-modal-shadow-raised: var(--shadow-soft);
+  --page-selection-modal-shadow-strong: var(--shadow-action-success);
+  --page-selection-modal-surface-warning: var(--color-status-warning-surface-soft);
+  --page-selection-modal-surface-warning-raised: var(--color-status-warning-surface-raised);
+
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 100%;
+}
+
+.page-selection-summary-banner {
+  --product-status-banner-align-items: center;
+  --product-status-banner-icon-display: none;
+  --product-status-banner-gap: 0;
+  --product-status-banner-padding: 16px 18px;
+  --product-status-banner-radius: 14px;
+  --product-status-banner-title-color: var(--color-text-heading);
+  --product-status-banner-title-font-size: 16px;
+  --product-status-banner-title-margin-bottom: 4px;
+  --product-status-banner-body-color: var(--color-text-supporting);
+  --product-status-banner-body-font-size: 14px;
+}
+
+.page-selection-browser-card {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 14px;
+  overflow: hidden;
+  background: var(--color-surface-base);
+  border: 1px solid var(--page-selection-modal-border-default);
+  border-radius: 14px;
+  box-shadow: 0 8px 20px var(--page-selection-modal-shadow-raised);
+}
+
+.page-selection-input-card {
+  padding: 12px;
+  border: 1px solid var(--page-selection-modal-border-subtle);
+  border-radius: 14px;
+  background: var(--color-surface-muted);
+}
+
+.page-selection-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.page-selection-shortcuts {
+  padding: 12px;
+  border: 1px solid var(--page-selection-modal-border-subtle);
+  border-radius: 14px;
+  background: var(--color-surface-muted);
+}
+
+.page-selection-breadcrumb {
+  margin-bottom: 10px;
+}
+
+.page-selection-folder-back-button {
+  margin-bottom: 12px;
+  justify-content: flex-start;
+}
+
+.page-selection-folder-back-icon {
+  transform: rotate(180deg);
+}
+
+.page-selection-folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.page-selection-thumbnail-grid {
+  --product-thumbnail-grid-min-size: 150px;
+  --product-thumbnail-grid-aspect-ratio: 3 / 4;
+
+  flex: 0 1 auto;
+  max-height: 100%;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.page-selection-folder-card {
+  --product-record-card-background: var(--page-selection-modal-surface-warning);
+  --product-record-card-border: var(--page-selection-modal-border-focus);
+  --product-record-card-accent: var(--color-status-warning);
+  --product-record-card-shadow-hover: 0 2px 8px var(--page-selection-modal-shadow-strong);
+  --product-record-card-padding: 12px;
+  --product-record-card-radius: 10px;
+  --product-record-card-gap: 8px;
+
+  min-height: 88px;
+  transition: transform 0.2s ease;
+}
+
+.page-selection-folder-card:hover {
+  --product-record-card-background: var(--page-selection-modal-surface-warning-raised);
+
+  transform: translateY(-1px);
+}
+
+@media (--breakpoint-lg-down) {
+  .page-selection-folder-grid {
+    --product-thumbnail-grid-min-size: 120px;
+
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  }
+}
+
+@media (--breakpoint-sm-down) {
+  .page-selection-input-row {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

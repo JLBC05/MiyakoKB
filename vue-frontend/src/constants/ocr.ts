@@ -1,0 +1,1 @@
+export const DEFAULT_AI_VISION_OCR_MIN_IMAGE_SIZE = 32

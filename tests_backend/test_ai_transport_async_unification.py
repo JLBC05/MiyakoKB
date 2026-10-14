@@ -1,0 +1,320 @@
+import asyncio
+import unittest
+from unittest import mock
+
+from src.shared.openai_options import (
+    OpenAICompatibleExecutionOptions,
+    OpenAICompatibleOptions,
+    OpenAICompatibleRequestOptions,
+)
+from src.shared.openai_execution import build_openai_compatible_runtime_options
+
+
+class AsyncTransportContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_async_chat_transport_builds_same_openai_body_shape_as_sync_transport(self) -> None:
+        from src.shared.ai_transport import AsyncOpenAICompatibleTransport, UnifiedChatRequest
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {"choices": [{"message": {"content": "你好，异步世界"}}]}
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                self.request_calls = []
+
+            async def request(self, method=None, url=None, headers=None, json=None):
+                self.request_calls.append(
+                    {"method": method, "url": url, "headers": headers, "json": json}
+                )
+                return FakeResponse()
+
+            async def aclose(self):
+                return None
+
+        transport = AsyncOpenAICompatibleTransport()
+        request = UnifiedChatRequest(
+            provider="custom",
+            api_key="test-key",
+            model="gpt-test",
+            messages=[{"role": "user", "content": "hello"}],
+            base_url="https://example.com/v1",
+            openai_options=OpenAICompatibleOptions(
+                request=OpenAICompatibleRequestOptions(
+                    force_json_output=True,
+                    temperature=0.35,
+                    extra_body={"seed": 222},
+                ),
+            ),
+        )
+
+        fake_client = FakeAsyncClient()
+        with mock.patch("src.shared.ai_transport.httpx.AsyncClient", return_value=fake_client):
+            content = await transport.complete(request)
+
+        self.assertEqual(content, "你好，异步世界")
+        self.assertEqual(len(fake_client.request_calls), 1)
+        call = fake_client.request_calls[0]
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(call["url"], "https://example.com/v1/chat/completions")
+        self.assertEqual(call["json"]["temperature"], 0.35)
+        self.assertEqual(call["json"]["response_format"], {"type": "json_object"})
+        self.assertEqual(call["json"]["seed"], 222)
+
+    async def test_async_stream_attempt_wall_clock_timeout_leaves_room_for_retry(self) -> None:
+        from src.shared.ai_transport import AsyncOpenAICompatibleTransport, UnifiedChatRequest
+
+        class FakeStreamResponse:
+            status_code = 200
+
+            def __init__(self, *, stalled: bool):
+                self.stalled = stalled
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def aiter_lines(self):
+                if self.stalled:
+                    while True:
+                        await asyncio.sleep(0.001)
+                        yield ": keep-alive"
+                yield 'data: {"choices":[{"delta":{"content":"重试成功"}}]}'
+                yield "data: [DONE]"
+
+        class FakeAsyncClient:
+            def __init__(self, *, stalled: bool):
+                self.stalled = stalled
+
+            def stream(self, *_args, **_kwargs):
+                return FakeStreamResponse(stalled=self.stalled)
+
+            async def aclose(self):
+                return None
+
+        clients = [
+            FakeAsyncClient(stalled=True),
+            FakeAsyncClient(stalled=False),
+        ]
+        request = UnifiedChatRequest(
+            provider="custom",
+            api_key="test-key",
+            model="gpt-test",
+            messages=[{"role": "user", "content": "hello"}],
+            base_url="https://example.com/v1",
+            openai_options=OpenAICompatibleOptions(
+                execution=OpenAICompatibleExecutionOptions(
+                    use_stream=True,
+                    transport_retries=1,
+                ),
+            ),
+            runtime_options=build_openai_compatible_runtime_options(
+                timeout=0.01,
+            ),
+        )
+
+        with (
+            mock.patch(
+                "src.shared.ai_transport.httpx.AsyncClient",
+                side_effect=clients,
+            ) as client_factory,
+            mock.patch(
+                "src.shared.ai_transport._calculate_backoff",
+                return_value=0,
+            ),
+        ):
+            content = await AsyncOpenAICompatibleTransport().complete(request)
+
+        self.assertEqual(content, "重试成功")
+        self.assertEqual(client_factory.call_count, 2)
+
+    async def test_async_transport_supports_embedding_requests(self) -> None:
+        from src.shared.ai_transport import AsyncOpenAICompatibleTransport, UnifiedEmbeddingRequest
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "data": [
+                        {"index": 0, "embedding": [0.1, 0.2]},
+                        {"index": 1, "embedding": [0.3, 0.4]},
+                    ]
+                }
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                self.request_calls = []
+
+            async def request(self, method=None, url=None, headers=None, json=None):
+                self.request_calls.append(
+                    {"method": method, "url": url, "headers": headers, "json": json}
+                )
+                return FakeResponse()
+
+            async def aclose(self):
+                return None
+
+        transport = AsyncOpenAICompatibleTransport()
+        request = UnifiedEmbeddingRequest(
+            provider="custom",
+            api_key="test-key",
+            model="text-embedding-test",
+            inputs=["第一页", "第二页"],
+            base_url="https://example.com/v1",
+        )
+
+        fake_client = FakeAsyncClient()
+        with mock.patch("src.shared.ai_transport.httpx.AsyncClient", return_value=fake_client):
+            embeddings = await transport.embed(request)
+
+        self.assertEqual(embeddings, [[0.1, 0.2], [0.3, 0.4]])
+        self.assertEqual(fake_client.request_calls[0]["url"], "https://example.com/v1/embeddings")
+        self.assertEqual(
+            fake_client.request_calls[0]["json"],
+            {"model": "text-embedding-test", "input": ["第一页", "第二页"]},
+        )
+
+    async def test_async_transport_supports_rerank_requests(self) -> None:
+        from src.shared.ai_transport import AsyncOpenAICompatibleTransport, UnifiedRerankRequest
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "results": [
+                        {"index": 1, "relevance_score": 0.93},
+                        {"index": 0, "relevance_score": 0.76},
+                    ]
+                }
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                self.request_calls = []
+
+            async def request(self, method=None, url=None, headers=None, json=None):
+                self.request_calls.append(
+                    {"method": method, "url": url, "headers": headers, "json": json}
+                )
+                return FakeResponse()
+
+            async def aclose(self):
+                return None
+
+        transport = AsyncOpenAICompatibleTransport()
+        request = UnifiedRerankRequest(
+            provider="custom",
+            api_key="test-key",
+            model="rerank-test",
+            query="主角是谁",
+            documents=["文档A", "文档B"],
+            top_n=2,
+            base_url="https://example.com/v1",
+            endpoint="/rerank",
+        )
+
+        fake_client = FakeAsyncClient()
+        with mock.patch("src.shared.ai_transport.httpx.AsyncClient", return_value=fake_client):
+            result = await transport.rerank(request)
+
+        self.assertEqual(result["results"][0]["index"], 1)
+        self.assertEqual(fake_client.request_calls[0]["url"], "https://example.com/v1/rerank")
+        self.assertEqual(
+            fake_client.request_calls[0]["json"],
+            {
+                "model": "rerank-test",
+                "query": "主角是谁",
+                "documents": ["文档A", "文档B"],
+                "top_n": 2,
+            },
+        )
+
+    async def test_async_chat_transport_omits_authorization_for_local_provider_without_api_key(self) -> None:
+        from src.shared.ai_transport import AsyncOpenAICompatibleTransport, UnifiedChatRequest
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {"choices": [{"message": {"content": "本地成功"}}]}
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                self.request_calls = []
+
+            async def request(self, method=None, url=None, headers=None, json=None):
+                self.request_calls.append(
+                    {"method": method, "url": url, "headers": headers, "json": json}
+                )
+                return FakeResponse()
+
+            async def aclose(self):
+                return None
+
+        transport = AsyncOpenAICompatibleTransport()
+        request = UnifiedChatRequest(
+            provider="ollama",
+            api_key="",
+            model="llama3.2",
+            messages=[{"role": "user", "content": "hello"}],
+            base_url=None,
+        )
+
+        fake_client = FakeAsyncClient()
+        with mock.patch("src.shared.ai_transport.httpx.AsyncClient", return_value=fake_client):
+            content = await transport.complete(request)
+
+        self.assertEqual(content, "本地成功")
+        self.assertEqual(fake_client.request_calls[0]["url"], "http://localhost:11434/v1/chat/completions")
+        self.assertNotIn("Authorization", fake_client.request_calls[0]["headers"])
+
+    async def test_async_embedding_rejects_missing_indices_or_nonfinite_vectors(self) -> None:
+        from src.shared.ai_transport import AsyncOpenAICompatibleTransport, UnifiedEmbeddingRequest
+
+        request = UnifiedEmbeddingRequest(
+            provider="custom",
+            api_key="test-key",
+            model="text-embedding-test",
+            inputs=["第一页"],
+            base_url="https://example.com/v1",
+        )
+        invalid_payloads = [
+            {"data": [{"embedding": [0.1, 0.2]}]},
+            {"data": [{"index": 0, "embedding": [float("nan"), 0.2]}]},
+            {"data": []},
+        ]
+
+        for payload in invalid_payloads:
+            transport = AsyncOpenAICompatibleTransport()
+            with self.subTest(payload=payload), mock.patch.object(
+                transport,
+                "_request_json",
+                new=mock.AsyncMock(return_value=payload),
+            ), self.assertRaises(ValueError):
+                await transport.embed(request)
+
+    async def test_async_transport_retry_count_requires_exact_nonnegative_integer(self) -> None:
+        from src.shared.ai_transport import AsyncOpenAICompatibleTransport
+
+        for value in (True, "1", -1):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                AsyncOpenAICompatibleTransport(max_retries=value)  # type: ignore[arg-type]
+
+    async def test_rerank_endpoint_requires_an_absolute_path(self) -> None:
+        from src.shared.ai_transport import UnifiedRerankRequest
+
+        with self.assertRaisesRegex(ValueError, "endpoint"):
+            UnifiedRerankRequest(
+                provider="custom",
+                api_key="test-key",
+                model="rerank-test",
+                query="主角是谁",
+                documents=["文档A"],
+                top_n=1,
+                base_url="https://example.com/v1",
+                endpoint="rerank",
+            )

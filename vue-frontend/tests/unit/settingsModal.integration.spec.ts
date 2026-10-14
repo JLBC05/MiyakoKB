@@ -1,0 +1,123 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+
+const { loadFromBackendMock, saveToBackendMock, saveDefaultsMock } = vi.hoisted(() => ({
+  loadFromBackendMock: vi.fn().mockResolvedValue(true),
+  saveToBackendMock: vi.fn(),
+  saveDefaultsMock: vi.fn(),
+}))
+
+vi.mock('@/stores/settings', () => ({
+  useSettingsStore: () => ({
+    backendError: null,
+    isBackendReady: true,
+    settings: {},
+    providerConfigs: {},
+    loadFromBackend: loadFromBackendMock,
+    saveToBackend: saveToBackendMock,
+  }),
+}))
+
+vi.mock('@/stores/runtimeStore', () => ({
+  useRuntimeStore: () => ({
+    capabilities: { profile: 'local', features: { plugins: true } },
+  }),
+}))
+
+vi.mock('@/utils/toast', () => ({
+  showToast: vi.fn(),
+}))
+
+vi.mock('@/components/settings/OcrSettings.vue', () => ({
+  default: { name: 'OcrSettings', template: '<div>OcrSettings stub</div>' },
+}))
+vi.mock('@/components/settings/TranslationSettings.vue', () => ({
+  default: { name: 'TranslationSettings', template: '<div>TranslationSettings stub</div>' },
+}))
+vi.mock('@/components/settings/DetectionSettings.vue', () => ({
+  default: { name: 'DetectionSettings', template: '<div>DetectionSettings stub</div>' },
+}))
+vi.mock('@/components/settings/HqTranslationSettings.vue', () => ({
+  default: { name: 'HqTranslationSettings', template: '<div>HqTranslationSettings stub</div>' },
+}))
+vi.mock('@/components/settings/ProofreadingSettings.vue', () => ({
+  default: { name: 'ProofreadingSettings', template: '<div>ProofreadingSettings stub</div>' },
+}))
+vi.mock('@/components/settings/PromptLibrary.vue', () => ({
+  default: { name: 'PromptLibrary', template: '<div>PromptLibrary stub</div>' },
+}))
+vi.mock('@/components/settings/PluginManager.vue', () => ({
+  default: { name: 'PluginManager', template: '<div>PluginManager stub</div>' },
+}))
+vi.mock('@/components/settings/MoreSettings.vue', () => ({
+  default: { name: 'MoreSettings', template: '<div>MoreSettings stub</div>' },
+}))
+vi.mock('@/components/settings/TextStyleDefaultsSettings.vue', () => ({
+  default: {
+    name: 'TextStyleDefaultsSettings',
+    template: '<div>TextStyleDefaultsSettings stub</div>',
+    methods: {
+      saveDefaults: saveDefaultsMock,
+    },
+  },
+}))
+
+import SettingsModal from '@/components/settings/SettingsModal.vue'
+
+const mountedWrappers: VueWrapper[] = []
+
+function getOverlay(): HTMLDivElement {
+  const overlay = document.body.querySelector('[data-testid="base-dialog-overlay"]')
+  expect(overlay).toBeTruthy()
+  return overlay as HTMLDivElement
+}
+
+function dispatchMouseEvent(target: Element, type: 'mousedown' | 'mouseup' | 'click') {
+  target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }))
+}
+
+afterEach(() => {
+  while (mountedWrappers.length > 0) {
+    mountedWrappers.pop()?.unmount()
+  }
+  document.body.innerHTML = ''
+  document.body.style.overflow = ''
+})
+
+describe('SettingsModal integration', () => {
+  it('loads content when mounted directly in the open state', async () => {
+    loadFromBackendMock.mockClear()
+    const wrapper = mount(SettingsModal, {
+      attachTo: document.body,
+      props: { modelValue: true },
+    })
+    mountedWrappers.push(wrapper)
+    await wrapper.vm.$nextTick()
+
+    expect(loadFromBackendMock).toHaveBeenCalledTimes(1)
+    expect(document.body.textContent).toContain('OcrSettings stub')
+    expect(document.body.textContent).not.toContain('正在读取后端设置')
+  })
+
+  it('propagates a complete overlay close through BaseModal and hides itself', async () => {
+    const wrapper = mount(SettingsModal, {
+      attachTo: document.body,
+      props: {
+        modelValue: true,
+      },
+    })
+    mountedWrappers.push(wrapper)
+
+    const overlay = getOverlay()
+
+    dispatchMouseEvent(overlay, 'mousedown')
+    dispatchMouseEvent(overlay, 'mouseup')
+    dispatchMouseEvent(overlay, 'click')
+
+    await flushPromises()
+
+    expect(wrapper.emitted('update:modelValue')).toBeTruthy()
+    expect(wrapper.emitted('update:modelValue')?.some(([value]) => value === false)).toBe(true)
+    expect(document.body.querySelector('[data-testid="base-dialog-overlay"]')).toBeNull()
+  })
+})

@@ -1,0 +1,252 @@
+[
+  {
+    "id": "siliconflow",
+    "label": "SiliconFlow",
+    "kind": "openai_compatible",
+    "defaultBaseUrl": "https://api.siliconflow.cn/v1",
+    "capabilities": ["translation", "hqTranslation", "visionOcr", "modelFetch", "connectionTest", "pluginAgent", "vlm", "chat", "embedding", "rerank", "webImportAgent"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": false,
+    "supportsStream": true,
+    "supportsJsonResponse": true,
+    "defaultModels": {
+      "embedding": "BAAI/bge-m3",
+      "reranker": "BAAI/bge-reranker-v2-m3"
+    }
+  },
+  {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "kind": "openai_compatible",
+    "defaultBaseUrl": "https://api.deepseek.com/v1",
+    "capabilities": ["translation", "hqTranslation", "modelFetch", "connectionTest", "pluginAgent", "vlm", "chat", "embedding", "rerank", "webImportAgent"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": false,
+    "supportsStream": true,
+    "supportsJsonResponse": true,
+    "defaultModels": {
+      "vlm": "deepseek-chat",
+      "chat": "deepseek-chat"
+    },
+    "modelCatalogs": {
+      "vlm": ["deepseek-chat"]
+    }
+  },
+  {
+    "id": "volcano",
+    "label": "火山引擎",
+    "kind": "openai_compatible",
+    "defaultBaseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+    "capabilities": ["translation", "hqTranslation", "visionOcr", "modelFetch", "connectionTest", "pluginAgent", "vlm", "chat", "embedding", "rerank", "webImportAgent"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": false,
+    "supportsStream": true,
+    "supportsJsonResponse": true,
+    "defaultModels": {
+      "vlm": "doubao-1.5-vision-pro-32k",
+      "chat": "doubao-1.5-pro-32k"
+    }
+  },
+  {
+    "id": "gemini",
+    "label": "Google Gemini",
+    "kind": "openai_compatible",
+    "defaultBaseUrl": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "capabilities": ["translation", "hqTranslation", "visionOcr", "modelFetch", "connectionTest", "pluginAgent", "vlm", "chat", "embedding", "webImportAgent"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": false,
+    "supportsStream": true,
+    "supportsJsonResponse": true,
+    "defaultModels": {
+      "vlm": "gemini-2.0-flash",
+      "chat": "gemini-2.0-flash",
+      "embedding": "text-embedding-004"
+    },
+    "modelCatalogs": {
+      "vlm": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
+    }
+  },
+  {
+    "id": "custom",
+    "label": "自定义 OpenAI 兼容服务",
+    "kind": "openai_compatible",
+    "capabilities": ["translation", "hqTranslation", "visionOcr", "modelFetch", "connectionTest", "pluginAgent", "vlm", "chat", "embedding", "rerank", "imageGen", "webImportAgent"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": true,
+    "isLocal": false,
+    "supportsStream": true,
+    "supportsJsonResponse": true
+  },
+  {
+    "id": "ollama",
+    "label": "Ollama (本地)",
+    "kind": "openai_compatible",
+    "defaultBaseUrl": "http://localhost:11434/v1",
+    "capabilities": ["translation", "hqTranslation", "visionOcr", "modelFetch", "connectionTest", "pluginAgent", "vlm", "chat", "embedding", "webImportAgent"],
+    "requiresApiKey": false,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": true,
+    "supportsStream": true,
+    "supportsJsonResponse": true
+  },
+  {
+    "id": "sakura",
+    "label": "Sakura (本地)",
+    "kind": "local",
+    "defaultBaseUrl": "http://localhost:8080/v1",
+    "capabilities": ["translation", "modelFetch", "connectionTest"],
+    "requiresApiKey": false,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": true,
+    "supportsStream": false,
+    "supportsJsonResponse": false
+  },
+  {
+    "id": "caiyun",
+    "label": "彩云小译",
+    "kind": "adapter",
+    "capabilities": ["translation", "connectionTest"],
+    "requiresApiKey": true,
+    "requiresModel": false,
+    "requiresBaseUrl": false,
+    "isLocal": false,
+    "supportsStream": false,
+    "supportsJsonResponse": false
+  },
+  {
+    "id": "baidu_translate",
+    "label": "百度翻译",
+    "kind": "adapter",
+    "capabilities": ["translation", "connectionTest"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": false,
+    "supportsStream": false,
+    "supportsJsonResponse": false
+  },
+  {
+    "id": "youdao_translate",
+    "label": "有道翻译",
+    "kind": "adapter",
+    "capabilities": ["translation", "connectionTest"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": false,
+    "supportsStream": false,
+    "supportsJsonResponse": false
+  },
+  {
+    "id": "openai",
+    "label": "OpenAI",
+    "kind": "openai_compatible",
+    "defaultBaseUrl": "https://api.openai.com/v1",
+    "capabilities": ["modelFetch", "connectionTest", "vlm", "chat", "embedding", "webImportAgent"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": false,
+    "supportsStream": true,
+    "supportsJsonResponse": true,
+    "defaultModels": {
+      "vlm": "gpt-4o",
+      "chat": "gpt-4o",
+      "embedding": "text-embedding-3-small"
+    },
+    "modelCatalogs": {
+      "vlm": ["gpt-4o", "gpt-4-turbo", "gpt-4o-mini"]
+    }
+  },
+  {
+    "id": "qwen",
+    "label": "通义千问",
+    "kind": "openai_compatible",
+    "defaultBaseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "capabilities": ["modelFetch", "connectionTest", "vlm", "chat", "embedding", "rerank"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": false,
+    "supportsStream": true,
+    "supportsJsonResponse": true,
+    "defaultModels": {
+      "vlm": "qwen-vl-max",
+      "chat": "qwen-plus",
+      "embedding": "text-embedding-v3"
+    },
+    "modelCatalogs": {
+      "vlm": ["qwen-vl-max", "qwen-vl-plus"]
+    }
+  },
+  {
+    "id": "gpt2api",
+    "label": "gpt2api",
+    "kind": "adapter",
+    "capabilities": ["imageGen"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": true,
+    "isLocal": false,
+    "supportsStream": false,
+    "supportsJsonResponse": true,
+    "defaultModels": {
+      "imageGen": "gpt-image-2"
+    }
+  },
+  {
+    "id": "newapi",
+    "label": "New API",
+    "kind": "adapter",
+    "capabilities": ["imageGen"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": true,
+    "isLocal": false,
+    "supportsStream": false,
+    "supportsJsonResponse": true
+  },
+  {
+    "id": "jina",
+    "label": "Jina AI",
+    "kind": "adapter",
+    "defaultBaseUrl": "https://api.jina.ai/v1",
+    "capabilities": ["rerank"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": false,
+    "supportsStream": false,
+    "supportsJsonResponse": false,
+    "defaultModels": {
+      "reranker": "jina-reranker-v2-base-multilingual"
+    }
+  },
+  {
+    "id": "cohere",
+    "label": "Cohere",
+    "kind": "adapter",
+    "defaultBaseUrl": "https://api.cohere.ai/v1",
+    "capabilities": ["rerank"],
+    "requiresApiKey": true,
+    "requiresModel": true,
+    "requiresBaseUrl": false,
+    "isLocal": false,
+    "supportsStream": false,
+    "supportsJsonResponse": false,
+    "defaultModels": {
+      "reranker": "rerank-multilingual-v3.0"
+    }
+  }
+]

@@ -1,0 +1,220 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import ProductActionRow from '@/components/product/ProductActionRow.vue'
+import ProductRecordCard from '@/components/product/ProductRecordCard.vue'
+import UiButton from '@/components/ui/UiButton.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
+import UiCheckbox from '@/components/ui/UiCheckbox.vue'
+import type { ChapterData } from '@/types/api'
+import TaskStatusBadge from '@/components/task-center/TaskStatusBadge.vue'
+
+const props = withDefaults(defineProps<{
+  chapter: ChapterData
+  index: number
+  isDragging: boolean
+  isDragOver: boolean
+  selectable?: boolean
+  selected?: boolean
+  translationAllowed?: boolean
+}>(), {
+  selectable: false,
+  selected: false,
+  translationAllowed: true,
+})
+
+defineEmits<{
+  (event: 'dragStart', dragEvent: DragEvent, index: number): void
+  (event: 'dragOver', dragEvent: DragEvent, index: number): void
+  (event: 'dragLeave'): void
+  (event: 'drop', dragEvent: DragEvent, index: number): void
+  (event: 'dragEnd'): void
+  (event: 'translate', chapterId: string): void
+  (event: 'read', chapterId: string): void
+  (event: 'edit', chapterId: string): void
+  (event: 'delete', chapterId: string): void
+  (event: 'select', chapterId: string, selected: boolean): void
+}>()
+
+const imageCount = computed(() => props.chapter.imageCount ?? 0)
+const canSelect = computed(() => imageCount.value > 0)
+</script>
+
+<template>
+  <ProductRecordCard
+    class="chapter-row"
+    :class="{
+      'chapter-row--dragging': isDragging,
+      'chapter-row--drag-over': isDragOver
+    }"
+    :aria-label="`章节 ${chapter.title}，拖拽可调整排序`"
+    :aria-grabbed="isDragging ? 'true' : 'false'"
+    draggable="true"
+    @dragstart="$emit('dragStart', $event, index)"
+    @dragover="$emit('dragOver', $event, index)"
+    @dragleave="$emit('dragLeave')"
+    @drop="$emit('drop', $event, index)"
+    @dragend="$emit('dragEnd')"
+  >
+    <div class="chapter-row__content">
+      <div class="chapter-row__drag-handle" title="拖拽排序" aria-hidden="true">
+        <UiIcon name="grip-vertical" size="18" />
+      </div>
+      <UiCheckbox
+        v-if="selectable"
+        :model-value="selected"
+        :disabled="!canSelect"
+        :aria-label="`选择章节：${chapter.title}`"
+        @change="$emit('select', chapter.id, $event)"
+      />
+      <div class="chapter-row__info">
+        <span class="chapter-row__order">#{{ index + 1 }}</span>
+        <span class="chapter-row__title">{{ chapter.title }}</span>
+        <span class="chapter-row__meta">{{ imageCount }} 张图片</span>
+        <TaskStatusBadge
+          :chapter-id="chapter.id"
+          :summary="chapter.jobStatusSummary"
+        />
+      </div>
+      <ProductActionRow
+        class="chapter-row__actions"
+        :aria-label="`${chapter.title} 章节操作`"
+        justify="end"
+      >
+        <UiButton
+          v-if="translationAllowed"
+          variant="primary"
+          size="xs"
+          @click="$emit('translate', chapter.id)"
+        >
+          进入翻译
+        </UiButton>
+        <UiButton
+          variant="primary"
+          tone="success"
+          size="xs"
+          class="chapter-row__read-action"
+          :disabled="imageCount === 0"
+          @click="$emit('read', chapter.id)"
+        >
+          进入阅读
+        </UiButton>
+        <UiButton
+          variant="card-action"
+          size="xs"
+          class="chapter-row__edit-action"
+          @click="$emit('edit', chapter.id)"
+        >
+          编辑
+        </UiButton>
+        <UiButton
+          variant="plain-danger"
+          size="xs"
+          class="chapter-row__delete-action"
+          @click="$emit('delete', chapter.id)"
+        >
+          删除
+        </UiButton>
+      </ProductActionRow>
+    </div>
+  </ProductRecordCard>
+</template>
+
+<style scoped>
+.chapter-row {
+  --product-record-card-background: var(--color-surface-interactive-hover);
+  --product-record-card-border: transparent;
+  --product-record-card-accent: var(--color-border-brand-gradient);
+  --product-record-card-padding: 12px 16px;
+  --product-record-card-shadow-hover: none;
+}
+
+.chapter-row--dragging {
+  opacity: 0.6;
+}
+
+.chapter-row--drag-over {
+  --product-record-card-border: var(--color-border-brand-gradient);
+  --product-record-card-background: var(--color-surface-card);
+}
+
+.chapter-row__content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.chapter-row__info {
+  display: flex;
+  flex: 1 1 260px;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.chapter-row__order {
+  flex-shrink: 0;
+  min-width: 32px;
+  color: var(--color-text-supporting);
+  font-size: 0.8rem;
+}
+
+.chapter-row__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-default);
+  font-weight: 500;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: normal;
+}
+
+.chapter-row__meta {
+  flex: 0 0 auto;
+  color: var(--color-text-supporting);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.chapter-row__actions {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.chapter-row__read-action {
+  --ui-button-xs-padding: 6px 10px;
+}
+
+.chapter-row__edit-action,
+.chapter-row__delete-action {
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: var(--color-text-supporting);
+  font-size: 0.8rem;
+  transition: background 0.2s, color 0.2s;
+}
+
+.chapter-row__edit-action:hover,
+.chapter-row__delete-action:hover {
+  background: var(--color-surface-card);
+  color: var(--color-text-default);
+}
+
+.chapter-row__delete-action:hover {
+  color: var(--color-status-error);
+}
+
+@media (--breakpoint-sm-down) {
+  .chapter-row__actions {
+    display: grid;
+    flex-basis: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+}
+</style>

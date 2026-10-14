@@ -1,0 +1,1 @@
+"""Manga Insight client implementations."""

@@ -1,0 +1,355 @@
+import { enableAutoUnmount, mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { createPinia, setActivePinia } from 'pinia'
+import { defineComponent, nextTick } from 'vue'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import TranslateView from '@/views/TranslateView.vue'
+import ImageUpload from '@/components/translate/ImageUpload.vue'
+import { useSettingsStore } from '@/stores/settings'
+import { useImageStore } from '@/stores/imageStore'
+import { useTaskCenterStore } from '@/stores/taskCenterStore'
+import UiIcon from '@/components/ui/UiIcon.vue'
+
+const {
+  routeState,
+  initializeAppMock,
+  initializeBookChapterContextMock,
+  handleKeydownMock,
+  isContextReadyState,
+  loadChapterSessionMock,
+  translateActionOptions,
+} = vi.hoisted(() => ({
+  routeState: { query: {} as Record<string, string | undefined> },
+  initializeAppMock: vi.fn(),
+  initializeBookChapterContextMock: vi.fn(),
+  handleKeydownMock: vi.fn(),
+  isContextReadyState: { value: true },
+  loadChapterSessionMock: vi.fn(),
+  translateActionOptions: {
+    value: null as null | { isEditMode: { value: boolean } },
+  },
+}))
+
+vi.mock('vue-router', () => ({
+  onBeforeRouteLeave: vi.fn(),
+  onBeforeRouteUpdate: vi.fn(),
+  useRoute: () => routeState,
+}))
+
+vi.mock('@/composables/useValidation', () => ({
+  useValidation: () => ({
+    validateBeforeTranslation: vi.fn(() => true),
+  }),
+}))
+
+vi.mock('@/composables/useTranslationPipeline', () => ({
+  useTranslation: () => ({
+    progress: { value: {} },
+    translateCurrentImage: vi.fn(),
+    translateAllImages: vi.fn(),
+    executeHqTranslation: vi.fn(),
+    executeProofreading: vi.fn(),
+    removeTextOnly: vi.fn(),
+    removeAllTexts: vi.fn(),
+    translateSelectedImages: vi.fn(),
+    removeTextSelection: vi.fn(),
+    retryFailedImages: vi.fn(),
+  }),
+}))
+
+vi.mock('@/composables/useTranslateInit', () => ({
+  useTranslateInit: () => ({
+    currentBookTitle: { value: 'Book' },
+    currentChapterTitle: { value: 'Chapter' },
+    currentChapterId: { value: 'chapter-1' },
+    isBookshelfMode: { value: true },
+    isContextReady: isContextReadyState,
+    isSwitchingImage: { value: false },
+    initializeApp: initializeAppMock,
+    initializeBookChapterContext: initializeBookChapterContextMock,
+  }),
+}))
+
+vi.mock('@/composables/useTextStyleSync', () => ({
+  useTextStyleSync: () => ({
+    handleTextStyleChanged: vi.fn(),
+    handleAutoFontSizeChanged: vi.fn(),
+    handleAutoTextColorChanged: vi.fn(),
+    handleApplyToAll: vi.fn(),
+  }),
+}))
+
+vi.mock('@/views/useTranslateViewActions', () => ({
+  useTranslateViewActions: (options: { isEditMode: { value: boolean } }) => {
+    translateActionOptions.value = options
+    return {
+      goToNext: vi.fn(),
+      goToPrevious: vi.fn(),
+      handleKeydown: handleKeydownMock,
+      handleRetryFailed: vi.fn(),
+      handleRunWorkflow: vi.fn(),
+      handleUploadComplete: vi.fn(),
+      loadChapterSession: loadChapterSessionMock,
+      selectImage: vi.fn(),
+      toggleEditMode: vi.fn(),
+    }
+  },
+}))
+
+const AppShellStub = defineComponent({
+  template: '<div class="app-shell-stub"><slot /></div>',
+})
+
+const ProductPageHeaderStub = defineComponent({
+  props: {
+    actionsLabel: {
+      type: String,
+      default: '页面操作',
+    },
+    navLabel: {
+      type: String,
+      default: '页面导航',
+    },
+    variant: {
+      type: String,
+      default: 'default',
+    },
+  },
+  template: `
+    <header class="product-page-header" :class="'product-page-header--' + variant">
+      <slot name="meta" />
+      <nav :aria-label="navLabel"><slot name="nav" /></nav>
+      <div role="group" :aria-label="actionsLabel"><slot name="actions" /></div>
+    </header>
+  `,
+})
+
+const SidebarLayoutStub = defineComponent({
+  template: '<div class="sidebar-layout-stub"><slot name="left" /><slot /><slot name="right" /></div>',
+})
+
+const RouterLinkStub = defineComponent({
+  props: ['to'],
+  template: '<a :href="to"><slot /></a>',
+})
+
+function mountTranslateView() {
+  setActivePinia(createPinia())
+  return mount(TranslateView, {
+    global: {
+      stubs: {
+        AppShell: AppShellStub,
+        ProductPageHeader: ProductPageHeaderStub,
+        SidebarLayout: SidebarLayoutStub,
+        RouterLink: RouterLinkStub,
+        ImageUpload: true,
+        SettingsSidebar: true,
+        ImageResultDisplay: true,
+        FirstTimeGuide: true,
+        TranslationProgress: true,
+        SponsorModal: true,
+        ThumbnailSidebar: true,
+        SettingsModal: true,
+        BookGlossaryModal: true,
+        BookNonTranslateModal: true,
+        EditWorkspace: true,
+        UiProgressBar: true,
+        WebImportModal: true,
+        WebImportDisclaimer: true,
+      },
+    },
+  })
+}
+
+describe('TranslateView', () => {
+  enableAutoUnmount(afterEach)
+
+  beforeEach(() => {
+    routeState.query = {}
+    initializeAppMock.mockReset()
+    initializeBookChapterContextMock.mockReset()
+    handleKeydownMock.mockReset()
+    isContextReadyState.value = true
+    loadChapterSessionMock.mockReset()
+    loadChapterSessionMock.mockResolvedValue(true)
+    translateActionOptions.value = null
+    initializeAppMock.mockResolvedValue(undefined)
+    initializeBookChapterContextMock.mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('guards global keyboard handling until async initialization settles', () => {
+    const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
+    const removeEventListenerSpy = vi.spyOn(window, 'removeEventListener')
+    initializeAppMock.mockReturnValue(new Promise(() => {}))
+    isContextReadyState.value = false
+
+    const wrapper = mountTranslateView()
+    const listener = addEventListenerSpy.mock.calls.find(
+      ([type]) => type === 'keydown',
+    )?.[1] as EventListener
+
+    expect(listener).toBeTypeOf('function')
+    listener(new KeyboardEvent('keydown', { altKey: true, key: 'ArrowUp' }))
+    expect(handleKeydownMock).not.toHaveBeenCalled()
+
+    isContextReadyState.value = true
+    listener(new KeyboardEvent('keydown', { altKey: true, key: 'ArrowUp' }))
+    expect(handleKeydownMock).toHaveBeenCalledOnce()
+
+    wrapper.unmount()
+    expect(removeEventListenerSpy).toHaveBeenCalledWith('keydown', listener)
+
+    addEventListenerSpy.mockRestore()
+    removeEventListenerSpy.mockRestore()
+  })
+
+  it('exposes safe and named header actions', async () => {
+    routeState.query = { book: 'book-1', chapter: 'chapter-1' }
+
+    const wrapper = mountTranslateView()
+    const settingsStore = useSettingsStore()
+
+    expect(wrapper.get('.product-page-header--default').exists()).toBe(true)
+    expect(wrapper.get('nav[aria-label="翻译页面导航"]').exists()).toBe(true)
+    const actionGroup = wrapper.get('[role="group"][aria-label="翻译页面操作"]')
+    expect(wrapper.get('.translate-header__back-link').attributes('aria-label')).toBe('返回书架')
+    expect(actionGroup.find('.translate-header__settings-button').exists()).toBe(true)
+    expect(actionGroup.find('.translate-header__link--donate').exists()).toBe(true)
+    const themeToggle = wrapper.get('.translate-header__theme-toggle')
+    expect(actionGroup.find('.translate-header__theme-toggle').exists()).toBe(true)
+    expect(themeToggle.attributes('aria-label')).toBe('切换深色模式')
+    await themeToggle.trigger('click')
+    expect(settingsStore.theme).toBe('dark')
+    expect(wrapper.get('.translate-header__link--tutorial').attributes('rel')).toBe('noopener noreferrer')
+    const githubLink = wrapper.get('.translate-header__link--github')
+    expect(githubLink.attributes('rel')).toBe('noopener noreferrer')
+    expect(githubLink.getComponent(UiIcon).props('name')).toBe('github')
+    expect(wrapper.get('.translate-header__link--donate').element.tagName).toBe('BUTTON')
+    expect(wrapper.get('.translate-header__link--donate').attributes('href')).toBeUndefined()
+  })
+
+  it('keeps edit-mode shell visibility in template state instead of product header CSS reach-through', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/views/TranslateView.vue'), 'utf8')
+
+    expect(source).toMatch(/<ProductPageHeader\s+v-show="!isEditMode"/)
+    expect(source).toMatch(/<SidebarLayout\s+v-show="!isEditMode"/)
+    expect(source).not.toContain('.translate-page.edit-mode-active .product-page-header')
+  })
+
+  it('leaves edit mode when the current page disappears', async () => {
+    mountTranslateView()
+    const imageStore = useImageStore()
+    imageStore.setImages([{
+      bubbleStates: [],
+      cleanAssetUrl: null,
+      fileName: 'page.png',
+      hasUnsavedChanges: false,
+      id: 'page-1',
+      sourceAssetUrl: '/api/v2/assets/source',
+      translatedAssetUrl: null,
+      translationStatus: 'pending',
+    }])
+    await nextTick()
+    expect(translateActionOptions.value).not.toBeNull()
+    translateActionOptions.value!.isEditMode.value = true
+    await nextTick()
+
+    imageStore.clearImages()
+    await nextTick()
+
+    expect(translateActionOptions.value!.isEditMode.value).toBe(false)
+  })
+
+  it('passes the current sidebar style to imports before the first page exists', async () => {
+    const wrapper = mountTranslateView()
+    const settingsStore = useSettingsStore()
+    settingsStore.updateTextStyle({ fontSize: 37 })
+    await nextTick()
+
+    expect(wrapper.getComponent(ImageUpload).props('textStyle')).toEqual(
+      settingsStore.settings.textStyle,
+    )
+    expect(wrapper.getComponent(ImageUpload).props('disabled')).toBe(false)
+  })
+
+  it('reloads the chapter when an accepted container import reaches a terminal state', async () => {
+    const wrapper = mountTranslateView()
+    const taskCenterStore = useTaskCenterStore()
+    const trackJob = vi.spyOn(taskCenterStore, 'trackJob').mockImplementation(() => undefined)
+
+    wrapper.getComponent(ImageUpload).vm.$emit('contentImportAccepted', ['container-job'])
+    await nextTick()
+    expect(trackJob).toHaveBeenCalledWith('container-job')
+
+    taskCenterStore.history = [{
+      jobId: 'container-job',
+      status: 'completed',
+    } as unknown as (typeof taskCenterStore.history)[number]]
+    await nextTick()
+
+    expect(loadChapterSessionMock).toHaveBeenCalledOnce()
+  })
+
+  it('waits for an interrupted import to actually finish before reloading', async () => {
+    const wrapper = mountTranslateView()
+    const taskCenterStore = useTaskCenterStore()
+    vi.spyOn(taskCenterStore, 'trackJob').mockImplementation(() => undefined)
+
+    wrapper.getComponent(ImageUpload).vm.$emit('contentImportAccepted', ['container-job'])
+    taskCenterStore.history = [{
+      jobId: 'container-job',
+      status: 'interrupted',
+    } as unknown as (typeof taskCenterStore.history)[number]]
+    await nextTick()
+    expect(loadChapterSessionMock).not.toHaveBeenCalled()
+
+    taskCenterStore.history = [{
+      jobId: 'container-job',
+      status: 'completed',
+    } as unknown as (typeof taskCenterStore.history)[number]]
+    await nextTick()
+    expect(loadChapterSessionMock).toHaveBeenCalledOnce()
+  })
+
+  it('keeps header actions free of DOM id hooks', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/views/TranslateView.vue'), 'utf8')
+
+    expect(source).not.toContain('id="openSettingsBtn"')
+    expect(source).not.toContain('github.jpg')
+    expect(source).not.toContain('translate-header__github-icon')
+  })
+
+  it('keeps page owner tokens on semantic colors', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/views/TranslateView.vue'), 'utf8')
+    const ownerTokenBlock = source.match(/\.translate-page\s*\{(?<body>[\s\S]*?)\n\}/)?.groups?.body ?? ''
+
+    expect(ownerTokenBlock).not.toMatch(/rgba?\(/)
+    expect(ownerTokenBlock).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+  })
+
+  it('keeps page-level helper hooks under the translate owner', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/views/TranslateView.vue'), 'utf8')
+
+    expect(source).toContain('translate-upload-card__actions')
+    expect(source).not.toContain('class="translate-upload-actions"')
+    expect(source).not.toContain('.translate-upload-actions')
+    expect(source).not.toContain('class="translate-loading-progress-label"')
+    expect(source).not.toContain('.translate-loading-progress-label')
+    expect(source).not.toMatch(/class="hint-text"/)
+    expect(source).not.toContain('translate-bookshelf-mode-hint')
+  })
+
+  it('uses an owner modifier for settings highlight state', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/views/TranslateView.vue'), 'utf8')
+
+    expect(source).toContain("'translate-header__settings-button--highlighted': isSettingsButtonHighlighted")
+    expect(source).toContain('.translate-header__settings-button--highlighted')
+    expect(source).not.toContain('{ highlight: isSettingsButtonHighlighted }')
+    expect(source).not.toContain('.translate-header__settings-button.highlight')
+  })
+})

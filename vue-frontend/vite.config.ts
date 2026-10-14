@@ -1,0 +1,69 @@
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import { resolve } from 'path'
+import { Agent } from 'node:http'
+import { fileURLToPath } from 'node:url'
+
+const projectRoot = fileURLToPath(new URL('.', import.meta.url))
+const workspaceRoot = fileURLToPath(new URL('..', import.meta.url))
+const apiProxyTarget = process.env.SABER_API_PROXY_TARGET?.trim()
+  || 'http://127.0.0.1:5000'
+const apiProxyAgent = new Agent({
+  keepAlive: true,
+  keepAliveMsecs: 1_000,
+  maxFreeSockets: 8,
+  maxSockets: 32,
+})
+
+export default defineConfig({
+  plugins: [vue()],
+
+  resolve: {
+    alias: {
+      '@': resolve(projectRoot, 'src'),
+    },
+  },
+
+  build: {
+    outDir: '../src/backend_v2/static/vue',
+    emptyOutDir: true,
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        entryFileNames: 'js/[name].[hash].js',
+        chunkFileNames: 'js/[name].[hash].js',
+        assetFileNames: 'assets/[name].[hash].[ext]',
+        manualChunks: {
+          'vue-vendor': ['vue', 'vue-router', 'pinia'],
+          'utils-vendor': ['axios'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 1000,
+  },
+
+  base: '/',
+
+  server: {
+    port: 5173,
+    strictPort: true,
+    host: true,
+    fs: {
+      allow: [workspaceRoot],
+    },
+    proxy: {
+      '/api': {
+        target: apiProxyTarget,
+        agent: apiProxyAgent,
+        changeOrigin: true,
+        timeout: 300000,
+        proxyTimeout: 300000,
+      },
+    },
+  },
+
+  preview: {
+    port: 4173,
+    host: true,
+  },
+})

@@ -1,0 +1,349 @@
+from __future__ import annotations
+
+from pathlib import Path
+import sqlite3
+import threading
+import time
+import uuid
+
+from flask import Flask
+import pytest
+from sqlalchemy import insert, select
+
+from src.backend_v2.api.system_routes import create_system_blueprint
+from src.backend_v2.content.repository import ContentRepository
+from src.backend_v2.jobs.repository import JobItemSpec, JobQueueRepository, JobSpec
+from src.backend_v2.jobs.worker_loop import JobWorkerLoop
+from src.backend_v2.runtime_profile import resolve_runtime_profile
+from src.backend_v2.storage.database import create_sqlite_engine
+from src.backend_v2.storage.epochs import (
+    EpochRegistration,
+    ProcessEpochRepository,
+)
+from src.backend_v2.storage.schema import (
+    metadata,
+    operations,
+    pages,
+    process_epochs,
+)
+from src.backend_v2.storage.seeding import seed_system_records
+from src.backend_v2.worker.model_lifecycle import (
+    WorkerModelControlRepository,
+    WorkerModelLifecycle,
+    unload_loaded_models,
+)
+
+
+LOCAL_PROFILE = resolve_runtime_profile("local")
+
+
+@pytest.fixture()
+def model_platform(tmp_path: Path):
+    engine = create_sqlite_engine(tmp_path / "saber.sqlite3")
+    metadata.create_all(engine)
+    seed_system_records(engine)
+    content = ContentRepository(engine)
+    book = content.create_book(title="Book")
+    chapter = content.create_chapter(
+        book_id=str(book["id"]),
+        title="Chapter",
+    )
+    page_id = str(uuid.uuid4())
+    with engine.begin() as connection:
+        connection.execute(
+            insert(pages).values(
+                id=page_id,
+                chapter_id=str(chapter["id"]),
+                ordinal=1,
+                logical_source_path="page.png",
+            )
+        )
+    worker_epoch_id = str(uuid.uuid4())
+    ProcessEpochRepository(engine).register(
+        EpochRegistration(
+            epoch_id=worker_epoch_id,
+            token="worker-token",
+            role="worker",
+            pid=771,
+        )
+    )
+    try:
+        yield engine, worker_epoch_id, page_id
+    finally:
+        engine.dispose()
+
+
+def test_manual_model_release_is_durable_and_worker_fenced(
+    model_platform,
+    monkeypatch,
+) -> None:
+    engine, worker_epoch_id, _page_id = model_platform
+    repository = WorkerModelControlRepository(engine)
+    accepted = repository.request_release()
+    assert accepted["status"] == "pending"
+    assert repository.request_release()["commandId"] == accepted["commandId"]
+
+    released: list[str] = []
+    monkeypatch.setattr(
+        "src.backend_v2.worker.model_lifecycle.unload_loaded_models",
+        lambda *, release_callbacks, resident_models: _run_release_callbacks(
+            release_callbacks,
+            resident_models,
+        ),
+    )
+    lifecycle = WorkerModelLifecycle(
+        repository,
+        worker_epoch_id=worker_epoch_id,
+        release_callbacks=(lambda: released.append("plugins"),),
+        resident_models=("manga_ocr",),
+    )
+    assert lifecycle.run_pending_release() is True
+    assert released == ["plugins"]
+    with engine.connect() as connection:
+        command = connection.execute(
+            select(process_epochs).where(
+                process_epochs.c.id == worker_epoch_id
+            )
+        ).mappings().one()
+    assert command["model_release_handled_id"] == accepted["commandId"]
+    assert '"releasedCount":1' in str(command["model_release_result_json"])
+    assert '"retained":["manga_ocr"]' in str(
+        command["model_release_result_json"]
+    )
+
+
+def test_manual_release_retries_same_epoch_after_busy_completion(
+    model_platform,
+    monkeypatch,
+) -> None:
+    engine, worker_epoch_id, _page_id = model_platform
+    repository = WorkerModelControlRepository(engine)
+    accepted = repository.request_release()
+    release_calls = 0
+
+    def release(*, release_callbacks, resident_models) -> dict[str, object]:
+        nonlocal release_calls
+        release_calls += 1
+        return _run_release_callbacks(release_callbacks, resident_models)
+
+    monkeypatch.setattr(
+        "src.backend_v2.worker.model_lifecycle.unload_loaded_models",
+        release,
+    )
+    lifecycle = WorkerModelLifecycle(
+        repository,
+        worker_epoch_id=worker_epoch_id,
+    )
+    original_complete = repository.complete
+    completion_calls = 0
+
+    def complete_once_busy(**kwargs) -> None:
+        nonlocal completion_calls
+        completion_calls += 1
+        if completion_calls == 1:
+            raise sqlite3.OperationalError("database is locked")
+        original_complete(**kwargs)
+
+    monkeypatch.setattr(repository, "complete", complete_once_busy)
+
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        lifecycle.run_pending_release()
+    with engine.connect() as connection:
+        handled_after_busy = connection.execute(
+            select(process_epochs.c.model_release_handled_id).where(
+                process_epochs.c.id == worker_epoch_id
+            )
+        ).scalar_one_or_none()
+    assert handled_after_busy is None
+
+    assert lifecycle.run_pending_release() is True
+    with engine.connect() as connection:
+        handled_id = connection.execute(
+            select(process_epochs.c.model_release_handled_id).where(
+                process_epochs.c.id == worker_epoch_id
+            )
+        ).scalar_one()
+    assert handled_id == accepted["commandId"]
+    assert release_calls == 2
+    assert completion_calls == 2
+
+
+def test_release_endpoint_returns_409_during_local_model_inference(
+    model_platform,
+) -> None:
+    engine, worker_epoch_id, page_id = model_platform
+    operation_id = str(uuid.uuid4())
+    with engine.begin() as connection:
+        connection.execute(
+            insert(operations).values(
+                id=operation_id,
+                kind="page_detect",
+                executor_role="worker",
+                status="running",
+                page_id=page_id,
+                base_revision=1,
+                request_json="{}",
+                executor_epoch_id=worker_epoch_id,
+                attempt_id=str(uuid.uuid4()),
+            )
+        )
+    app = Flask("model-control-test")
+    app.register_blueprint(
+        create_system_blueprint(engine=engine, profile=LOCAL_PROFILE)
+    )
+
+    response = app.test_client().post(
+        "/api/v2/system/release-models"
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "model_inference_busy"
+
+
+def test_idle_model_cache_is_released_once_after_ten_minutes(
+    model_platform,
+    monkeypatch,
+) -> None:
+    engine, worker_epoch_id, _page_id = model_platform
+    clock = [0.0]
+    released: list[str] = []
+    monkeypatch.setattr(
+        "src.backend_v2.worker.model_lifecycle.unload_loaded_models",
+        lambda *, release_callbacks, resident_models: _run_release_callbacks(
+            release_callbacks,
+            resident_models,
+        ),
+    )
+    lifecycle = WorkerModelLifecycle(
+        WorkerModelControlRepository(engine),
+        worker_epoch_id=worker_epoch_id,
+        idle_timeout_seconds=600,
+        release_callbacks=(lambda: released.append("plugins"),),
+        monotonic=lambda: clock[0],
+    )
+    runtime_checks = 0
+
+    def runtime_busy() -> bool:
+        nonlocal runtime_checks
+        runtime_checks += 1
+        return False
+
+    monkeypatch.setattr(lifecycle.repository, "runtime_busy", runtime_busy)
+
+    clock[0] = 599
+    assert lifecycle.release_if_idle() is False
+    assert runtime_checks == 0
+    clock[0] = 600
+    assert lifecycle.release_if_idle() is True
+    assert runtime_checks == 1
+    assert lifecycle.release_if_idle() is False
+    assert runtime_checks == 1
+    assert released == ["plugins"]
+
+
+def test_model_release_includes_loaded_paddle_onnx_sessions(monkeypatch) -> None:
+    from src.interfaces import paddle_ocr_onnx_interface
+
+    handler = paddle_ocr_onnx_interface.PaddleOCRHandlerONNX()
+    handler.ocr = object()
+    handler.initialized = True
+    monkeypatch.setattr(
+        paddle_ocr_onnx_interface,
+        "_paddle_ocr_onnx_handler",
+        handler,
+    )
+
+    result = unload_loaded_models()
+
+    assert "paddle_ocr" in result["released"]
+    assert paddle_ocr_onnx_interface._paddle_ocr_onnx_handler is None
+    assert handler.ocr is None
+    assert handler.initialized is False
+
+
+def test_durable_job_activity_rearms_idle_release_after_models_reload(
+    model_platform,
+    monkeypatch,
+) -> None:
+    engine, worker_epoch_id, _page_id = model_platform
+    clock = [0.0]
+    released: list[str] = []
+    monkeypatch.setattr(
+        "src.backend_v2.worker.model_lifecycle.unload_loaded_models",
+        lambda *, release_callbacks, resident_models: _run_release_callbacks(
+            release_callbacks,
+            resident_models,
+        ),
+    )
+    lifecycle = WorkerModelLifecycle(
+        WorkerModelControlRepository(engine),
+        worker_epoch_id=worker_epoch_id,
+        idle_timeout_seconds=600,
+        release_callbacks=(lambda: released.append("plugins"),),
+        monotonic=lambda: clock[0],
+    )
+    monkeypatch.setattr(lifecycle.repository, "runtime_busy", lambda: False)
+
+    clock[0] = 600
+    assert lifecycle.release_if_idle() is True
+    assert lifecycle.released_since_activity is True
+
+    jobs = JobQueueRepository(engine)
+    created = jobs.create_batch(
+        display_name="model activity integration",
+        specs=[
+            JobSpec(
+                kind="export",
+                config={"mode": "test"},
+                items=(
+                    JobItemSpec(page_id=None, step_kinds=("model_step",)),
+                ),
+            )
+        ],
+    )
+    job_id = str(created["jobIds"][0])
+    stop = threading.Event()
+
+    def handle(_fence, _step):
+        clock[0] = 610
+        return {"modelLoaded": True}
+
+    loop = JobWorkerLoop(
+        jobs,
+        worker_epoch_id=worker_epoch_id,
+        handlers={"model_step": handle},
+        on_activity=lifecycle.note_activity,
+        idle_poll_seconds=0.01,
+    )
+    thread = threading.Thread(target=loop.run, args=(stop,), daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if jobs.get_job(job_id)["status"] == "completed":
+                break
+            time.sleep(0.01)
+        assert jobs.get_job(job_id)["status"] == "completed"
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+
+    assert lifecycle.released_since_activity is False
+    clock[0] = 1_209
+    assert lifecycle.release_if_idle() is False
+    clock[0] = 1_210
+    assert lifecycle.release_if_idle() is True
+    assert released == ["plugins", "plugins"]
+
+
+def _run_release_callbacks(
+    release_callbacks,
+    resident_models=(),
+) -> dict[str, object]:
+    for callback in release_callbacks:
+        callback()
+    return {
+        "released": ["runtime_cache_1"],
+        "releasedCount": 1,
+        "retained": list(resident_models),
+    }

@@ -1,0 +1,366 @@
+import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, h, ref } from 'vue'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const { confirmProductActionMock, waitForJobMock } = vi.hoisted(() => ({
+  confirmProductActionMock: vi.fn(),
+  waitForJobMock: vi.fn(),
+}))
+
+vi.mock('@/composables/useProductConfirm', () => ({
+  confirmProductAction: confirmProductActionMock,
+}))
+
+vi.mock('@/stores/taskCenterStore', () => ({
+  useTaskCenterStore: () => ({ waitForJob: waitForJobMock }),
+}))
+
+const characterDetailPanelStub = defineComponent({
+  props: {
+    character: {
+      type: Object,
+      default: null,
+    },
+  },
+  setup(props, { emit }) {
+    return () =>
+      h('div', { class: 'character-detail-stub' }, [
+        h('span', { class: 'detail-name' }, props.character?.name || 'empty'),
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'delete-form',
+            onClick: () => emit('delete-form', { form_id: 'form-1', form_name: '常服' }),
+          },
+          '删除形态'
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'delete-form-image',
+            onClick: () => emit('delete-form-image', 'form-1'),
+          },
+          '删除形态参考图'
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'delete-character',
+            onClick: () => emit('delete-character'),
+          },
+          '删除角色'
+        ),
+      ])
+  },
+})
+
+import CharacterManagementPanel from '@/components/insight/continuation/CharacterManagementPanel.vue'
+import ProductChipList from '@/components/product/ProductChipList.vue'
+import ProductRecordCard from '@/components/product/ProductRecordCard.vue'
+import ProductSectionHeader from '@/components/product/ProductSectionHeader.vue'
+import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
+
+function createState() {
+  return {
+    characters: ref([
+      {
+        name: '主角',
+        aliases: [],
+        description: 'desc',
+        forms: [
+          {
+            form_id: 'form-1',
+            form_name: '常服',
+            description: '',
+            reference_image: '/tmp/form.png',
+          },
+        ],
+        reference_image: '',
+        enabled: true,
+      },
+    ]),
+    getCharacterImageUrl: vi.fn().mockReturnValue(''),
+    hasMoreCharacterForms: ref(false),
+    isLoadingMoreCharacterForms: ref(false),
+    loadMoreCharacterForms: vi.fn().mockResolvedValue(undefined),
+    showMessage: vi.fn(),
+  }
+}
+
+describe('CharacterManagementPanel', () => {
+  beforeEach(() => {
+    confirmProductActionMock.mockReset()
+    confirmProductActionMock.mockResolvedValue(true)
+    waitForJobMock.mockReset().mockResolvedValue({ status: 'completed' })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('uses button semantics for selectable character tiles', async () => {
+    const wrapper = mount(CharacterManagementPanel, {
+      props: {
+        bookId: 'book-1',
+        characterManagement: {},
+        state: createState(),
+      },
+      global: {
+        stubs: {
+          CharacterDetailPanel: characterDetailPanelStub,
+          AddCharacterDialog: true,
+          EditCharacterDialog: true,
+          AddFormDialog: true,
+          EditFormDialog: true,
+          OrthographicDialog: true,
+        },
+      },
+    })
+
+    const tile = wrapper.find('.character-management-panel__tile')
+    const tileCard = wrapper.getComponent(ProductRecordCard)
+    expect(tileCard.props('as')).toBe('button')
+    expect(tile.element.tagName).toBe('BUTTON')
+    expect(tile.attributes('type')).toBe('button')
+    expect(tile.attributes('aria-pressed')).toBe('false')
+
+    await tile.trigger('click')
+
+    expect(tile.attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('.detail-name').text()).toBe('主角')
+  })
+
+  it('uses product chips for character tile status metadata', () => {
+    const state = createState()
+    state.characters.value[0] = {
+      ...state.characters.value[0],
+      enabled: false,
+      forms: [
+        { form_id: 'form-1', form_name: '常服', description: '', reference_image: '/tmp/form.png' },
+        { form_id: 'form-2', form_name: '礼服', description: '', reference_image: '' },
+      ],
+    }
+
+    const wrapper = mount(CharacterManagementPanel, {
+      props: {
+        bookId: 'book-1',
+        characterManagement: {},
+        state,
+      },
+      global: {
+        stubs: {
+          CharacterDetailPanel: characterDetailPanelStub,
+          AddCharacterDialog: true,
+          EditCharacterDialog: true,
+          AddFormDialog: true,
+          EditFormDialog: true,
+          OrthographicDialog: true,
+        },
+      },
+    })
+
+    const chips = wrapper.getComponent(ProductChipList)
+    expect(chips.props('items')).toEqual([
+      { id: 'forms', label: '2 个形态', tone: 'primary' },
+      { id: 'disabled', label: '禁用', tone: 'warning' },
+    ])
+  })
+
+  it('loads the next character-form page only when requested', async () => {
+    const state = createState()
+    state.hasMoreCharacterForms.value = true
+    const wrapper = mount(CharacterManagementPanel, {
+      props: {
+        bookId: 'book-1',
+        characterManagement: {},
+        state,
+      },
+      global: {
+        stubs: {
+          CharacterDetailPanel: characterDetailPanelStub,
+          AddCharacterDialog: true,
+          EditCharacterDialog: true,
+          AddFormDialog: true,
+          EditFormDialog: true,
+          OrthographicDialog: true,
+        },
+      },
+    })
+
+    const button = wrapper.get('.character-management-panel__load-more-forms')
+    expect(button.text()).toContain('加载更多角色形态')
+    expect(state.loadMoreCharacterForms).not.toHaveBeenCalled()
+
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(state.loadMoreCharacterForms).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses the product section header contract for the character archive heading', () => {
+    const wrapper = mount(CharacterManagementPanel, {
+      props: {
+        bookId: 'book-1',
+        characterManagement: {},
+        state: createState(),
+      },
+      global: {
+        stubs: {
+          CharacterDetailPanel: characterDetailPanelStub,
+          AddCharacterDialog: true,
+          EditCharacterDialog: true,
+          AddFormDialog: true,
+          EditFormDialog: true,
+          OrthographicDialog: true,
+        },
+      },
+    })
+    const header = wrapper.getComponent(ProductSectionHeader)
+
+    expect(header.props()).toMatchObject({
+      title: '角色档案',
+      description: '点击角色查看和管理形态',
+      iconName: 'users',
+    })
+    expect(header.get('.product-section-header__icon-text').text()).toBe('🎭')
+    expect(header.text()).toContain('新增角色')
+  })
+
+  it('renders the empty character list through product status feedback', () => {
+    const state = createState()
+    state.characters.value = []
+
+    const wrapper = mount(CharacterManagementPanel, {
+      props: {
+        bookId: 'book-1',
+        characterManagement: {},
+        state,
+      },
+      global: {
+        stubs: {
+          CharacterDetailPanel: characterDetailPanelStub,
+          AddCharacterDialog: true,
+          EditCharacterDialog: true,
+          AddFormDialog: true,
+          EditFormDialog: true,
+          OrthographicDialog: true,
+        },
+      },
+    })
+
+    const banner = wrapper.getComponent(ProductStatusBanner)
+    expect(banner.props('tone')).toBe('neutral')
+    expect(banner.props('role')).toBe('note')
+    expect(banner.props('iconName')).toBe('users')
+    expect(wrapper.text()).toContain('暂无角色数据，点击"新增角色"添加')
+    expect(wrapper.find('.empty-state').exists()).toBe(false)
+  })
+
+  it('uses product confirmation for destructive character form actions', async () => {
+    const characterManagement = {
+      deleteCharacter: vi.fn().mockResolvedValue(true),
+      deleteForm: vi.fn().mockResolvedValue(true),
+      deleteFormImage: vi.fn().mockResolvedValue(true),
+    }
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const wrapper = mount(CharacterManagementPanel, {
+      props: {
+        bookId: 'book-1',
+        characterManagement,
+        state: createState(),
+      },
+      global: {
+        stubs: {
+          CharacterDetailPanel: characterDetailPanelStub,
+          AddCharacterDialog: true,
+          EditCharacterDialog: true,
+          AddFormDialog: true,
+          EditFormDialog: true,
+          OrthographicDialog: true,
+        },
+      },
+    })
+
+    await wrapper.find('.character-management-panel__tile').trigger('click')
+    await wrapper.get('.delete-form').trigger('click')
+    await flushPromises()
+    await wrapper.get('.delete-form-image').trigger('click')
+    await flushPromises()
+    await wrapper.get('.delete-character').trigger('click')
+    await flushPromises()
+
+    expect(confirmProductActionMock).toHaveBeenNthCalledWith(1, {
+      title: '删除角色形态',
+      message: '确定要删除形态"常服"吗？',
+      confirmText: '删除',
+      cancelText: '取消',
+      tone: 'danger',
+    })
+    expect(confirmProductActionMock).toHaveBeenNthCalledWith(2, {
+      title: '删除形态参考图',
+      message: '确定要删除形态参考图吗？',
+      confirmText: '删除',
+      cancelText: '取消',
+      tone: 'danger',
+    })
+    expect(confirmProductActionMock).toHaveBeenNthCalledWith(3, {
+      title: '删除角色',
+      message: '确定要删除角色"主角"吗？',
+      confirmText: '删除',
+      cancelText: '取消',
+      tone: 'danger',
+    })
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(characterManagement.deleteForm).toHaveBeenCalledWith('主角', 'form-1')
+    expect(characterManagement.deleteFormImage).toHaveBeenCalledWith('主角', 'form-1')
+    expect(characterManagement.deleteCharacter).toHaveBeenCalledWith('主角')
+  })
+
+  it('keeps the character dialog open when persistence fails', async () => {
+    const characterManagement = {
+      addCharacter: vi.fn().mockResolvedValue(false),
+    }
+    const addCharacterDialogStub = defineComponent({
+      emits: ['close', 'add'],
+      setup(_props, { emit }) {
+        return () => h('button', {
+          type: 'button',
+          class: 'submit-character',
+          onClick: () => emit('add', '失败角色', [], '描述'),
+        }, '确认添加')
+      },
+    })
+    const state = createState()
+    state.characters.value = []
+    const wrapper = mount(CharacterManagementPanel, {
+      props: {
+        bookId: 'book-1',
+        characterManagement,
+        state,
+      },
+      global: {
+        stubs: {
+          CharacterDetailPanel: characterDetailPanelStub,
+          AddCharacterDialog: addCharacterDialogStub,
+          EditCharacterDialog: true,
+          AddFormDialog: true,
+          EditFormDialog: true,
+          OrthographicDialog: true,
+        },
+      },
+    })
+
+    const openButton = wrapper.findAll('button').find(button => button.text().includes('新增角色'))
+    expect(openButton).toBeDefined()
+    await openButton!.trigger('click')
+    await wrapper.get('.submit-character').trigger('click')
+    await flushPromises()
+
+    expect(characterManagement.addCharacter).toHaveBeenCalledWith('失败角色', [], '描述')
+    expect(wrapper.find('.submit-character').exists()).toBe(true)
+  })
+
+})

@@ -1,0 +1,551 @@
+import { API_REQUEST_TIMEOUT_MS, RequestFailure, saberRequest, serverBase } from './api'
+import { registerUpdateNotifications } from './updates'
+
+import {
+  loadSettings,
+  preferenceFor,
+  serializeStorageWrite,
+  updateSettings,
+} from './storage'
+import { normalizedTaskPageUrl } from './pageIdentity'
+import type {
+  BackgroundRequest,
+  BackgroundResponse,
+  BrowserLibraryBook,
+  BrowserPageDto,
+  BrowserSessionDto,
+  BrowserSessionImportResult,
+  ContextTranslateMessage,
+  ResultImagePayload,
+  UploadPageRequest,
+} from './types'
+
+registerUpdateNotifications()
+
+const CONTEXT_MENU_ID = 'saber-translate-image'
+const MAX_RESULT_BYTES = 45 * 1024 * 1024
+const IMAGE_TRANSFER_TIMEOUT_MS = 120_000
+const ACTIVE_SESSION_KEY_PREFIX = 'saber-active-browser-session-v1:'
+
+void chrome.storage.local.setAccessLevel({
+  accessLevel: 'TRUSTED_CONTEXTS',
+}).catch(error => console.warn('Saber extension storage isolation failed', error))
+void chrome.storage.session.setAccessLevel({
+  accessLevel: 'TRUSTED_CONTEXTS',
+}).catch(error => console.warn('Saber extension session isolation failed', error))
+
+
+function errorResponse(error: unknown): BackgroundResponse<never> {
+  if (error instanceof RequestFailure) {
+    return {
+      ok: false,
+      error: {
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+      },
+    }
+  }
+  return {
+    ok: false,
+    error: {
+      code: 'extension_error',
+      message: error instanceof Error ? error.message : '扩展发生未知错误',
+      retryable: true,
+    },
+  }
+}
+
+
+async function sourceBlob(source: UploadPageRequest['source']): Promise<Blob> {
+  if (source.kind === 'data-url') {
+    try {
+      const response = await fetch(source.value, {
+        signal: AbortSignal.timeout(IMAGE_TRANSFER_TIMEOUT_MS),
+      })
+      return await response.blob()
+    } catch (error) {
+      if (error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name)) {
+        throw new RequestFailure('source_timeout', '页面图片读取超时', true)
+      }
+      throw new RequestFailure('image_decode_failed', '无法读取页面中的图片数据', false)
+    }
+  }
+  let response: Response
+  try {
+    response = await fetch(source.value, {
+      credentials: 'include',
+      cache: 'force-cache',
+      referrer: '',
+      referrerPolicy: 'no-referrer',
+      signal: AbortSignal.timeout(IMAGE_TRANSFER_TIMEOUT_MS),
+    })
+  } catch (error) {
+    if (error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name)) {
+      throw new RequestFailure('source_timeout', '原始漫画图片下载超时', true)
+    }
+    throw new RequestFailure('source_fetch_failed', '无法下载原始漫画图片', true)
+  }
+  if (!response.ok) {
+    const protectedSource = response.status === 401
+      || response.status === 403
+      || response.status === 429
+    throw new RequestFailure(
+      protectedSource ? 'source_forbidden' : 'source_fetch_failed',
+      protectedSource
+        ? `图片源拒绝访问（${response.status}），可能需要登录或通过 Cloudflare 验证`
+        : `图片下载失败（${response.status}）`,
+      response.status >= 500 || response.status === 429,
+    )
+  }
+  const blob = await response.blob()
+  if (blob.type.startsWith('text/') || blob.type === 'application/json') {
+    throw new RequestFailure(
+      'source_forbidden',
+      '图片地址返回的不是图片，可能需要登录或通过 Cloudflare 验证',
+      false,
+    )
+  }
+  return blob
+}
+
+function filenameFor(request: UploadPageRequest, blob: Blob): string {
+  const fromPath = request.logicalPath.split('/').at(-1)?.trim()
+  if (fromPath && /\.[a-z0-9]{1,8}$/i.test(fromPath)) return fromPath
+  const extension = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'image/bmp': 'bmp',
+    'image/tiff': 'tiff',
+  }[blob.type] ?? 'png'
+  return `${fromPath || 'page'}.${extension}`
+}
+
+async function uploadPage(payload: UploadPageRequest): Promise<BrowserPageDto> {
+  const blob = await sourceBlob(payload.source)
+  if (!blob.size) {
+    throw new RequestFailure('empty_image', '原始图片为空', false)
+  }
+  const form = new FormData()
+  form.set('clientPageKey', payload.clientPageKey)
+  form.set('ordinal', String(payload.ordinal))
+  form.set('logicalPath', payload.logicalPath)
+  if (payload.sourceUrl) form.set('sourceUrl', payload.sourceUrl)
+  form.set('file', blob, filenameFor(payload, blob))
+  return await saberRequest<BrowserPageDto>(
+    `/sessions/${encodeURIComponent(payload.sessionId)}/pages`,
+    {
+      method: 'POST',
+      body: form,
+    },
+    undefined,
+    IMAGE_TRANSFER_TIMEOUT_MS,
+  )
+}
+
+function bytesToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  const chunks: string[] = []
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)))
+  }
+  return btoa(chunks.join(''))
+}
+
+async function fetchResultImage(
+  sessionId: string,
+  browserPageId: string,
+): Promise<ResultImagePayload> {
+  const settings = await loadSettings()
+  const result = await saberRequest<{ url: string; assetId: string; expiresAt: number }>(
+    `/sessions/${encodeURIComponent(sessionId)}/pages/`
+      + `${encodeURIComponent(browserPageId)}/result-capability`,
+    { method: 'POST' },
+    settings,
+  )
+  let response: Response
+  try {
+    response = await fetch(new URL(result.url, serverBase(settings)), {
+      cache: 'no-store',
+      referrer: '',
+      referrerPolicy: 'no-referrer',
+      signal: AbortSignal.timeout(API_REQUEST_TIMEOUT_MS),
+    })
+  } catch (error) {
+    if (error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name)) {
+      throw new RequestFailure('request_timeout', '读取 Saber 译图超时', true)
+    }
+    throw new RequestFailure('result_fetch_failed', '无法读取 Saber 译图', true)
+  }
+  if (!response.ok) {
+    throw new RequestFailure(
+      response.status === 403 ? 'result_expired' : 'result_fetch_failed',
+      response.status === 403 ? '译图访问凭证已过期' : `译图读取失败（${response.status}）`,
+      true,
+    )
+  }
+  const mimeType = response.headers.get('Content-Type')?.split(';', 1)[0]?.trim() ?? ''
+  if (!mimeType.startsWith('image/')) {
+    throw new RequestFailure('invalid_result_image', 'Saber 返回的译图格式无效', false)
+  }
+  const contentLength = Number(response.headers.get('Content-Length') ?? 0)
+  if (contentLength > MAX_RESULT_BYTES) {
+    throw new RequestFailure('result_too_large', '译图过大，无法传回当前网页', false)
+  }
+  const buffer = await response.arrayBuffer()
+  if (buffer.byteLength > MAX_RESULT_BYTES) {
+    throw new RequestFailure('result_too_large', '译图过大，无法传回当前网页', false)
+  }
+  return {
+    base64: bytesToBase64(buffer),
+    mimeType,
+  }
+}
+
+async function activeTab(): Promise<chrome.tabs.Tab | undefined> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  return tab
+}
+
+function hostnameFromUrl(url?: string): string {
+  if (!url) return ''
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+      ? parsed.hostname
+      : ''
+  } catch {
+    return ''
+  }
+}
+
+async function updateContextMenu(tab?: chrome.tabs.Tab): Promise<void> {
+  const selected = tab ?? await activeTab()
+  const hostname = hostnameFromUrl(selected?.url)
+  const settings = await loadSettings()
+  const disabled = hostname ? preferenceFor(settings, hostname).disabled : true
+  try {
+    await chrome.contextMenus.update(CONTEXT_MENU_ID, { enabled: !disabled })
+  } catch {
+    // The menu may not exist during the first service-worker startup.
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  void chrome.contextMenus.removeAll().then(() => chrome.contextMenus.create({
+    id: CONTEXT_MENU_ID,
+    title: '使用 Saber 翻译此图片',
+    contexts: ['image'],
+    documentUrlPatterns: ['http://*/*', 'https://*/*'],
+  }))
+})
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== CONTEXT_MENU_ID || !tab?.id || !info.srcUrl) return
+  const message: ContextTranslateMessage = {
+    type: 'context-translate-image',
+    srcUrl: info.srcUrl,
+  }
+  void chrome.tabs.sendMessage(tab.id, message).catch(() => undefined)
+})
+
+chrome.action.onClicked.addListener(tab => {
+  if (tab.id === undefined) return
+  const tabId = tab.id
+  void (async () => {
+    try {
+      if (!hostnameFromUrl(tab.url)) throw new Error('请打开普通 HTTP(S) 网页后使用 Saber')
+      const result = await chrome.tabs.sendMessage(tabId, { type: 'open-panel' }, { frameId: 0 })
+      if (!result?.opened) throw new Error('悬浮窗未能打开')
+      await chrome.action.setBadgeText({ tabId, text: '' })
+      await chrome.action.setTitle({ tabId, title: 'Saber 漫画翻译' })
+    } catch {
+      await chrome.action.setBadgeText({ tabId, text: '!' })
+      await chrome.action.setTitle({ tabId, title: '无法在此页打开 Saber，请打开普通网页；已打开的网页请刷新后重试' })
+    }
+  })()
+})
+
+chrome.tabs.onActivated.addListener(() => {
+  void updateContextMenu()
+})
+
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (tab.active && (changeInfo.url || changeInfo.status === 'complete')) {
+    void updateContextMenu(tab)
+  }
+})
+
+chrome.tabs.onRemoved.addListener(tabId => {
+  void closeTabPage(tabId).catch(() => undefined)
+})
+
+function normalizedContentPageUrl(value: string): string {
+  const url = new URL(value)
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new RequestFailure('invalid_page_url', '网页地址必须使用 HTTP(S)', false)
+  }
+  return normalizedTaskPageUrl(url.toString())
+}
+
+function contentTabId(sender: chrome.runtime.MessageSender, pageUrl: string): number {
+  const tabId = sender.tab?.id
+  const tabUrl = sender.tab?.url
+  if (tabId === undefined || !tabUrl) {
+    throw new RequestFailure('content_tab_required', '该操作只能从网页标签页执行', false)
+  }
+  // sender.url retains the original document URL after an SPA navigation.
+  if (normalizedContentPageUrl(tabUrl) !== normalizedContentPageUrl(pageUrl)) {
+    throw new RequestFailure('stale_page_context', '网页已经切换，忽略过期会话操作', false)
+  }
+  return tabId
+}
+
+interface LivePage { pageUrl: string; documentId?: string; sessionId?: string; requestId?: string }
+
+async function discard(sessionId: string): Promise<void> {
+  await saberRequest(`/sessions/${encodeURIComponent(sessionId)}/discard`, { method: 'POST' })
+  await detachSession(sessionId)
+}
+
+async function detachSession(sessionId: string): Promise<void> {
+  await serializeStorageWrite(async () => {
+    const values = await chrome.storage.session.get(null)
+    for (const [key, page] of Object.entries(values)) {
+      if (key.startsWith(ACTIVE_SESSION_KEY_PREFIX) && (page as LivePage).sessionId === sessionId) {
+        const { sessionId: _id, ...live } = page as LivePage
+        await chrome.storage.session.set({ [key]: live })
+      }
+    }
+  })
+}
+
+async function closeTabPage(tabId: number, pageUrl?: string, documentId?: string): Promise<void> {
+  const sessionId = await serializeStorageWrite(async () => {
+    const key = `${ACTIVE_SESSION_KEY_PREFIX}${tabId}`
+    const page = (await chrome.storage.session.get(key))[key] as LivePage | undefined
+    if (!page || (pageUrl && page.pageUrl !== pageUrl)
+      || (documentId && page.documentId !== documentId)) return
+    await chrome.storage.session.remove(key)
+    return page.sessionId
+  })
+  if (sessionId) await discard(sessionId)
+}
+
+chrome.alarms.create('saber-live-pages', { periodInMinutes: 1 })
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name !== 'saber-live-pages') return
+  void (async () => {
+    const values = await chrome.storage.session.get(null)
+    for (const [key, value] of Object.entries(values)) {
+      if (!key.startsWith(ACTIVE_SESSION_KEY_PREFIX)) continue
+      const page = value as LivePage
+      const tabId = Number(key.slice(ACTIVE_SESSION_KEY_PREFIX.length))
+      const tab = await chrome.tabs.get(tabId).catch(() => null)
+      if (!tab || tab.discarded || !tab.url || normalizedTaskPageUrl(tab.url) !== page.pageUrl) {
+        await closeTabPage(tabId, page.pageUrl, page.documentId).catch(() => undefined)
+      } else if (page.sessionId) {
+        await saberRequest(`/sessions/${encodeURIComponent(page.sessionId)}?touch=true`).catch(() => undefined)
+      }
+    }
+  })()
+})
+
+async function handleRequest(
+  request: BackgroundRequest,
+  sender: chrome.runtime.MessageSender,
+): Promise<unknown> {
+  if (request.type === 'get-preference') {
+    const settings = await loadSettings()
+    return preferenceFor(settings, request.hostname)
+  }
+  if (request.type === 'set-preference') {
+    let disabledChanged = false
+    await updateSettings(settings => {
+      const previous = preferenceFor(settings, request.hostname)
+      const { rule, ...patch } = request.preference
+      const preference = { ...previous, ...patch }
+      if (rule === null) delete preference.rule
+      else if (rule !== undefined) preference.rule = rule
+      disabledChanged = previous.disabled !== preference.disabled
+      settings.domains[request.hostname] = preference
+    })
+    if (disabledChanged) {
+      const tabs = await chrome.tabs.query({})
+      await Promise.all(tabs
+        .filter(tab => tab.id !== undefined && tab.id !== sender.tab?.id
+          && hostnameFromUrl(tab.url) === request.hostname)
+        .map(tab => chrome.tabs.sendMessage(tab.id!, {
+          type: 'site-enabled-changed', hostname: request.hostname,
+          disabled: request.preference.disabled,
+        }, { frameId: 0 }).catch(() => undefined)))
+    }
+    await updateContextMenu()
+    return request.preference
+  }
+  if (request.type === 'get-connection-state') {
+    const settings = await loadSettings()
+    const hostname = hostnameFromUrl(sender.tab?.url)
+    return {
+      token: settings.token,
+      serverPort: settings.serverPort,
+      hostname,
+    }
+  }
+  if (request.type === 'save-connection') {
+    if (!Number.isInteger(request.serverPort)
+      || request.serverPort < 1
+      || request.serverPort > 65535) {
+      throw new RequestFailure('invalid_port', '端口必须在 1 到 65535 之间', false)
+    }
+    const token = request.token.trim()
+    if (token && (token.length < 32 || token.length > 200)) {
+      throw new RequestFailure(
+        'invalid_token_format',
+        '配对令牌格式无效，请从 Saber GUI 重新复制',
+        false,
+      )
+    }
+    await updateSettings(settings => {
+      settings.token = token
+      settings.serverPort = request.serverPort
+    })
+    return { saved: true }
+  }
+  if (request.type === 'status') {
+    return await saberRequest<Record<string, unknown>>('/status')
+  }
+  if (request.type === 'hash-source') {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(request.value))
+    return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+  }
+  if (request.type === 'page-opened') {
+    const tabId = contentTabId(sender, request.pageUrl)
+    const previous = await serializeStorageWrite(async () => {
+      const key = `${ACTIVE_SESSION_KEY_PREFIX}${tabId}`
+      const previous = (await chrome.storage.session.get(key))[key] as LivePage | undefined
+      await chrome.storage.session.set({ [key]: {
+        pageUrl: normalizedContentPageUrl(request.pageUrl), documentId: sender.documentId,
+      } })
+      return previous?.sessionId
+    })
+    if (previous) void discard(previous).catch(() => undefined)
+    return { opened: true }
+  }
+  if (request.type === 'page-closed') {
+    if (sender.tab?.id !== undefined) {
+      await closeTabPage(sender.tab.id, normalizedContentPageUrl(request.pageUrl), sender.documentId)
+    }
+    return { closed: true }
+  }
+  if (request.type === 'discard-session') {
+    await discard(request.sessionId)
+    return { discarded: true }
+  }
+  if (request.type === 'create-session') {
+    const pageUrl = normalizedContentPageUrl(String(request.payload.pageUrl))
+    const tabId = contentTabId(sender, pageUrl)
+    const requestId = crypto.randomUUID()
+    await serializeStorageWrite(async () => {
+      const key = `${ACTIVE_SESSION_KEY_PREFIX}${tabId}`
+      const page = (await chrome.storage.session.get(key))[key] as LivePage | undefined
+      if (!page || page.documentId !== sender.documentId || page.pageUrl !== pageUrl) {
+        throw new RequestFailure('page_closed', '漫画页面已退出', false)
+      }
+      await chrome.storage.session.set({ [key]: { ...page, requestId } })
+    })
+    const session = await saberRequest<BrowserSessionDto>('/sessions', {
+      method: 'POST', body: JSON.stringify(request.payload),
+    })
+    const kept = await serializeStorageWrite(async () => {
+      const key = `${ACTIVE_SESSION_KEY_PREFIX}${tabId}`
+      const page = (await chrome.storage.session.get(key))[key] as LivePage | undefined
+      if (!page || page.pageUrl !== pageUrl || page.documentId !== sender.documentId || page.requestId !== requestId) return false
+      await chrome.storage.session.set({ [key]: { ...page, sessionId: session.id } })
+      return true
+    })
+    if (!kept) {
+      await discard(session.id)
+      throw new RequestFailure('page_closed', '漫画页面已退出', false)
+    }
+    return session
+  }
+  if (request.type === 'get-session') {
+    return await saberRequest<BrowserSessionDto>(
+      `/sessions/${encodeURIComponent(request.sessionId)}${request.touch ? '?touch=true' : ''}`,
+    )
+  }
+  if (request.type === 'patch-session') {
+    return await saberRequest<BrowserSessionDto>(
+      `/sessions/${encodeURIComponent(request.sessionId)}`,
+      { method: 'PATCH', body: JSON.stringify(request.payload) },
+    )
+  }
+  if (request.type === 'start-session') {
+    return await saberRequest<BrowserSessionDto>(
+      `/sessions/${encodeURIComponent(request.sessionId)}/start`,
+      { method: 'POST' },
+    )
+  }
+  if (request.type === 'upload-page') return await uploadPage(request.payload)
+  if (request.type === 'retry-page') {
+    return await saberRequest<BrowserPageDto>(
+      `/sessions/${encodeURIComponent(request.sessionId)}/pages/`
+        + `${encodeURIComponent(request.browserPageId)}/retry`,
+      { method: 'POST' },
+    )
+  }
+  if (request.type === 'fetch-result') {
+    return await fetchResultImage(request.sessionId, request.browserPageId)
+  }
+  if (request.type === 'get-terms') {
+    return await saberRequest<Record<string, unknown>>(
+      `/sessions/${encodeURIComponent(request.sessionId)}/terms`,
+    )
+  }
+  if (request.type === 'cancel-session') {
+    return await saberRequest<BrowserSessionDto>(
+      `/sessions/${encodeURIComponent(request.sessionId)}/cancel`,
+      { method: 'POST' },
+    )
+  }
+  if (request.type === 'list-library-books') {
+    return await saberRequest<{ items: BrowserLibraryBook[] }>('/library-books')
+  }
+  if (request.type === 'import-session') {
+    const result = await saberRequest<BrowserSessionImportResult>(
+      `/sessions/${encodeURIComponent(request.sessionId)}/import`,
+      { method: 'POST', body: JSON.stringify(request.payload) },
+    )
+    await detachSession(request.sessionId)
+    return result
+  }
+  throw new RequestFailure('unknown_message', '不支持的扩展请求', false)
+}
+
+chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id || !message || typeof message !== 'object') {
+    return false
+  }
+  const request = message as BackgroundRequest
+  if (
+    ['get-connection-state', 'save-connection'].includes(request.type)
+    && !sender.url?.startsWith(`chrome-extension://${chrome.runtime.id}/`)
+  ) {
+    sendResponse(errorResponse(new RequestFailure(
+      'extension_page_required',
+      '该操作只能从扩展界面执行',
+      false,
+    )))
+    return false
+  }
+  void handleRequest(request, sender)
+    .then((data) => {
+      const response: BackgroundResponse<unknown> = { ok: true, data }
+      sendResponse(response)
+    })
+    .catch((error) => sendResponse(errorResponse(error)))
+  return true
+})

@@ -1,0 +1,61 @@
+# Saber-Translator Dependencies (CPU Version)
+# pip install -r requirements-cpu.txt
+
+# Flask
+flask
+waitress>=3.0,<4
+argon2-cffi>=25.1,<26
+
+# Backend-first v2 persistence
+SQLAlchemy>=2.0,<2.1
+psutil>=7.0,<8
+PySide6-Essentials==6.11.2  # 6.12.0 crashes during Windows test-process shutdown
+
+# Base tools
+pyyaml
+pillow>=11.0.0
+numpy
+opencv-python
+requests
+colorama>=0.4.6,<1
+packaging
+networkx
+shapely
+pyclipper
+pandas
+freetype-py
+fonttools
+img2pdf
+reportlab
+
+# AI/OCR
+openai
+manga-ocr==0.1.16  # Transformers 5 tokenizer compatibility
+rapidocr==3.9.2  # PP-OCRv6 ONNX runtime wrapper
+onnxruntime>=1.20,<2
+sentencepiece  # for PaddleOCR-VL
+transformers==5.15.0  # native PaddleOCR-VL-1.6 runtime
+
+# Deep Learning (CPU)
+torch==2.11.0
+torchvision==0.26.0
+einops
+ultralytics
+seaborn
+litelama==0.1.7
+kornia==0.8.2
+
+# Other
+dill
+mobi>=0.4.0
+PyMuPDF>=1.23.0
+
+# Manga Insight
+chromadb>=0.4.0
+httpx[http2]>=0.25.0
+
+# Web Import
+gallery-dl>=1.26.0
+
+# Build
+pyinstaller==6.19.0

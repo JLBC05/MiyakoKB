@@ -1,0 +1,205 @@
+"""
+大图检测包装器
+
+在检测前自动判断是否需要切割，处理超长漫画图片
+每个切片独立检测，然后合并结果
+"""
+
+import logging
+
+import cv2
+import numpy as np
+from PIL import Image
+
+from src.core.detector.aux_yolo import maybe_merge_with_aux_yolo
+from src.core.detector.data_types import TextBlock, DetectionResult
+from src.core.detector.base import BaseTextDetector
+from src.core.detector.textline_merge import merge_textlines
+from src.core.detector.postprocess import postprocess_blocks
+from src.utils.image_rearrange import (
+    check_needs_rearrange,
+    slice_image_for_detection,
+    transform_textlines_to_original,
+    merge_masks_from_patches,
+    DEFAULT_TARGET_SIZE
+)
+
+logger = logging.getLogger("LargeImageDetection")
+
+
+class LargeImageDetectorWrapper:
+    """
+    大图检测器包装器
+    
+    封装现有检测器，自动处理超长图片的切割和拼接
+    """
+    
+    def __init__(
+        self,
+        detector: BaseTextDetector,
+        target_size: int = DEFAULT_TARGET_SIZE
+    ):
+        if isinstance(target_size, bool) or not isinstance(target_size, int) or target_size <= 0:
+            raise ValueError("长图检测目标尺寸必须是正整数")
+        self.detector = detector
+        self.target_size = target_size
+    
+    def detect(
+        self,
+        image: Image.Image,
+        merge_lines: bool = None,
+        edge_ratio_threshold: float = 0.0,
+        sort_method: str = 'smart',
+        right_to_left: bool = True,
+        enable_aux_yolo_detection: bool = None,
+        aux_yolo_conf_threshold: float = None,
+        aux_yolo_overlap_threshold: float = None,
+    ) -> DetectionResult:
+        """带自动切割的检测"""
+        converted = image.convert('RGB')
+        try:
+            img_np = np.array(converted)
+        finally:
+            if converted is not image:
+                converted.close()
+        img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+        im_w, im_h = image.width, image.height
+        
+        needs_rearrange, _ = check_needs_rearrange(img_cv, self.target_size)
+        
+        if not needs_rearrange:
+            logger.debug("图像尺寸正常，直接检测")
+            return self.detector.detect(
+                image,
+                merge_lines=merge_lines,
+                edge_ratio_threshold=edge_ratio_threshold,
+                sort_method=sort_method,
+                right_to_left=right_to_left,
+                enable_aux_yolo_detection=enable_aux_yolo_detection,
+                aux_yolo_conf_threshold=aux_yolo_conf_threshold,
+                aux_yolo_overlap_threshold=aux_yolo_overlap_threshold,
+            )
+        
+        logger.debug(f"图像尺寸过大 ({im_w}x{im_h})，启用切割检测")
+        
+        return self._detect_with_slicing(
+            img_cv, im_w, im_h,
+            merge_lines=merge_lines if merge_lines is not None else self.detector.requires_merge,
+            edge_ratio_threshold=edge_ratio_threshold,
+            sort_method=sort_method,
+            right_to_left=right_to_left,
+            enable_aux_yolo_detection=enable_aux_yolo_detection,
+            aux_yolo_conf_threshold=aux_yolo_conf_threshold,
+            aux_yolo_overlap_threshold=aux_yolo_overlap_threshold,
+        )
+    
+    def _detect_with_slicing(
+        self,
+        img_cv: np.ndarray,
+        im_w: int,
+        im_h: int,
+        merge_lines: bool,
+        edge_ratio_threshold: float,
+        sort_method: str = 'smart',
+        right_to_left: bool = True,
+        enable_aux_yolo_detection: bool = None,
+        aux_yolo_conf_threshold: float = None,
+        aux_yolo_overlap_threshold: float = None,
+    ) -> DetectionResult:
+        """执行切割检测"""
+        
+        # 1. 切割图像
+        patches, context = slice_image_for_detection(
+            img_cv,
+            tgt_size=self.target_size,
+        )
+        
+        if not patches or not context.is_rearranged:
+            raise RuntimeError("长图切片未生成有效结果")
+        
+        # 2. 逐切片检测
+        all_textlines = []
+        patch_masks = []
+        if enable_aux_yolo_detection is None:
+            from src.shared import constants
+
+            enable_aux_yolo_detection = constants.ENABLE_AUX_YOLO_DETECTION
+        
+        logger.debug(f"开始检测 {len(patches)} 个切片...")
+        
+        for patch_idx, patch in enumerate(patches):
+            logger.debug(f"检测切片 {patch_idx + 1}/{len(patches)}...")
+            
+            patch_textlines, patch_mask = BaseTextDetector._validate_raw_result(
+                self.detector._detect_raw(patch),
+                patch.shape[1],
+                patch.shape[0],
+            )
+            if enable_aux_yolo_detection:
+                patch_textlines = maybe_merge_with_aux_yolo(
+                    patch,
+                    patch_textlines,
+                    detector_type=self.detector.detector_id,
+                    enabled=enable_aux_yolo_detection,
+                    conf_threshold=aux_yolo_conf_threshold,
+                    overlap_threshold=aux_yolo_overlap_threshold,
+                )
+            
+            num_lines = len(patch_textlines) if patch_textlines else 0
+            logger.debug(f"切片 {patch_idx + 1}: 检测到 {num_lines} 个文本行")
+            
+            if patch_textlines:
+                transformed_textlines = transform_textlines_to_original(
+                    patch_textlines, patch_idx, context
+                )
+                all_textlines.extend(transformed_textlines)
+                logger.debug(f"切片 {patch_idx + 1}: 坐标转换后 {len(transformed_textlines)} 个文本行")
+            
+            patch_masks.append(patch_mask)
+        
+        logger.debug(f"切割检测完成: 共检测到 {len(all_textlines)} 个文本行 (来自 {len(patches)} 个切片)")
+        
+        # 3. 合并掩码
+        final_mask = merge_masks_from_patches(patch_masks, context)
+        
+        # 4. 处理文本行
+        if not all_textlines:
+            logger.debug("未检测到文本区域")
+            return DetectionResult(blocks=[], mask=final_mask, raw_lines=[])
+        
+        # 剪裁到图像边界
+        for line in all_textlines:
+            line.clip(im_w, im_h)
+        
+        # 过滤无效文本行
+        valid_textlines = [
+            line for line in all_textlines
+            if line.area > 16 and all(0 <= pt[0] <= im_w and 0 <= pt[1] <= im_h for pt in line.pts)
+        ]
+        
+        logger.debug(f"有效文本行: {len(valid_textlines)} / {len(all_textlines)}")
+        
+        # 5. 合并文本行
+        if merge_lines and valid_textlines:
+            blocks = merge_textlines(
+                valid_textlines, im_w, im_h,
+                edge_ratio_threshold=edge_ratio_threshold,
+                verbose=True
+            )
+            logger.debug(f"合并后得到 {len(blocks)} 个文本块")
+        else:
+            blocks = [TextBlock(lines=[line]) for line in valid_textlines]
+        
+        # 6. 后处理
+        blocks = postprocess_blocks(
+            blocks,
+            sort_method=sort_method,
+            img=img_cv,
+            right_to_left=right_to_left,
+        )
+        
+        return DetectionResult(
+            blocks=blocks,
+            mask=final_mask,
+            raw_lines=valid_textlines
+        )

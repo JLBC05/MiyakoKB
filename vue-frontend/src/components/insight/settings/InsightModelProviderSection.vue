@@ -1,0 +1,192 @@
+<script setup lang="ts">
+import UiButton from '@/components/ui/UiButton.vue'
+import AiProviderCredentialFields from '@/components/settings/AiProviderCredentialFields.vue'
+import AiProviderSelectField from '@/components/settings/AiProviderSelectField.vue'
+import UiField from '@/components/ui/UiField.vue'
+import UiModelPicker from '@/components/ui/UiModelPicker.vue'
+import type { UiSelectOption, UiSelectValue } from '@/components/ui/selectTypes'
+import type { CustomAiProfile, CustomAiProfileKind } from '@/types/customAiProfile'
+
+withDefaults(defineProps<{
+  provider: string
+  providerOptions: UiSelectOption[]
+  apiKey?: string
+  model: string
+  baseUrl?: string
+  showApiKey?: boolean
+  credentialId: string
+  providerInputId: string
+  modelInputId: string
+  baseUrlInputId: string
+  modelPlaceholder: string
+  modelHint?: string
+  modelError?: string
+  showBaseUrl?: boolean
+  baseUrlPlaceholder?: string
+  showFetch?: boolean
+  fetchVariant?: 'primary' | 'secondary'
+  fetchingModels?: boolean
+  modelOptions?: UiSelectOption[]
+  modelCount?: number
+  showTest?: boolean
+  testing?: boolean
+  testLabel?: string
+  testingLabel?: string
+  testPlacement?: 'inline' | 'panel-end'
+  customProfileKind?: CustomAiProfileKind
+}>(), {
+  apiKey: '',
+  baseUrl: '',
+  showApiKey: false,
+  modelHint: '',
+  modelError: '',
+  showBaseUrl: false,
+  baseUrlPlaceholder: '自定义 API 地址',
+  showFetch: true,
+  fetchVariant: 'primary',
+  fetchingModels: false,
+  modelOptions: () => [],
+  modelCount: 0,
+  showTest: true,
+  testing: false,
+  testLabel: '测试连接',
+  testingLabel: '测试中...',
+  testPlacement: 'inline',
+})
+
+const emit = defineEmits<{
+  'update:provider': [value: string]
+  'update:apiKey': [value: string]
+  'update:model': [value: string]
+  'update:baseUrl': [value: string]
+  'provider-change': [value: string]
+  'model-change': [value: string]
+  fetch: []
+  test: []
+}>()
+
+function asString(value: UiSelectValue | string | number | boolean): string {
+  return String(value)
+}
+
+function handleProviderUpdate(value: UiSelectValue): void {
+  emit('update:provider', asString(value))
+}
+
+function handleProviderChange(value: UiSelectValue): void {
+  emit('provider-change', asString(value))
+}
+
+function handleApiKeyUpdate(value: string): void {
+  emit('update:apiKey', value)
+}
+
+function handleModelUpdate(value: UiSelectValue): void {
+  emit('update:model', asString(value))
+}
+
+function handleModelChange(value: UiSelectValue): void {
+  emit('model-change', asString(value))
+}
+
+function handleBaseUrlUpdate(value: string | number | boolean): void {
+  emit('update:baseUrl', asString(value))
+}
+
+function applyCustomProfile(profile: CustomAiProfile): void {
+  emit('update:apiKey', profile.apiKey)
+  emit('update:model', profile.model)
+  emit('update:baseUrl', profile.baseUrl)
+}
+</script>
+
+<template>
+  <div
+    class="insight-model-provider-section"
+    :class="{ 'insight-model-provider-section--test-panel-end': testPlacement === 'panel-end' }"
+  >
+    <AiProviderSelectField
+      :model-value="provider"
+      :input-id="providerInputId"
+      :options="providerOptions"
+      :custom-profile-kind="customProfileKind"
+      :custom-profile-api-key="apiKey"
+      :custom-profile-base-url="baseUrl"
+      :custom-profile-model="model"
+      @update:model-value="handleProviderUpdate"
+      @change="handleProviderChange"
+      @apply-custom-profile="applyCustomProfile"
+    />
+
+    <AiProviderCredentialFields
+      :api-key="apiKey"
+      :api-key-input-id="credentialId"
+      :base-url="baseUrl"
+      :base-url-input-id="baseUrlInputId"
+      :show-api-key="showApiKey"
+      :show-base-url="false"
+      :include-base-url="false"
+      @update:api-key="handleApiKeyUpdate"
+    />
+
+    <UiField
+      variant="settings"
+      label="模型"
+      :hint="modelHint"
+      :error="modelError"
+      :control-id="modelInputId"
+    >
+      <UiModelPicker
+        :model-value="model"
+        :input-id="modelInputId"
+        :placeholder="modelPlaceholder"
+        fetch-appearance="muted"
+        :fetch-variant="fetchVariant"
+        :show-fetch="showFetch"
+        :fetching="fetchingModels"
+        :fetch-disabled="fetchingModels"
+        :options="modelOptions"
+        :model-count="modelCount"
+        @update:model-value="handleModelUpdate"
+        @change="handleModelChange"
+        @fetch="$emit('fetch')"
+      />
+    </UiField>
+
+    <AiProviderCredentialFields
+      :api-key="apiKey"
+      :api-key-input-id="credentialId"
+      :base-url="baseUrl"
+      :base-url-input-id="baseUrlInputId"
+      :show-api-key="false"
+      :show-base-url="showBaseUrl"
+      :include-api-key="false"
+      :base-url-placeholder="baseUrlPlaceholder"
+      @update:base-url="handleBaseUrlUpdate"
+    />
+
+    <UiButton
+      v-if="showTest"
+      class="insight-model-provider-section__test-action"
+      variant="secondary"
+      :disabled="testing"
+      @click="$emit('test')"
+    >
+      {{ testing ? testingLabel : testLabel }}
+    </UiButton>
+  </div>
+</template>
+
+<style scoped>
+.insight-model-provider-section {
+  display: block;
+}
+
+.insight-model-provider-section--test-panel-end {
+  display: contents;
+}
+
+.insight-model-provider-section--test-panel-end .insight-model-provider-section__test-action {
+  order: 100;
+}
+</style>

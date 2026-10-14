@@ -1,0 +1,240 @@
+<script setup lang="ts">
+import ProductEmptyState from '@/components/product/ProductEmptyState.vue'
+import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
+import UiButton from '@/components/ui/UiButton.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
+import UiSpinner from '@/components/ui/UiSpinner.vue'
+import PlotThreadsList from './timeline/PlotThreadsList.vue'
+import TimelineCharacterGrid from './timeline/TimelineCharacterGrid.vue'
+import TimelineHeader from './timeline/TimelineHeader.vue'
+import TimelineStats from './timeline/TimelineStats.vue'
+import TimelineSummaryCard from './timeline/TimelineSummaryCard.vue'
+import TimelineTrack from './timeline/TimelineTrack.vue'
+import { useTimelinePanel } from './timeline/useTimelinePanel'
+
+const {
+  errorMessage,
+  expandedGroupIds,
+  getThumbnailUrl,
+  hasTimelineData,
+  hasMoreTimeline,
+  isEnhancedData,
+  isLoading,
+  isLoadingMore,
+  isRegenerating,
+  loadTimeline,
+  mainCharacters,
+  loadMoreTimeline,
+  pendingMessage,
+  plotArcs,
+  plotThreads,
+  regenerateTimeline,
+  showPageDetail,
+  storySummary,
+  timelineData,
+  toggleGroup,
+} = useTimelinePanel()
+</script>
+
+<template>
+  <div class="timeline-panel">
+    <TimelineHeader
+      :is-loading="isLoading"
+      :is-regenerating="isRegenerating"
+      :is-pending="Boolean(pendingMessage)"
+      :show-regenerate="hasTimelineData"
+      @regenerate="regenerateTimeline"
+    />
+
+    <ProductStatusBanner
+      v-if="errorMessage && timelineData"
+      aria-live="assertive"
+      class="timeline-panel__status-banner"
+      tone="danger"
+    >
+      {{ errorMessage }}
+    </ProductStatusBanner>
+
+    <ProductStatusBanner
+      v-if="pendingMessage && timelineData"
+      aria-live="polite"
+      class="timeline-panel__status-banner"
+      icon-name="refresh"
+      title="时间线生成中"
+      tone="neutral"
+    >
+      {{ pendingMessage }}
+    </ProductStatusBanner>
+
+    <div class="timeline-panel__body">
+      <div v-if="isLoading && !timelineData" class="timeline-panel__loading-state">
+        <UiSpinner
+          class="timeline-panel__loading-indicator"
+          label="加载时间线"
+          :decorative="false"
+          :size="32"
+        />
+        <p>加载时间线...</p>
+      </div>
+
+      <ProductStatusBanner
+        v-else-if="errorMessage && !timelineData"
+        aria-live="assertive"
+        class="timeline-panel__status-banner"
+        title="时间线加载失败"
+        tone="danger"
+      >
+        {{ errorMessage }}
+        <template #actions>
+          <UiButton variant="secondary" size="xs" @click="loadTimeline"> 重试 </UiButton>
+        </template>
+      </ProductStatusBanner>
+
+      <ProductStatusBanner
+        v-else-if="pendingMessage && !timelineData"
+        aria-live="polite"
+        class="timeline-panel__status-banner"
+        icon-name="refresh"
+        title="时间线生成中"
+        tone="neutral"
+      >
+        {{ pendingMessage }}
+      </ProductStatusBanner>
+
+      <ProductEmptyState
+        v-else-if="!hasTimelineData"
+        class="timeline-panel__empty"
+        icon-name="bar-chart"
+        title="时间线尚未生成"
+        description="完成漫画分析后会自动生成时间线，或点击下方按钮手动生成"
+      >
+        <template #icon>📈</template>
+        <template #actions>
+          <UiButton
+            variant="primary"
+            size="sm"
+            :disabled="isRegenerating || Boolean(pendingMessage)"
+            @click="regenerateTimeline"
+          >
+            {{ isRegenerating ? '生成中...' : '生成时间线' }}
+          </UiButton>
+        </template>
+      </ProductEmptyState>
+
+      <template v-else-if="timelineData">
+        <TimelineStats :stats="timelineData.stats" />
+
+        <TimelineSummaryCard v-if="storySummary" :story-summary="storySummary" />
+
+        <TimelineCharacterGrid
+          v-if="mainCharacters.length > 0"
+          :characters="mainCharacters"
+          @show-page="showPageDetail"
+        />
+
+        <div v-if="isEnhancedData && plotArcs.length > 0" class="timeline-panel__section">
+          <h4 class="timeline-panel__section-title">
+            <UiIcon name="book-marked" size="16" />
+            <span>剧情发展</span>
+          </h4>
+        </div>
+
+        <TimelineTrack
+          :expanded-ids="expandedGroupIds"
+          :groups="timelineData.groups"
+          :is-enhanced-data="isEnhancedData"
+          :plot-arcs="plotArcs"
+          :thumbnail-url-for="getThumbnailUrl"
+          @show-page="showPageDetail"
+          @toggle="toggleGroup"
+        />
+
+        <div v-if="plotThreads.length > 0" class="timeline-panel__section">
+          <h4 class="timeline-panel__section-title">
+            <UiIcon name="link" size="16" />
+            <span>伏笔与线索</span>
+          </h4>
+          <PlotThreadsList :threads="plotThreads" />
+        </div>
+
+        <UiButton
+          v-if="hasMoreTimeline"
+          class="timeline-panel__load-more"
+          variant="secondary"
+          size="sm"
+          :disabled="isLoadingMore"
+          @click="loadMoreTimeline"
+        >
+          {{ isLoadingMore ? '加载中...' : '加载更多时间线内容' }}
+        </UiButton>
+      </template>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.timeline-panel {
+  --timeline-panel-card-shadow: var(--shadow-medium);
+  --timeline-panel-character-shadow: var(--shadow-soft);
+}
+
+.timeline-panel__body {
+  position: relative;
+  padding: 20px;
+}
+
+.timeline-panel__status-banner {
+  margin-bottom: 12px;
+}
+
+.timeline-panel__loading-state {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 40px;
+  color: var(--insight-text-secondary);
+  text-align: center;
+}
+
+.timeline-panel__loading-indicator {
+  color: var(--insight-action-primary);
+}
+
+.timeline-panel__empty {
+  --product-empty-state-min-height: 0;
+  --product-empty-state-padding: 60px 20px;
+  --product-empty-state-icon-width: auto;
+  --product-empty-state-icon-height: auto;
+  --product-empty-state-icon-margin-bottom: 16px;
+  --product-empty-state-icon-border: 0;
+  --product-empty-state-icon-radius: 0;
+  --product-empty-state-icon-background: transparent;
+  --product-empty-state-icon-color: inherit;
+  --product-empty-state-icon-font-size: 48px;
+  --product-empty-state-title-font-size: 18px;
+  --product-empty-state-title-margin: 0 0 8px;
+  --product-empty-state-description-margin: 0 0 16px;
+  --product-empty-state-description-font-size: 14px;
+  --product-empty-state-actions-margin-top: 0;
+}
+
+.timeline-panel__section {
+  margin-bottom: 28px;
+}
+
+.timeline-panel__section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--insight-action-primary);
+  color: var(--insight-text-primary);
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.timeline-panel__load-more {
+  width: 100%;
+}
+</style>

@@ -1,0 +1,125 @@
+import providerManifestData from '../../../src/shared/ai_provider_manifest.json'
+
+export type ProviderKind = 'openai_compatible' | 'local' | 'adapter'
+export type ProviderCapability =
+  | 'translation'
+  | 'hqTranslation'
+  | 'pluginAgent'
+  | 'visionOcr'
+  | 'modelFetch'
+  | 'connectionTest'
+  | 'webImportAgent'
+  | 'vlm'
+  | 'chat'
+  | 'embedding'
+  | 'rerank'
+  | 'imageGen'
+
+export type ProviderModelType = 'vlm' | 'chat' | 'embedding' | 'reranker' | 'imageGen'
+
+export interface AiProviderManifestEntry {
+  id: string
+  label: string
+  kind: ProviderKind
+  defaultBaseUrl?: string
+  capabilityBaseUrls?: Partial<Record<ProviderCapability, string>>
+  capabilityEndpoints?: Partial<Record<ProviderCapability, string>>
+  capabilities: ProviderCapability[]
+  requiresApiKey: boolean
+  requiresModel: boolean
+  requiresBaseUrl: boolean
+  isLocal: boolean
+  supportsStream: boolean
+  supportsJsonResponse: boolean
+  defaultModels?: Partial<Record<ProviderModelType, string>>
+  modelCatalogs?: Partial<Record<ProviderModelType, string[]>>
+}
+
+export const AI_PROVIDER_MANIFEST = providerManifestData as AiProviderManifestEntry[]
+
+const PROVIDER_MAP = new Map(AI_PROVIDER_MANIFEST.map(entry => [entry.id, entry] as const))
+let localProvidersEnabled = true
+
+export function configureLocalProviderVisibility(enabled: boolean): void {
+  localProvidersEnabled = enabled
+}
+
+export function normalizeProviderId(provider?: string | null): string {
+  if (!provider) return ''
+  return provider.trim().toLowerCase()
+}
+
+export function getProviderManifest(provider?: string | null): AiProviderManifestEntry | undefined {
+  const normalized = normalizeProviderId(provider)
+  return PROVIDER_MAP.get(normalized)
+}
+
+export function providerSupportsCapability(provider: string, capability: ProviderCapability): boolean {
+  return Boolean(getProviderManifest(provider)?.capabilities.includes(capability))
+}
+
+export function providerRequiresBaseUrl(provider: string): boolean {
+  return Boolean(getProviderManifest(provider)?.requiresBaseUrl)
+}
+
+export function providerRequiresApiKey(provider: string): boolean {
+  return Boolean(getProviderManifest(provider)?.requiresApiKey)
+}
+
+export function isLocalAiServiceUrl(baseUrl?: string | null): boolean {
+  if (!baseUrl) return false
+  try {
+    const hostname = new URL(baseUrl).hostname
+    return ['localhost', '127.0.0.1', '0.0.0.0', '[::1]'].includes(hostname)
+  } catch {
+    return false
+  }
+}
+
+export function providerRequiresApiKeyForBaseUrl(
+  provider: string,
+  customBaseUrl?: string | null,
+): boolean {
+  const manifest = getProviderManifest(provider)
+  if (!manifest?.requiresApiKey) return false
+  const resolvedBaseUrl = customBaseUrl?.trim() || getProviderBaseUrl(manifest.id)
+  return !isLocalAiServiceUrl(resolvedBaseUrl)
+}
+
+export function providerRequiresModel(provider: string): boolean {
+  return Boolean(getProviderManifest(provider)?.requiresModel)
+}
+
+export function isLocalProviderId(provider: string): boolean {
+  return Boolean(getProviderManifest(provider)?.isLocal)
+}
+
+export function providerSupportsRpmLimit(provider: string): boolean {
+  return getProviderManifest(provider)?.kind === 'openai_compatible'
+}
+
+export function getProviderDisplayName(provider: string): string {
+  return getProviderManifest(provider)?.label || provider
+}
+
+export function getProviderOptionsForCapability(capability: ProviderCapability): Array<{ value: string; label: string }> {
+  return AI_PROVIDER_MANIFEST
+    .filter(provider => (
+      provider.capabilities.includes(capability)
+      && (localProvidersEnabled || !provider.isLocal)
+    ))
+    .map(provider => ({ value: provider.id, label: provider.label }))
+}
+
+export function getProviderBaseUrl(provider: string, capability?: ProviderCapability): string {
+  const manifest = getProviderManifest(provider)
+  if (!manifest) return ''
+  if (capability && manifest.capabilityBaseUrls?.[capability]) {
+    return manifest.capabilityBaseUrls[capability] || ''
+  }
+  return manifest.defaultBaseUrl || ''
+}
+
+export function getProviderDefaultModel(provider: string, modelType: ProviderModelType): string {
+  return getProviderManifest(provider)?.defaultModels?.[modelType] || ''
+}

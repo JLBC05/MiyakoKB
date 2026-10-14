@@ -1,0 +1,186 @@
+<script setup lang="ts">
+import BaseModal from '@/components/common/BaseModal.vue'
+import { useWebImportModal } from './useWebImportModal'
+import WebImportExtractBar from './web-import/WebImportExtractBar.vue'
+import WebImportFooterActions from './web-import/WebImportFooterActions.vue'
+import WebImportLogsPanel from './web-import/WebImportLogsPanel.vue'
+import WebImportResultsGrid from './web-import/WebImportResultsGrid.vue'
+import WebImportSettingsPanel from './web-import/WebImportSettingsPanel.vue'
+
+const emit = defineEmits<{
+  commitAccepted: [jobIds: string[]]
+}>()
+
+const {
+  activeSettingsTab,
+  agentProviderOptions,
+  checkingSupport,
+  downloadProgress,
+  draftSettings,
+  engineDisplayName,
+  error,
+  extractResult,
+  focusSourceUrlRequestId,
+  galleryDLAvailable,
+  galleryDLSupported,
+  handleClose,
+  handleDiscardSettings,
+  handleExtract,
+  handleFetchModels,
+  handleImport,
+  handleResetPrompt,
+  handleSaveSettings,
+  handleTestAgent,
+  handleTestFirecrawl,
+  hasUnsavedSettings,
+  hasMorePages,
+  isAllSelected,
+  isFetchingModels,
+  isLoadingMorePages,
+  isProcessing,
+  isSavingSettings,
+  isVisible,
+  logs,
+  logsExpanded,
+  loadMoreDraftPages,
+  modelList,
+  modelListOptions,
+  providerRequiresApiKey,
+  selectedCount,
+  selectedEngine,
+  selectedPages,
+  settingsExpanded,
+  settingsActions,
+  showAgentLogs,
+  showCustomUrl,
+  status,
+  supportsFetchModels,
+  testingAgent,
+  testingFirecrawl,
+  toggleAll,
+  togglePage,
+  urlInput,
+} = useWebImportModal({
+  onCommitAccepted: accepted => emit('commitAccepted', accepted.jobIds),
+})
+</script>
+
+<template>
+  <BaseModal
+    :model-value="isVisible"
+    title="从网页导入漫画"
+    size="large"
+    custom-class="web-import-modal"
+    frame-variant="floating"
+    divider-variant="soft"
+    max-width="900px"
+    header-padding="16px 20px 20px"
+    body-padding-value="13px 20px 17px"
+    footer-padding="17px 20px"
+    :close-on-overlay="!isProcessing"
+    :close-on-esc="!isProcessing"
+    @close="handleClose"
+  >
+    <template #title>
+      <span class="web-import-modal__title">
+        <span aria-hidden="true">🌐</span>
+        <span>从网页导入漫画</span>
+      </span>
+    </template>
+
+    <div class="web-import-modal__body">
+      <WebImportExtractBar
+        v-model:selected-engine="selectedEngine"
+        v-model:url-input="urlInput"
+        :checking-support="checkingSupport"
+        :focus-request-id="focusSourceUrlRequestId"
+        :gallery-d-l-available="galleryDLAvailable"
+        :gallery-d-l-supported="galleryDLSupported"
+        :is-processing="isProcessing"
+        :status="status"
+        @extract="handleExtract"
+      />
+
+      <WebImportSettingsPanel
+        v-model:active-settings-tab="activeSettingsTab"
+        v-model:settings-expanded="settingsExpanded"
+        :agent-provider-options="agentProviderOptions"
+        :draft-settings="draftSettings"
+        :has-unsaved-settings="hasUnsavedSettings"
+        :is-fetching-models="isFetchingModels"
+        :is-saving-settings="isSavingSettings"
+        :model-list="modelList"
+        :model-list-options="modelListOptions"
+        :provider-requires-api-key="providerRequiresApiKey"
+        :settings-actions="settingsActions"
+        :show-custom-url="showCustomUrl"
+        :supports-fetch-models="supportsFetchModels"
+        :testing-agent="testingAgent"
+        :testing-firecrawl="testingFirecrawl"
+        @discard-settings="handleDiscardSettings"
+        @fetch-models="handleFetchModels"
+        @reset-prompt="handleResetPrompt"
+        @save-settings="handleSaveSettings"
+        @test-agent="handleTestAgent"
+        @test-firecrawl="handleTestFirecrawl"
+      />
+
+      <WebImportLogsPanel
+        v-if="showAgentLogs"
+        :expanded="logsExpanded"
+        :logs="logs"
+        :status="status"
+        @toggle="logsExpanded = !logsExpanded"
+      />
+
+      <WebImportResultsGrid
+        :download-progress="downloadProgress"
+        :engine-display-name="engineDisplayName"
+        :error="error"
+        :extract-result="extractResult"
+        :is-all-selected="isAllSelected"
+        :has-more-pages="hasMorePages"
+        :is-loading-more-pages="isLoadingMorePages"
+        :selected-count="selectedCount"
+        :selected-pages="selectedPages"
+        :status="status"
+        @toggle-all="toggleAll"
+        @toggle-page="togglePage"
+        @load-more="loadMoreDraftPages"
+      />
+    </div>
+
+    <template #footer>
+      <WebImportFooterActions
+        :extract-result="extractResult"
+        :is-processing="isProcessing"
+        :selected-count="selectedCount"
+        :status="status"
+        @close="handleClose"
+        @import="handleImport"
+      />
+    </template>
+  </BaseModal>
+</template>
+
+<style scoped>
+.web-import-modal__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.web-import-modal__body {
+  display: block;
+
+  --ui-button-primary-background: var(--color-action-primary-fill, var(--color-border-info));
+  --ui-button-primary-hover-background: color-mix(
+    in srgb,
+    var(--color-action-primary-fill, var(--color-border-info)) 84%,
+    var(--color-overlay-backdrop-solid)
+  );
+  --ui-button-primary-shadow: none;
+  --ui-button-primary-disabled-background: var(--color-action-primary-fill, var(--color-border-info));
+  --ui-button-primary-disabled-opacity: 0.6;
+}
+</style>

@@ -1,0 +1,331 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { DEFAULT_PREFERENCE } from './storage'
+import { ExtensionUi, type UiCallbacks } from './ui'
+import type { BrowserSessionDto } from './types'
+import type { StudioState } from './studio/protocol'
+function callbacks(): UiCallbacks {
+  return {
+    onDiscover: vi.fn(),
+    onDiscoverSaved: vi.fn(),
+    onConfirm: vi.fn(),
+    onImportSelected: vi.fn(),
+    onPrepareDownload: vi.fn(),
+    onFinishDownload: vi.fn(),
+    onPreferenceChange: vi.fn(),
+    onFabPositionChange: vi.fn(),
+    onToggleGlobal: vi.fn().mockResolvedValue(true),
+    onTogglePage: vi.fn().mockResolvedValue(true),
+    onRetryPage: vi.fn(),
+    onRetryUploads: vi.fn(),
+    onRetryStart: vi.fn(),
+    onRestart: vi.fn(),
+    onStopDiscovery: vi.fn(),
+    onResumeDiscovery: vi.fn(),
+    onReselect: vi.fn(),
+    onCancel: vi.fn(),
+    onLoadLibraryBooks: vi.fn().mockResolvedValue([]),
+    onImport: vi.fn().mockResolvedValue({
+      destination: 'new',
+      bookId: 'book',
+      bookTitle: 'Example chapter',
+      chapterId: 'chapter',
+      chapterTitle: 'Example chapter',
+      importedPages: 1,
+      omittedPages: 0,
+      termsAdded: 0,
+    }),
+    onDisableSite: vi.fn(),
+    onEnableSite: vi.fn().mockResolvedValue(undefined),
+    onDeleteAdaptation: vi.fn(),
+    onCopyDiagnostics: vi.fn(),
+  }
+}
+
+let ui: ExtensionUi
+let handlers: UiCallbacks
+let receive: EventListener
+let post: ReturnType<typeof vi.spyOn>
+const origin = 'chrome-extension://test-extension'
+beforeEach(async () => {
+  vi.stubGlobal('chrome', {
+    runtime: { getURL: (path: string) => `${origin}/${path}` },
+  })
+  const add = window.addEventListener.bind(window)
+  vi.spyOn(window, 'addEventListener').mockImplementation((type, listener, options) => {
+    if (type === 'message') receive = listener as EventListener
+    add(type, listener, options)
+  })
+  handlers = callbacks()
+  ui = new ExtensionUi(handlers, DEFAULT_PREFERENCE, 'Example chapter', true)
+  expect(ui.shadow.querySelector('iframe')).toBeNull()
+  ui.setOpen(true)
+  ui.setOpen(false)
+  const frameWindow = { postMessage: vi.fn() }
+  Object.defineProperty(ui.shadow.querySelector('iframe'), 'contentWindow', {
+    value: frameWindow,
+  })
+  post = frameWindow.postMessage
+  await send('ready')
+  post.mockClear()
+})
+afterEach(() => {
+  ui.remove()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+async function send(action: string, payload?: unknown, overrides = {}) {
+  receive({
+    isTrusted: true,
+    origin,
+    source: ui.shadow.querySelector('iframe')!.contentWindow,
+    data: { channel: 'saber:command', id: 1, action, payload },
+    ...overrides,
+  } as unknown as Event)
+  await new Promise(resolve => setTimeout(resolve, 0))
+}
+function snapshot(): StudioState {
+  return post.mock.calls.filter((call: any[]) => call[0].channel === 'saber:state').at(-1)![0].state
+}
+it('acknowledges asynchronous discovery only when it finishes', async () => {
+  let finish!: () => void
+  handlers.onDiscover = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
+  await send('discover', 'dom-agent')
+  expect(post.mock.calls.some(([data]: any[]) => data.channel === 'saber:response')).toBe(false)
+  finish()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(post.mock.calls.some(([data]: any[]) => data.channel === 'saber:response' && data.ok)).toBe(true)
+})
+it('relays DOM detection to the initiating frame and keeps untrusted results out', async () => {
+  let selected: unknown
+  handlers.onDiscover = vi.fn(async (_method, detect) => {
+    selected = await detect!({ pageUrl: 'https://example.test/chapter', nodes: [] })
+  })
+  await send('discover', 'dom-agent')
+  expect(post).toHaveBeenCalledWith(expect.objectContaining({ channel: 'saber:dom-detection', id: 1 }), origin)
+  const reply = {
+    isTrusted: true, origin, source: ui.shadow.querySelector('iframe')!.contentWindow,
+    data: { channel: 'saber:dom-detection-result', id: 1, ok: true, result: { nodeIds: ['page'], selector: '' } },
+  }
+  receive({ ...reply, source: window } as unknown as Event)
+  receive({ ...reply, data: { ...reply.data, id: 2 } } as unknown as Event)
+  expect(selected).toBeUndefined()
+  receive(reply as unknown as Event)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(selected).toEqual({ nodeIds: ['page'], selector: '' })
+  expect(post).toHaveBeenCalledWith({ channel: 'saber:response', id: 1, ok: true, result: undefined }, origin)
+})
+it('rejects the pending DOM discovery when its page is removed', async () => {
+  let failure: unknown
+  handlers.onDiscover = vi.fn(async (_method, detect) => {
+    try { await detect!({ nodes: [] }) } catch (error) { failure = error }
+  })
+  await send('discover', 'dom-agent')
+  ui.remove()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(failure).toMatchObject({ code: 'page_closed' })
+})
+it('returns to collected candidates with one update, without briefly clearing the selection', () => {
+  const candidates = [{ id: 'one', sourceUrl: 'https://example.test/one.png', width: 640, height: 960 }] as any
+  ui.showCandidates(candidates)
+  post.mockClear()
+  ui.resetSelection(candidates)
+  const states = post.mock.calls.filter(([data]: any[]) => data.channel === 'saber:state')
+  expect(states).toHaveLength(1)
+  expect(states[0]![0].state.candidates.map((candidate: any) => candidate.id)).toEqual(['one'])
+})
+it('keeps default edge positioning through resize without saving a new position', () => {
+  for (const [width, height] of [[1600, 1000], [800, 600], [1600, 1000]]) {
+    vi.stubGlobal('innerWidth', width)
+    vi.stubGlobal('innerHeight', height)
+    window.dispatchEvent(new Event('resize'))
+    const fab = ui.shadow.querySelector('button')!
+    expect(fab.style.left).toBe('')
+    expect(fab.style.top).toBe('')
+    expect(fab.style.right).toBe('')
+    expect(fab.style.bottom).toBe('')
+  }
+  expect(handlers.onFabPositionChange).not.toHaveBeenCalled()
+})
+it.each(['left', 'right'] as const)('restores the %s edge and vertical ratio after resizing', side => {
+  ui.remove()
+  ui = new ExtensionUi(handlers, { ...DEFAULT_PREFERENCE, fabPosition: { side, yRatio: 0.4 } }, 'Example', false)
+  const fab = ui.shadow.querySelector('button')!
+  vi.spyOn(fab, 'getBoundingClientRect').mockReturnValue({ height: 48 } as DOMRect)
+  for (const height of [600, 1000, 100, 600]) {
+    vi.stubGlobal('innerHeight', height)
+    window.dispatchEvent(new Event('resize'))
+    expect(fab.style[side]).toBe('22px')
+    expect(fab.style[side === 'left' ? 'right' : 'left']).toBe('auto')
+    expect(parseFloat(fab.style.top)).toBeCloseTo(8 + (height - 64) * 0.4)
+  }
+  expect(handlers.onFabPositionChange).not.toHaveBeenCalled()
+})
+it('uses one closed host and one extension document for all three views', async () => {
+  expect(ui.host.shadowRoot).toBeNull()
+  await send('tab', 'settings')
+  await send('ready')
+  expect(snapshot().tab).toBe('settings')
+  await send('tab', 'tasks')
+  await send('ready')
+  expect(snapshot().tab).toBe('tasks')
+  expect(ui.shadow.querySelectorAll('iframe')).toHaveLength(1)
+  await send('close')
+  expect(snapshot().open).toBe(false)
+})
+it('rejects messages from webpage scripts, other frames and synthetic events', async () => {
+  await send('confirm', ['page'], { source: window })
+  await send('confirm', ['page'], { origin: 'https://example.com' })
+  await send('confirm', ['page'], { isTrusted: false })
+  expect(handlers.onConfirm).not.toHaveBeenCalled()
+  await send('confirm', ['page'])
+  expect(handlers.onConfirm).toHaveBeenCalledWith(['page'])
+  expect(post).toHaveBeenCalledWith(
+    { channel: 'saber:response', id: 1, ok: true, result: undefined },
+    origin
+  )
+})
+
+it('routes saved-rule discovery separately from selected-method discovery', async () => {
+  await send('discover', 'similar')
+  expect(handlers.onDiscover).toHaveBeenCalledWith('similar')
+  expect(handlers.onDiscoverSaved).not.toHaveBeenCalled()
+  await send('discover-saved')
+  expect(handlers.onDiscoverSaved).toHaveBeenCalledOnce()
+  expect(handlers.onDiscover).toHaveBeenCalledTimes(1)
+  ui.setStatus('找到 25 张图片', '上一次的结果')
+  await send('back')
+  expect(snapshot().view).toBe('idle')
+  expect(snapshot().notice.title).toBe('准备重新识别')
+})
+
+it('keeps progress, candidates and errors from reopening a closed window', async () => {
+  ui.setOpen(true)
+  await send('close')
+  for (const update of [
+    () => ui.showPreparationProgress(1, 4, 0),
+    () => ui.showCandidates([]),
+    () => ui.showError({ code: 'saber_unreachable', message: '连接中断' }),
+    () => ui.showStartError({ code: 'start_failed', message: '启动失败' }),
+    () => ui.showUploadError(1, { code: 'upload_failed', message: '上传失败' }),
+  ]) {
+    update()
+    expect(snapshot().open).toBe(false)
+  }
+  ui.togglePanel()
+  expect(snapshot()).toMatchObject({ open: true, uploadError: { count: 1 } })
+})
+
+it('starts closed when the UI is recreated after opening the panel', () => {
+  ui.togglePanel()
+  expect(snapshot().open).toBe(true)
+  ui.remove()
+  ui = new ExtensionUi(handlers, { ...DEFAULT_PREFERENCE }, 'Example chapter', true)
+  expect(ui.shadow.querySelector<HTMLElement>('.saber-panel')!.dataset.open).toBe('false')
+})
+it('returns actionable RPC failures and does not invoke arbitrary methods', async () => {
+  vi.mocked(handlers.onLoadLibraryBooks).mockRejectedValueOnce(new Error('连接已断开'))
+  await send('books')
+  expect(post).toHaveBeenLastCalledWith(
+    { channel: 'saber:response', id: 1, ok: false, error: '连接已断开' },
+    origin
+  )
+  await send('remove')
+  expect(ui.host.isConnected).toBe(true)
+})
+it('retains upload and start recovery independently of polling updates', async () => {
+  ui.showUploadError(2, { code: 'source', message: '读取失败' })
+  ui.showSession({
+    state: 'idle',
+    pendingStart: true,
+    pages: [],
+    counts: { total: 0 },
+  } as unknown as BrowserSessionDto)
+  expect(snapshot()).toMatchObject({
+    uploadError: { count: 2 },
+    retryStart: true,
+  })
+  ui.clearUploadError()
+  expect(snapshot().uploadError).toBeNull()
+  await send('retry-start')
+  await send('retry-uploads')
+  expect(handlers.onRetryStart).toHaveBeenCalledOnce()
+  expect(handlers.onRetryUploads).toHaveBeenCalledOnce()
+})
+it('updates original/result state and imports through the controller', async () => {
+  vi.mocked(handlers.onToggleGlobal).mockResolvedValue(false)
+  await send('toggle-global')
+  expect(snapshot().translated).toBe(false)
+  vi.mocked(handlers.onTogglePage).mockResolvedValue(false)
+  await send('toggle-page', 'page')
+  expect(snapshot().originalPageIds).toEqual(['page'])
+  vi.mocked(handlers.onTogglePage).mockResolvedValue(true)
+  await send('toggle-page', 'page')
+  expect(snapshot().originalPageIds).toEqual([])
+  await send('import', {
+    destination: 'new',
+    bookTitle: 'Example chapter',
+    chapterTitle: 'Example chapter',
+  })
+  expect(snapshot().imported?.bookId).toBe('book')
+})
+it('hides the frame during image picking and restores it on cancel', () => {
+  ui.setOpen(true)
+  ui.setStatus('正在识别', '等待选图', 'busy')
+  ui.startPicking()
+  expect(ui.pickingMask().dataset.open).toBe('true')
+  expect(ui.shadow.querySelector<HTMLElement>('.saber-panel')!.style.visibility).toBe('hidden')
+  ui.stopPicking()
+  expect(snapshot().notice.tone).toBe('ready')
+  expect(ui.shadow.querySelector<HTMLElement>('.saber-panel')!.style.visibility).toBe('')
+})
+it('removes bridge listeners when the page controller is disposed', async () => {
+  const remove = vi.spyOn(window, 'removeEventListener')
+  ui.remove()
+  expect(remove).toHaveBeenCalledWith('message', receive)
+  expect(ui.host.isConnected).toBe(false)
+})
+
+it('keeps learned rules in the shared view state', () => {
+  ui.setAdaptation({ selector: 'main img', kind: 'image', confirmedAt: 1 })
+  expect(snapshot().preference.rule?.selector).toBe('main img')
+  ui.setAdaptation(null)
+  expect(snapshot().preference.rule).toBeUndefined()
+})
+
+it('anchors each opening to the FAB but preserves manual placement while open', () => {
+  vi.stubGlobal('innerWidth', 1280)
+  vi.stubGlobal('innerHeight', 960)
+  const fab = ui.shadow.querySelector<HTMLElement>('.saber-fab')!
+  const panel = ui.shadow.querySelector<HTMLElement>('.saber-panel')!
+  let fabBox = new DOMRect(36, 136, 48, 48)
+  vi.spyOn(fab, 'getBoundingClientRect').mockImplementation(() => fabBox)
+  vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 380, 680))
+  ui.setOpen(true)
+  expect(panel.style.left).toBe('8px')
+  expect(panel.style.top).toBe('196px')
+  panel.style.left = '250px'
+  panel.style.top = '80px'
+  ui.setOpen(true)
+  expect(panel.style.left).toBe('250px')
+  expect(panel.style.top).toBe('80px')
+  ui.setOpen(false)
+  fabBox = new DOMRect(616, 456, 48, 48)
+  ui.setOpen(true)
+  expect(panel.style.left).toBe('676px')
+  expect(panel.style.top).toBe('140px')
+})
+it('shortens the panel when a narrow viewport has no full-height space beside the FAB', () => {
+  vi.stubGlobal('innerWidth', 390)
+  vi.stubGlobal('innerHeight', 740)
+  const fab = ui.shadow.querySelector<HTMLElement>('.saber-fab')!
+  const panel = ui.shadow.querySelector<HTMLElement>('.saber-panel')!
+  vi.spyOn(fab, 'getBoundingClientRect').mockReturnValue(new DOMRect(170, 340, 48, 48))
+  vi.spyOn(panel, 'getBoundingClientRect').mockImplementation(
+    () => new DOMRect(0, 0, 374, Number.parseFloat(panel.style.maxHeight) || 640)
+  )
+  ui.setOpen(true)
+  expect(panel.style.maxHeight).toBe('332px')
+  expect(panel.style.top).toBe('400px')
+  expect(panel.style.left).toBe('8px')
+})

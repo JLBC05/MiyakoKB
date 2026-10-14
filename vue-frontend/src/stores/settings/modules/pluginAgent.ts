@@ -1,0 +1,90 @@
+import { computed, type Ref } from 'vue'
+import { normalizeProviderId } from '@/config/aiProviders'
+import { createDefaultSettings } from '../defaults'
+import {
+  applyOpenAiOptionsPatch,
+  cloneOpenAiOptions,
+  type OpenAiOptionsPatch,
+} from '@/utils/openaiOptions'
+import type {
+  PluginAgentProvider,
+  PluginAgentSettings,
+  TranslationSettings,
+} from '@/types/settings'
+import type { PluginAgentProviderConfig, ProviderConfigsCache } from '../types'
+import {
+  applyProviderCredentials,
+  clearProviderCredentials,
+  restoreProviderCacheEntry,
+  saveProviderCacheEntry,
+  snapshotProviderCredentials,
+} from '../providerConfigCache'
+
+export function usePluginAgentSettings(
+  settings: Ref<TranslationSettings>,
+  providerConfigs: Ref<ProviderConfigsCache>,
+) {
+  type AgentUiUpdates = Partial<Omit<PluginAgentSettings, 'provider'>>
+    & OpenAiOptionsPatch
+
+  const provider = computed(() => settings.value.pluginAgent.provider)
+  const getDefaultOpenAiOptions = () => cloneOpenAiOptions(
+    createDefaultSettings().pluginAgent.openaiOptions,
+  )
+
+  function setProvider(provider: PluginAgentProvider): void {
+    provider = normalizeProviderId(provider) as PluginAgentProvider
+    const previousProvider = settings.value.pluginAgent.provider
+    if (previousProvider === provider) return
+
+    saveProviderConfig(previousProvider)
+    settings.value.pluginAgent.provider = provider
+    restoreProviderConfig(provider)
+  }
+
+  function updateAgent(updates: AgentUiUpdates): void {
+    if (updates.apiKey !== undefined) settings.value.pluginAgent.apiKey = updates.apiKey
+    if (updates.modelName !== undefined) settings.value.pluginAgent.modelName = updates.modelName
+    if (updates.customBaseUrl !== undefined) settings.value.pluginAgent.customBaseUrl = updates.customBaseUrl
+    if (updates.openaiOptions !== undefined) {
+      settings.value.pluginAgent.openaiOptions = cloneOpenAiOptions(updates.openaiOptions)
+    }
+    applyOpenAiOptionsPatch(settings.value.pluginAgent.openaiOptions, updates)
+  }
+
+  function saveProviderConfig(provider: string): void {
+    saveProviderCacheEntry({
+      provider,
+      cache: providerConfigs.value.pluginAgent,
+      buildConfig: (): PluginAgentProviderConfig => ({
+        ...snapshotProviderCredentials(settings.value.pluginAgent),
+        openaiOptions: cloneOpenAiOptions(settings.value.pluginAgent.openaiOptions),
+      }),
+    })
+  }
+
+  function restoreProviderConfig(provider: string): void {
+    restoreProviderCacheEntry({
+      provider,
+      cache: providerConfigs.value.pluginAgent,
+      applyCached: (cached) => {
+        applyProviderCredentials(settings.value.pluginAgent, cached)
+        settings.value.pluginAgent.openaiOptions = cached.openaiOptions !== undefined
+          ? cloneOpenAiOptions(cached.openaiOptions)
+          : getDefaultOpenAiOptions()
+      },
+      applyMissing: () => {
+        clearProviderCredentials(settings.value.pluginAgent)
+        settings.value.pluginAgent.openaiOptions = getDefaultOpenAiOptions()
+      },
+    })
+  }
+
+  return {
+    pluginAgentProvider: provider,
+    setPluginAgentProvider: setProvider,
+    updatePluginAgent: updateAgent,
+    savePluginAgentProviderConfig: saveProviderConfig,
+    restorePluginAgentProviderConfig: restoreProviderConfig,
+  }
+}

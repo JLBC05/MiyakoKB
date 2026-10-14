@@ -1,0 +1,424 @@
+<script setup lang="ts">
+import UiInput from '@/components/ui/UiInput.vue'
+import { ref, computed } from 'vue'
+import { useBookshelfStore } from '@/stores/bookshelfStore'
+import { showToast } from '@/utils/toast'
+import BaseModal from '@/components/common/BaseModal.vue'
+import ProductActionRow from '@/components/product/ProductActionRow.vue'
+import ProductChipList from '@/components/product/ProductChipList.vue'
+import ProductRecordCard from '@/components/product/ProductRecordCard.vue'
+import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
+import UiButton from '@/components/ui/UiButton.vue'
+import UiColorInput from '@/components/ui/UiColorInput.vue'
+import UiField from '@/components/ui/UiField.vue'
+import UiFormGrid from '@/components/ui/UiFormGrid.vue'
+import { confirmProductAction } from '@/composables/useProductConfirm'
+import { BOOKSHELF_DEFAULT_TAG_COLOR } from '@/constants/bookshelf'
+import type { ProductChipItem } from '@/components/product/ProductChipList.vue'
+import type { TagData } from '@/types/api'
+
+const emit = defineEmits<{
+  close: []
+}>()
+
+const bookshelfStore = useBookshelfStore()
+
+const newTagName = ref('')
+const newTagColor = ref(BOOKSHELF_DEFAULT_TAG_COLOR)
+
+const editingTagName = ref<string | null>(null)
+const editTagName = ref('')
+const editTagColor = ref('')
+const pendingAction = ref<'create' | 'edit' | 'delete' | null>(null)
+
+const tags = computed(() => bookshelfStore.tags)
+
+function tagMetadataItems(tag: TagData): ProductChipItem[] {
+  return [
+    {
+      id: `tag-${tag.name}`,
+      label: tag.name,
+      tone: 'custom',
+      backgroundColor: tag.color,
+      borderColor: tag.color,
+      textColor: 'var(--color-text-inverse)',
+    },
+    {
+      id: `count-${tag.name}`,
+      label: `${tag.bookCount ?? 0} 本`,
+      tone: 'neutral',
+    },
+  ]
+}
+
+async function createTag() {
+  if (pendingAction.value) return
+  const name = newTagName.value.trim()
+  if (!name) {
+    showToast('请输入标签名称', 'warning')
+    return
+  }
+
+  if (tags.value.some(t => t.name === name)) {
+    showToast('标签已存在', 'warning')
+    return
+  }
+
+  pendingAction.value = 'create'
+  try {
+    await bookshelfStore.createTag(name, newTagColor.value)
+    showToast('标签创建成功', 'success')
+    newTagName.value = ''
+    newTagColor.value = BOOKSHELF_DEFAULT_TAG_COLOR
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '创建失败', 'error')
+  } finally {
+    pendingAction.value = null
+  }
+}
+
+function startEditTag(tag: TagData) {
+  editingTagName.value = tag.name
+  editTagName.value = tag.name
+  editTagColor.value = tag.color
+}
+
+function cancelEdit() {
+  editingTagName.value = null
+  editTagName.value = ''
+  editTagColor.value = ''
+}
+
+async function saveEditTag() {
+  if (!editingTagName.value || pendingAction.value) return
+
+  const name = editTagName.value.trim()
+  if (!name) {
+    showToast('标签名称不能为空', 'warning')
+    return
+  }
+
+  const originalTagName = editingTagName.value
+
+  if (name !== originalTagName && tags.value.some(t => t.name === name)) {
+    showToast('标签名称已存在', 'warning')
+    return
+  }
+
+  pendingAction.value = 'edit'
+  try {
+    await bookshelfStore.updateTagApi(
+      originalTagName,
+      name,
+      editTagColor.value
+    )
+    showToast('标签更新成功', 'success')
+    cancelEdit()
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '更新失败', 'error')
+  } finally {
+    pendingAction.value = null
+  }
+}
+
+async function deleteTag(tagName: string) {
+  if (pendingAction.value) return
+  const confirmed = await confirmProductAction({
+    title: '删除标签',
+    message: `确定要删除标签“${tagName}”吗？此操作不会删除书籍，但会从相关书籍中移除该标签。`,
+    confirmText: '删除',
+    cancelText: '取消',
+    tone: 'danger',
+  })
+  if (!confirmed || pendingAction.value) return
+
+  pendingAction.value = 'delete'
+  try {
+    await bookshelfStore.deleteTagApi(tagName)
+    showToast('标签已删除', 'success')
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '删除失败', 'error')
+  } finally {
+    pendingAction.value = null
+  }
+}
+</script>
+
+<template>
+  <BaseModal
+    title="标签管理"
+    header-padding="16px 20px 19px"
+    body-padding-value="20px 20px 17px"
+    @close="emit('close')"
+  >
+    <div class="tag-manage-modal__form">
+      <UiFormGrid class="tag-manage-modal__new-tag-grid">
+        <UiField
+          class="tag-manage-modal__new-tag-name-field"
+          variant="settings"
+          label="标签名称"
+          control-id="tag-manage-new-name"
+          label-visually-hidden
+        >
+          <UiInput
+            id="tag-manage-new-name"
+            v-model="newTagName"
+            class="tag-manage-modal__new-tag-name"
+            type="text"
+            placeholder="输入新标签名称..."
+            @keydown.enter="createTag"
+          />
+        </UiField>
+        <UiField
+          variant="settings"
+          label="标签颜色"
+          control-id="tag-manage-new-color"
+          label-visually-hidden
+        >
+          <UiColorInput
+            input-id="tag-manage-new-color"
+            v-model="newTagColor"
+            title="选择颜色"
+          />
+        </UiField>
+        <ProductActionRow
+          class="tag-manage-modal__new-tag-row"
+          aria-label="新建标签操作"
+          justify="start"
+        >
+          <UiButton
+            variant="primary"
+            size="sm"
+            :loading="pendingAction === 'create'"
+            :disabled="pendingAction !== null"
+            @click="createTag"
+          >
+            添加
+          </UiButton>
+        </ProductActionRow>
+      </UiFormGrid>
+    </div>
+
+    <ProductStatusBanner
+      v-if="bookshelfStore.tagsError"
+      class="tag-manage-modal__load-error"
+      tone="warning"
+      title="标签加载失败"
+      role="alert"
+    >
+      {{ bookshelfStore.tagsError }}
+      <template #actions>
+        <UiButton size="sm" variant="secondary" @click="bookshelfStore.loadTags()">
+          重试
+        </UiButton>
+      </template>
+    </ProductStatusBanner>
+
+    <div class="tag-manage-modal__list">
+      <ProductStatusBanner
+        v-if="tags.length === 0"
+        class="tag-manage-modal__empty-state"
+        tone="neutral"
+        icon-name="tags"
+        role="note"
+      >
+        暂无标签，请在上方添加
+      </ProductStatusBanner>
+
+      <ProductRecordCard
+        v-for="tag in tags"
+        :key="tag.name"
+        class="tag-manage-modal__item"
+        :aria-label="`标签 ${tag.name}`"
+      >
+        <div v-if="editingTagName !== tag.name" class="tag-manage-modal__view-mode">
+          <ProductChipList
+            class="tag-manage-modal__metadata"
+            :aria-label="`${tag.name} 标签信息`"
+            :items="tagMetadataItems(tag)"
+          />
+          <div class="tag-manage-modal__row-actions" role="group" :aria-label="`${tag.name} 标签操作`">
+            <UiButton
+              variant="secondary"
+              size="xs"
+              class="tag-manage-modal__row-edit-action"
+              :disabled="pendingAction !== null"
+              @click="startEditTag(tag)"
+            >
+              编辑
+            </UiButton>
+            <UiButton
+              variant="danger"
+              size="xs"
+              class="tag-manage-modal__row-delete-action"
+              :disabled="pendingAction !== null"
+              @click="deleteTag(tag.name)"
+            >
+              删除
+            </UiButton>
+          </div>
+        </div>
+
+        <div v-if="editingTagName === tag.name" class="tag-manage-modal__edit-mode">
+          <UiFormGrid class="tag-manage-modal__edit-fields">
+            <UiField label="编辑标签颜色" variant="settings" :control-id="`tag-edit-color-${tag.name}`">
+              <UiColorInput
+                :input-id="`tag-edit-color-${tag.name}`"
+                v-model="editTagColor"
+                title="选择颜色"
+              />
+            </UiField>
+            <UiField label="编辑标签名称" variant="settings" :control-id="`tag-edit-name-${tag.name}`">
+              <UiInput
+                :id="`tag-edit-name-${tag.name}`"
+                v-model="editTagName"
+                type="text"
+                size="sm"
+                placeholder="标签名称"
+                @keydown.enter="saveEditTag"
+              />
+            </UiField>
+          </UiFormGrid>
+          <ProductActionRow
+            aria-label="编辑标签操作"
+            class="tag-manage-modal__edit-actions"
+            justify="start"
+          >
+            <UiButton
+              variant="primary"
+              size="xs"
+              class="tag-manage-modal__edit-save-action"
+              :loading="pendingAction === 'edit'"
+              :disabled="pendingAction !== null"
+              @click="saveEditTag"
+            >
+              保存
+            </UiButton>
+            <UiButton
+              variant="secondary"
+              size="xs"
+              class="tag-manage-modal__edit-cancel-action"
+              :disabled="pendingAction !== null"
+              @click="cancelEdit"
+            >
+              取消
+            </UiButton>
+          </ProductActionRow>
+        </div>
+      </ProductRecordCard>
+    </div>
+
+    <template #footer>
+      <ProductActionRow aria-label="标签管理弹窗操作" variant="dialog">
+        <UiButton variant="secondary" @click="emit('close')">关闭</UiButton>
+      </ProductActionRow>
+    </template>
+  </BaseModal>
+</template>
+
+<style scoped>
+.tag-manage-modal__form {
+  margin-bottom: 20px;
+}
+
+.tag-manage-modal__load-error {
+  margin-bottom: 16px;
+}
+
+.tag-manage-modal__new-tag-row {
+  --ui-button-sm-padding: 9px 14px;
+
+  flex-wrap: nowrap;
+}
+
+.tag-manage-modal__new-tag-grid {
+  --ui-colorpicker-width: 40px;
+  --ui-colorpicker-height: 40px;
+  --ui-colorpicker-radius: 6px;
+
+  grid-template-columns: minmax(0, 1fr) 40px auto;
+  gap: 9px;
+  margin-bottom: 0;
+}
+
+.tag-manage-modal__new-tag-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tag-manage-modal__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.tag-manage-modal__empty-state {
+  --product-status-banner-align-items: center;
+  --product-status-banner-justify-content: center;
+  --product-status-banner-min-height: 95px;
+  --product-status-banner-padding: 0;
+  --product-status-banner-border: 0;
+  --product-status-banner-background: transparent;
+  --product-status-banner-icon-display: none;
+  --product-status-banner-text-align: center;
+}
+
+.tag-manage-modal__item {
+  --product-record-card-background: var(--color-surface-app);
+  --product-record-card-gap: 0;
+  --product-record-card-padding: 10px 12px;
+  --product-record-card-radius: 6px;
+}
+
+.tag-manage-modal__view-mode,
+.tag-manage-modal__edit-mode {
+  width: 100%;
+}
+
+.tag-manage-modal__view-mode {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.tag-manage-modal__edit-mode {
+  display: grid;
+  gap: 10px;
+}
+
+.tag-manage-modal__edit-fields {
+  margin-bottom: 0;
+}
+
+.tag-manage-modal__metadata {
+  flex: 1 1 120px;
+  min-width: 0;
+}
+
+.tag-manage-modal__row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.tag-manage-modal__row-edit-action,
+.tag-manage-modal__row-delete-action,
+.tag-manage-modal__edit-save-action,
+.tag-manage-modal__edit-cancel-action {
+  flex: 0 0 auto;
+}
+
+@media (--breakpoint-sm-down) {
+  .tag-manage-modal__new-tag-grid {
+    grid-template-columns: 1fr auto;
+  }
+
+  .tag-manage-modal__new-tag-name-field {
+    grid-column: 1 / -1;
+  }
+}
+
+</style>
