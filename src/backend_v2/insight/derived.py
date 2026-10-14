@@ -260,6 +260,48 @@ def calculate_confidence(best_freq: int, other_freqs: list[int]) -> str:
     return "low"
 
 
+def calculate_char_overlap_ratio(str1: str, str2: str) -> float:
+    """计算两个中文实体名称的字符重合度比例。
+    
+    使用双向重合度（交集字符在较短串中的占比或两串平均占比）。
+    针对实体别名匹配（如 '宿傩之指' vs '宿傩的手指'），以最大包含度为准：
+    overlap_ratio = len(chars1 & chars2) / min(len(chars1), len(chars2))
+    """
+    s1 = re.sub(r'[\s·・_—\-\(\)（）]', '', str1)
+    s2 = re.sub(r'[\s·・_—\-\(\)（）]', '', str2)
+    if not s1 or not s2:
+        return 0.0
+    set1, set2 = set(s1), set(s2)
+    common = set1 & set2
+    min_len = min(len(set1), len(set2))
+    if min_len == 0:
+        return 0.0
+    return len(common) / min_len
+
+
+def check_model_entity_similarity(
+    name1: str,
+    name2: str,
+    category: str,
+    *,
+    llm_callable: Callable[[str], str] | None = None,
+) -> bool:
+    """调用轻量模型辅助判定两个重合度在 40%-60% 之间的模糊实体是否为同一实体。"""
+    if llm_callable is None:
+        return False
+    prompt = (
+        f"请判断在漫画领域中，类别为【{category}】的以下两个名称是否指代同一个实体：\n"
+        f"名称1：{name1}\n"
+        f"名称2：{name2}\n"
+        f"如果是同一个实体请仅回复 'yes'，如果不是请仅回复 'no'。"
+    )
+    try:
+        reply = llm_callable(prompt).strip().lower()
+        return "yes" in reply
+    except Exception:
+        return False
+
+
 def _normalize_layer_events(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         raise ValueError("summary layer key_events must be an array")
@@ -370,8 +412,9 @@ def validate_artifact_payload(
             raise InsightConflict("entity_alignment payload must contain canonical_entities list")
         if "alias_map" not in normalized or not isinstance(normalized["alias_map"], dict):
             raise InsightConflict("entity_alignment payload must contain alias_map dictionary")
-        if "pending_review_queue" not in normalized or not isinstance(normalized["pending_review_queue"], list):
-            raise InsightConflict("entity_alignment payload must contain pending_review_queue list")
+        # 兼容新格式 auto_merge_log 与历史格式 pending_review_queue
+        if "auto_merge_log" not in normalized and "pending_review_queue" not in normalized:
+            raise InsightConflict("entity_alignment payload must contain auto_merge_log or pending_review_queue")
     return normalized
 
 
@@ -2920,11 +2963,13 @@ class InsightDerivedRepository:
         pages_analysis: Sequence[Mapping[str, Any]],
         alias_seed_config: Mapping[str, Any] | None = None,
         entity_slug_map_config: Mapping[str, Mapping[str, str]] | None = None,
+        llm_callable: Callable[[str], str] | None = None,
         run_id: str | None = None,
     ) -> dict[str, Any]:
         """Align entities extracted from chapter pages with existing canonical entities,
 
-        supporting incremental updates, transactional locking, review queues, and seed overrides.
+        supporting incremental updates, transactional locking, auto merge rules (frequency, substring overlap, model assisted),
+        auto_merge_log auditing, and seed overrides.
         """
         # 加载 entity_slug_map 配置
         slug_map = dict(entity_slug_map_config) if entity_slug_map_config else load_entity_slug_map()
@@ -2933,7 +2978,6 @@ class InsightDerivedRepository:
             self._assert_book_owned(connection, book_id)
 
             # 1. 悲观行锁/乐观版本读取现有 active 产物
-            # 在 SQLite 中 begin() 开启了写事务；在 PostgreSQL 等数据库中加 with_for_update
             select_query = (
                 select(analysis_artifacts)
                 .where(
@@ -2952,7 +2996,7 @@ class InsightDerivedRepository:
 
             existing_canonical_entities: list[dict[str, Any]] = []
             existing_alias_map: dict[str, str] = {}
-            existing_pending_review: list[dict[str, Any]] = []
+            existing_auto_merge_log: list[dict[str, Any]] = []
             current_revision = 0
             if existing_artifact is not None:
                 current_revision = existing_artifact["revision"]
@@ -2960,7 +3004,8 @@ class InsightDerivedRepository:
                     existing_payload = _json_object(existing_artifact["payload_json"], "existing entity_alignment payload")
                     existing_canonical_entities = list(existing_payload.get("canonical_entities", []))
                     existing_alias_map = dict(existing_payload.get("alias_map", {}))
-                    existing_pending_review = list(existing_payload.get("pending_review_queue", []))
+                    # 兼容读取 auto_merge_log 或老版本的 pending_review_queue
+                    existing_auto_merge_log = list(existing_payload.get("auto_merge_log", []))
                 except Exception:
                     pass
 
@@ -2987,25 +3032,32 @@ class InsightDerivedRepository:
             chapter_overrides = seed.get("chapter_overrides", {}).get(chapter_id, {})
 
             # 建立已有实体的快速索引
-            # canonical_by_id: entity_id -> entity dict
             canonical_by_id: dict[str, dict[str, Any]] = {
                 ent["entity_id"]: ent for ent in existing_canonical_entities
             }
-            # canonical_by_name: (category, canonical_name) -> entity_id
             canonical_by_name: dict[tuple[str, str], str] = {
                 (ent["category"], ent["canonical_name"]): ent["entity_id"]
                 for ent in existing_canonical_entities
             }
-            # canonical_by_alias: (category, alias_name) -> entity_id
             canonical_by_alias: dict[tuple[str, str], str] = {}
             for ent in existing_canonical_entities:
                 for a in ent.get("aliases", []):
                     canonical_by_alias[(ent["category"], a)] = ent["entity_id"]
 
             updated_alias_map = dict(existing_alias_map)
-            new_low_confidence_items: list[tuple[str, str, list[str], int, list[int]]] = []
+            auto_merge_log = list(existing_auto_merge_log)
 
-            # 4. 执行增量对齐与聚类合并
+            def record_merge_log(raw_name: str, canonical_name: str, rule: str, confidence: str) -> None:
+                auto_merge_log.append({
+                    "raw_name": raw_name,
+                    "canonical_name": canonical_name,
+                    "rule": rule,
+                    "confidence": confidence,
+                    "chapter_id": chapter_id,
+                    "timestamp": utcnow().isoformat(),
+                })
+
+            # 4. 执行增量对齐与自动归并
             # 已知的聚类规则（跨话通用）
             clusters_by_cat = {
                 "items": [
@@ -3064,7 +3116,6 @@ class InsightDerivedRepository:
                     slug = cl.get("slug") or to_romanized_slug(cat, canonical_name, slug_map=slug_map)
                     expected_id = f"{CATEGORY_PREFIX[cat]}_{slug}"
 
-                    # 检查是否已存在该标准实体
                     existing_id = canonical_by_name.get((cat, canonical_name)) or (
                         expected_id if expected_id in canonical_by_id else None
                     )
@@ -3082,6 +3133,11 @@ class InsightDerivedRepository:
                         for a in aliases:
                             if a not in ent["aliases"]:
                                 ent["aliases"].append(a)
+                                record_merge_log(a, ent["canonical_name"], "cluster_predefined", confidence)
+                        orig = ent.setdefault("original_names", [])
+                        for m in members:
+                            if m not in orig:
+                                orig.append(m)
                         alias_det = ent.setdefault("alias_details", {})
                         for m in members:
                             if m != ent["canonical_name"]:
@@ -3099,31 +3155,76 @@ class InsightDerivedRepository:
                             "pages": this_pages,
                             "valid_chapters": [chapter_id],
                             "aliases": aliases,
+                            "original_names": members,
                             "alias_details": {m: raw_dict[m]["count"] for m in members if m != canonical_name}
                         }
                         canonical_by_id[expected_id] = ent
                         canonical_by_name[(cat, canonical_name)] = expected_id
                         for a in aliases:
                             canonical_by_alias[(cat, a)] = expected_id
+                            record_merge_log(a, canonical_name, "cluster_predefined", confidence)
                         updated_alias_map[canonical_name] = expected_id
                         for a in aliases:
                             updated_alias_map[a] = expected_id
 
-                    if confidence == "low":
-                        new_low_confidence_items.append((cat, canonical_name, aliases, best_freq, other_freqs))
-
-                # 处理非聚类的独立实体
+                # 处理非聚类的独立实体，引入三条全自动归并规则
                 for name, info in raw_dict.items():
                     if name in processed_names:
                         continue
 
-                    # 先判断是否已存在已有实体（通过标准名、别名或 slug）
+                    # 1) 精确命中已存在的 canonical_name 或 alias
                     target_id = canonical_by_name.get((cat, name)) or canonical_by_alias.get((cat, name))
                     slug = to_romanized_slug(cat, name, slug_map=slug_map)
                     slug_id = f"{CATEGORY_PREFIX[cat]}_{slug}"
                     if not target_id and slug_id in canonical_by_id:
                         target_id = slug_id
 
+                    # 2) 自动归并规则探测（若未直接命中现有实体）
+                    merge_rule_hit = None
+                    merge_confidence = "high"
+                    if not target_id:
+                        for existing_ent in canonical_by_id.values():
+                            if existing_ent["category"] != cat:
+                                continue
+                            c_name = existing_ent["canonical_name"]
+                            c_freq = existing_ent["total_frequency"]
+                            c_aliases = existing_ent.get("aliases", [])
+
+                            # 规则 2.1: 子串重合（同类别内两个名称共享 60% 以上字符）
+                            overlap = calculate_char_overlap_ratio(name, c_name)
+                            if overlap >= 0.60:
+                                target_id = existing_ent["entity_id"]
+                                merge_rule_hit = "substring_overlap"
+                                merge_confidence = "high"
+                                break
+
+                            # 检查是否与该实体的现有别名达到 60% 重合
+                            for ex_alias in c_aliases:
+                                if calculate_char_overlap_ratio(name, ex_alias) >= 0.60:
+                                    target_id = existing_ent["entity_id"]
+                                    merge_rule_hit = "substring_overlap"
+                                    merge_confidence = "high"
+                                    break
+                            if target_id:
+                                break
+
+                            # 规则 2.2: 模糊重合度在 40%-60% 之间，调用模型辅助判定
+                            if 0.40 <= overlap < 0.60 and llm_callable is not None:
+                                if check_model_entity_similarity(name, c_name, cat, llm_callable=llm_callable):
+                                    target_id = existing_ent["entity_id"]
+                                    merge_rule_hit = "model_assisted"
+                                    merge_confidence = "medium"
+                                    break
+
+                            # 规则 2.3: 频次主导（高频名称自动当 canonical_name，低频挂 aliases；频次差异 >= 2倍且包含核心字）
+                            # 此时若两者重合度 >= 0.35 且频次差距大
+                            if overlap >= 0.35 and c_freq >= 2 * info["count"]:
+                                target_id = existing_ent["entity_id"]
+                                merge_rule_hit = "frequency_dominant"
+                                merge_confidence = "high"
+                                break
+
+                    # 3) 执行并入或创建新实体
                     if target_id and target_id in canonical_by_id:
                         ent = canonical_by_id[target_id]
                         ent["total_frequency"] += info["count"]
@@ -3131,9 +3232,28 @@ class InsightDerivedRepository:
                         valid_ch = ent.setdefault("valid_chapters", [])
                         if chapter_id not in valid_ch:
                             valid_ch.append(chapter_id)
+                        orig = ent.setdefault("original_names", [])
+                        if name not in orig:
+                            orig.append(name)
+
+                        # 如果当前名称是新别名，则挂入 aliases
                         if name != ent["canonical_name"] and name not in ent["aliases"]:
                             ent["aliases"].append(name)
                             ent.setdefault("alias_details", {})[name] = info["count"]
+                            canonical_by_alias[(cat, name)] = target_id
+                            if merge_rule_hit:
+                                record_merge_log(name, ent["canonical_name"], merge_rule_hit, merge_confidence)
+
+                        # 规则 2.1 逆向频次主导：如果本实体频次已经大幅反超现有 canonical_name（>= 2 倍），自动晋升为 canonical_name
+                        if name != ent["canonical_name"] and info["count"] >= 2 * ent["total_frequency"] - 2 * info["count"]:
+                            old_canon = ent["canonical_name"]
+                            ent["canonical_name"] = name
+                            if old_canon not in ent["aliases"]:
+                                ent["aliases"].append(old_canon)
+                            record_merge_log(old_canon, name, "frequency_dominant_promoted", "high")
+                            canonical_by_name[(cat, name)] = target_id
+                            canonical_by_alias[(cat, old_canon)] = target_id
+
                         if name not in updated_alias_map:
                             updated_alias_map[name] = target_id
                     else:
@@ -3146,6 +3266,7 @@ class InsightDerivedRepository:
                             "pages": sorted(list(set(info["pages"]))),
                             "valid_chapters": [chapter_id],
                             "aliases": [],
+                            "original_names": [name],
                             "alias_details": {}
                         }
                         canonical_by_id[slug_id] = ent
@@ -3154,7 +3275,6 @@ class InsightDerivedRepository:
                             updated_alias_map[name] = slug_id
 
             # 5. 应用种子配置（全局层 global_terms 与章节层 chapter_overrides）
-            # 全局层覆盖
             for cat, terms in global_terms.items():
                 for term, override_info in terms.items():
                     target_id = override_info.get("target_entity_id")
@@ -3162,9 +3282,12 @@ class InsightDerivedRepository:
                         target_ent = canonical_by_id[target_id]
                         if term not in target_ent["aliases"]:
                             target_ent["aliases"].append(term)
+                            record_merge_log(term, target_ent["canonical_name"], "seed_global_terms", "high")
+                        orig = target_ent.setdefault("original_names", [])
+                        if term not in orig:
+                            orig.append(term)
                         updated_alias_map[term] = target_id
 
-            # 章节层覆盖（仅对本 chapter_id 生效）
             for cat, terms in chapter_overrides.items():
                 if isinstance(terms, Mapping):
                     for term, override_info in terms.items():
@@ -3173,6 +3296,10 @@ class InsightDerivedRepository:
                             target_ent = canonical_by_id[target_id]
                             if term not in target_ent["aliases"]:
                                 target_ent["aliases"].append(term)
+                                record_merge_log(term, target_ent["canonical_name"], "seed_chapter_override", "high")
+                            orig = target_ent.setdefault("original_names", [])
+                            if term not in orig:
+                                orig.append(term)
                             if term in raw_stats.get(cat, {}):
                                 term_pages = raw_stats[cat][term]["pages"]
                                 target_ent.setdefault("alias_details", {})[term] = f"{raw_stats[cat][term]['count']} (seed override)"
@@ -3183,53 +3310,29 @@ class InsightDerivedRepository:
                                 valid_ch.append(chapter_id)
                             updated_alias_map[term] = target_id
 
-            # 6. 更新低置信度队列 pending_review_queue（按 (raw_name, category) 去重）
-            review_queue_dict: dict[tuple[str, str], dict[str, Any]] = {
-                (item["raw_name"], item["category"]): item
-                for item in existing_pending_review
-            }
-            for cat, can_name, aliases, best_f, other_fs in new_low_confidence_items:
-                for candidate in [can_name] + aliases:
-                    freq = raw_stats[cat][candidate]["count"]
-                    key = (candidate, cat)
-                    if key in review_queue_dict:
-                        review_queue_dict[key]["last_seen_chapter"] = chapter_id
-                        review_queue_dict[key]["frequency"] += freq
-                    else:
-                        review_queue_dict[key] = {
-                            "raw_name": candidate,
-                            "category": cat,
-                            "canonical_candidate": can_name,
-                            "first_seen_chapter": chapter_id,
-                            "last_seen_chapter": chapter_id,
-                            "frequency": freq,
-                            "status": "pending_review",
-                            "note": f"Candidate freq: {best_f}, others: {other_fs}",
-                        }
-
             final_canonical_entities = list(canonical_by_id.values())
-            # 保证每个 entity 的 valid_chapters 是存在的且有序
             for ent in final_canonical_entities:
                 if "valid_chapters" not in ent or not ent["valid_chapters"]:
                     ent["valid_chapters"] = [chapter_id]
                 else:
                     ent["valid_chapters"] = sorted(list(set(ent["valid_chapters"])))
+                if "original_names" not in ent:
+                    ent["original_names"] = [ent["canonical_name"]] + ent.get("aliases", [])
+                ent["original_names"] = sorted(list(set(ent["original_names"])))
 
-            final_pending_review = list(review_queue_dict.values())
             final_payload = {
                 "canonical_entities": final_canonical_entities,
                 "alias_map": updated_alias_map,
-                "pending_review_queue": final_pending_review,
+                "auto_merge_log": auto_merge_log,
                 "version": current_revision + 1,
                 "updated_at": utcnow().isoformat(),
             }
 
-            # 7. 写入数据库 analysis_artifacts（同一事务，递增版本号与设置 active）
+            # 6. 写入数据库 analysis_artifacts
             now = utcnow()
             new_revision = current_revision + 1
             artifact_id = str(uuid.uuid4())
 
-            # 冻结并停用旧版本
             connection.execute(
                 update(analysis_artifacts)
                 .where(
@@ -3241,7 +3344,6 @@ class InsightDerivedRepository:
                 .values(is_active=False, updated_at=now)
             )
 
-            # 插入新版本
             connection.execute(
                 insert(analysis_artifacts).values(
                     id=artifact_id,
@@ -3266,8 +3368,162 @@ class InsightDerivedRepository:
                 "revision": new_revision,
                 "entityCount": len(final_canonical_entities),
                 "aliasCount": len(updated_alias_map),
-                "pendingReviewCount": len(final_pending_review),
+                "autoMergeCount": len(auto_merge_log),
                 "payload": final_payload,
+            }
+
+    def unmerge_alias(
+        self,
+        *,
+        book_id: str,
+        category: str,
+        alias_to_detach: str,
+        new_canonical_name: str | None = None,
+        new_entity_id: str | None = None,
+    ) -> dict[str, Any]:
+        """手动回滚/拆分自动归并的别名，使其恢复为一个独立的标准实体。
+        
+        从现有包含 alias_to_detach 的实体中剥离该别名，并为其创建或生成全新的独立实体，
+        同时更新 alias_map 并写入新 revision 的 entity_alignment 产物。
+        """
+        target_name = alias_to_detach.strip()
+        new_canon = (new_canonical_name or target_name).strip()
+
+        with self.engine.begin() as connection:
+            self._assert_book_owned(connection, book_id)
+
+            select_query = (
+                select(analysis_artifacts)
+                .where(
+                    analysis_artifacts.c.book_id == book_id,
+                    analysis_artifacts.c.kind == "entity_alignment",
+                    analysis_artifacts.c.template == "default",
+                    analysis_artifacts.c.is_active.is_(True),
+                )
+            )
+            try:
+                select_query = select_query.with_for_update()
+            except Exception:
+                pass
+
+            existing_artifact = connection.execute(select_query).mappings().one_or_none()
+            if existing_artifact is None:
+                raise InsightNotFound("No active entity_alignment artifact found to unmerge")
+
+            current_revision = existing_artifact["revision"]
+            payload = _json_object(existing_artifact["payload_json"], "entity_alignment payload")
+            canonical_entities = list(payload.get("canonical_entities", []))
+            alias_map = dict(payload.get("alias_map", {}))
+            auto_merge_log = list(payload.get("auto_merge_log", []))
+
+            # 寻找拥有该别名的源实体
+            source_entity: dict[str, Any] | None = None
+            for ent in canonical_entities:
+                if ent.get("category") == category and target_name in ent.get("aliases", []):
+                    source_entity = ent
+                    break
+
+            if source_entity is None:
+                raise InsightConflict(f"Alias '{target_name}' in category '{category}' not found in any entity's aliases")
+
+            # 1. 从源实体中剥离该别名
+            source_entity["aliases"] = [a for a in source_entity.get("aliases", []) if a != target_name]
+            alias_det = source_entity.get("alias_details", {})
+            detached_freq = 1
+            if target_name in alias_det:
+                raw_val = alias_det.pop(target_name)
+                try:
+                    detached_freq = int(str(raw_val).split()[0])
+                except Exception:
+                    detached_freq = 1
+            source_entity["total_frequency"] = max(1, source_entity.get("total_frequency", 1) - detached_freq)
+            if "original_names" in source_entity:
+                source_entity["original_names"] = [o for o in source_entity["original_names"] if o != target_name]
+
+            # 2. 为拆出来的实体生成新的 ID 与实体对象
+            if new_entity_id:
+                detached_id = new_entity_id
+            else:
+                slug = to_romanized_slug(category, new_canon)
+                detached_id = f"{CATEGORY_PREFIX[category]}_{slug}"
+
+            detached_entity = {
+                "entity_id": detached_id,
+                "category": category,
+                "canonical_name": new_canon,
+                "confidence": "high",
+                "total_frequency": detached_freq,
+                "pages": source_entity.get("pages", []),
+                "valid_chapters": list(source_entity.get("valid_chapters", [])),
+                "aliases": [],
+                "original_names": [target_name],
+                "alias_details": {},
+            }
+            canonical_entities.append(detached_entity)
+
+            # 3. 更新 alias_map 指向新实体
+            alias_map[target_name] = detached_id
+            if new_canon != target_name:
+                alias_map[new_canon] = detached_id
+
+            # 4. 记录回滚日志
+            auto_merge_log.append({
+                "raw_name": target_name,
+                "canonical_name": new_canon,
+                "rule": "manual_unmerge_rollback",
+                "confidence": "high",
+                "chapter_id": source_entity.get("valid_chapters", ["unknown"])[-1],
+                "timestamp": utcnow().isoformat(),
+            })
+
+            new_revision = current_revision + 1
+            now = utcnow()
+            new_payload = {
+                "canonical_entities": canonical_entities,
+                "alias_map": alias_map,
+                "auto_merge_log": auto_merge_log,
+                "version": new_revision,
+                "updated_at": now.isoformat(),
+            }
+
+            # 5. 持久化新 revision
+            connection.execute(
+                update(analysis_artifacts)
+                .where(
+                    analysis_artifacts.c.book_id == book_id,
+                    analysis_artifacts.c.kind == "entity_alignment",
+                    analysis_artifacts.c.template == "default",
+                    analysis_artifacts.c.is_active.is_(True),
+                )
+                .values(is_active=False, updated_at=now)
+            )
+
+            new_artifact_id = str(uuid.uuid4())
+            connection.execute(
+                insert(analysis_artifacts).values(
+                    id=new_artifact_id,
+                    book_id=book_id,
+                    run_id=None,
+                    kind="entity_alignment",
+                    template="default",
+                    status="ready",
+                    revision=new_revision,
+                    is_active=True,
+                    dependency_fingerprint=hashlib.sha256(_json(new_payload).encode("utf-8")).hexdigest(),
+                    payload_json=_json(new_payload),
+                    asset_id=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+            return {
+                "artifactId": new_artifact_id,
+                "bookId": book_id,
+                "revision": new_revision,
+                "detachedAlias": target_name,
+                "newEntityId": detached_id,
+                "payload": new_payload,
             }
 
     def list_pinyin_entities(
