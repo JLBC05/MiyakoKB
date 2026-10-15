@@ -151,10 +151,11 @@ def load_entity_slug_map(config_path: str | None = None) -> dict[str, dict[str, 
                     "items": dict(data.get("items", {})),
                     "abilities": dict(data.get("abilities", {})),
                     "locations": dict(data.get("locations", {})),
+                    "concepts": dict(data.get("concepts", {})),
                 }
             except Exception:
                 pass
-    return {"characters": {}, "items": {}, "abilities": {}, "locations": {}}
+    return {"characters": {}, "items": {}, "abilities": {}, "locations": {}, "concepts": {}}
 
 CHAR_PINYIN = {
     '杉': 'shan', '泽': 'ze', '第': 'di', '三': 'san', '高': 'gao', '中': 'zhong',
@@ -172,6 +173,7 @@ CATEGORY_PREFIX = {
     "items": "item",
     "abilities": "ability",
     "locations": "location",
+    "concepts": "concept",
 }
 
 def romanize_location_string(loc_str: str) -> str:
@@ -296,20 +298,69 @@ def calculate_char_overlap_ratio(str1: str, str2: str) -> float:
 
 
 CHARACTER_TITLE_SUFFIXES = ("老师", "同学", "前辈", "学长", "学姐", "会长", "校长", "爷爷", "奶奶", "队长", "医生", "大人")
+FAMILY_RELATION_SUFFIXES = ("母亲", "妈妈", "父亲", "爸爸", "爷爷", "奶奶", "姐姐", "妹妹", "哥哥", "弟弟")
 
 
-def is_character_name_alias(name1: str, name2: str) -> bool:
-    """判断两个角色名称是否为合法的角色别名（如 '高木' 与 '高木老师'）。
-    
-    禁止仅凭同姓或部分重合就合并不同角色（如 '虎杖倭助' 与 '虎杖悠仁'）。
+def can_merge_character_names(name1: str, name2: str) -> bool:
+    """判断两个角色名称是否允许归并。
+
+    规则与安全边界：
+    1. 跨角色安全红线：若其中一个是'X的关系称谓'（如'久留美母亲'/'久留美的母亲'），另一个是该角色本身（如'久留美'/'福贺久留美'），严禁合并！
+    2. 关系代称自动归并：如 '久留美母亲' / '久留美的母亲' / '母亲' 归并为同一实体。
+    3. 称谓别名自动归并：如 '高木' 与 '高木老师'。
+    4. 全名与简称自动归并：如 '福贺久留美' 与 '久留美'（姓氏长1~2字，后半部分完全一致）。
+    5. 禁止仅凭同姓或部分重合就合并不同角色（如 '虎杖倭助' 与 '虎杖悠仁'）。
     """
     if name1 == name2:
         return True
+
+    def parse_rel(n: str):
+        for s in FAMILY_RELATION_SUFFIXES:
+            if n.endswith(s):
+                prefix = n[:-len(s)]
+                if prefix.endswith("的"):
+                    prefix = prefix[:-1]
+                return prefix, s
+        return None, None
+
+    base1, rel1 = parse_rel(name1)
+    base2, rel2 = parse_rel(name2)
+
+    # 1. 跨角色安全红线：角色本身与该角色的家属关系称谓绝对不能合并
+    if (rel1 and not rel2 and (name2 == base1 or name2.endswith(base1))) or \
+       (rel2 and not rel1 and (name1 == base2 or name1.endswith(base2))):
+        return False
+
+    # 2. 关系代称自动归并（如 久留美母亲 / 久留美的母亲 / 母亲）
+    if rel1 and rel2:
+        is_same_rel = (rel1 in ("母亲", "妈妈") and rel2 in ("母亲", "妈妈")) or \
+                      (rel1 in ("父亲", "爸爸") and rel2 in ("父亲", "爸爸")) or \
+                      (rel1 == rel2)
+        if is_same_rel:
+            if not base1 or not base2:
+                return True
+            if base1 == base2 or base1.endswith(base2) or base2.endswith(base1):
+                return True
+
+    # 3. 称谓别名（如 高木 与 高木老师）
     shorter, longer = (name1, name2) if len(name1) <= len(name2) else (name2, name1)
     for suffix in CHARACTER_TITLE_SUFFIXES:
         if longer == shorter + suffix:
             return True
+
+    # 4. 全名与简称自动归并（如 福贺久留美 与 久留美）
+    if not rel1 and not rel2:
+        if len(shorter) >= 2 and longer.endswith(shorter):
+            surname_len = len(longer) - len(shorter)
+            if 1 <= surname_len <= 2:
+                return True
+
     return False
+
+
+def is_character_name_alias(name1: str, name2: str) -> bool:
+    """向后兼容别名函数，委托给 can_merge_character_names。"""
+    return can_merge_character_names(name1, name2)
 
 
 def can_merge_ability_names(name1: str, name2: str) -> bool:
@@ -346,6 +397,144 @@ def can_merge_location_names(name1: str, name2: str) -> bool:
         if org1 != org2:
             return False
         return calculate_char_overlap_ratio(detail1, detail2) >= 0.60
+    return False
+
+
+def can_merge_item_names(name1: str, name2: str) -> bool:
+    """判断两个物品名称是否允许归并。
+
+    物品的归并必须名称核心词一致（比如“电脑”和“笔记本电脑”共享“电脑”，“书包”和“学生书包”共享“书包”），
+    不能只因为共享一个“书”字就合并（如“FX超入门指导书”与“书包”禁止合并）。
+    规则：去除修饰词后的核心名词相同，或者子串重合度 >= 80%（核心词无冲突）。
+    """
+    if name1 == name2:
+        return True
+    clean1 = re.sub(r'[\(（].*?[\)）]', '', name1).strip()
+    clean2 = re.sub(r'[\(（].*?[\)）]', '', name2).strip()
+    if clean1 == clean2 and clean1:
+        return True
+
+    # 常见物品前缀修饰词
+    prefixes = ['笔记本', '台式', '平板', '智能', '学生', '双肩', '单肩', '外置', '手提', '随身', '便携', '电子', '纸质']
+    core1 = clean1
+    for p in prefixes:
+        if core1.startswith(p) and len(core1) > len(p):
+            core1 = core1[len(p):]
+            break
+    core2 = clean2
+    for p in prefixes:
+        if core2.startswith(p) and len(core2) > len(p):
+            core2 = core2[len(p):]
+            break
+    if core1 == core2 and len(core1) >= 2:
+        return True
+
+    # 包含关系或重合度 >= 80%
+    overlap = calculate_char_overlap_ratio(name1, name2)
+    if overlap >= 0.80:
+        # 防冲突：如果一个包含“书包”，另一个包含“书/书籍/指导书”但不是“书包”，禁止合并
+        if ('书包' in name1 and '书包' not in name2) or ('书包' in name2 and '书包' not in name1):
+            return False
+        return True
+
+    return False
+
+
+_CONCEPT_SEMANTIC_GROUPS = {
+    'time': {'关键时间', '时间点', '时间', '年份', '日期', '历史事件'},
+    'money': {'关键金额', '金额', '债务', '欠款', '资金', '损益'},
+    'mechanism': {'金融交易', '交易机制', '金融概念', '金融术语', '交易规则', '机制', '规则设定'},
+    'psychology': {'心理状态', '心理', '精神状态', '情绪'},
+    'society': {'社会现象', '社会问题', '现象'},
+}
+
+
+def get_concept_semantic_type(t: str | None) -> str:
+    """归一化概念语义类型。"""
+    if not t:
+        return ''
+    t_str = str(t).strip()
+    for grp, members in _CONCEPT_SEMANTIC_GROUPS.items():
+        if t_str in members or any(m in t_str for m in members):
+            return grp
+    return t_str
+
+
+def can_merge_concept_names(name1: str, name2: str, type1: str = '', type2: str = '') -> bool:
+    """判断两个概念是否允许归并。
+
+    概念类的归并必须语义类型相同（都是债务金额，或都是时间点），不能只因为共享数字就合并。
+    例如：“2000万日元”（关键金额）和“2008年10月24日”（关键时间）禁止合并。
+    规则：type 字段相同（或语义大类一致），且名称核心词一致。
+    """
+    if name1 == name2:
+        return True
+
+    # 1. 语义类型必须一致（如果两方均提供）
+    st1 = get_concept_semantic_type(type1)
+    st2 = get_concept_semantic_type(type2)
+    if st1 and st2 and st1 != st2:
+        return False
+
+    # 1.1 时间/日期类概念专属拦截规则
+    # 若包含年份、月份、日期的模式，严格检查时间一致性与时间粒度
+    y1 = re.findall(r'(\d{4})年', name1)
+    y2 = re.findall(r'(\d{4})年', name2)
+    m1 = re.findall(r'(\d{1,2})月', name1)
+    m2 = re.findall(r'(\d{1,2})月', name2)
+    d1 = re.findall(r'(\d{1,2})[日号]', name1)
+    d2 = re.findall(r'(\d{1,2})[日号]', name2)
+
+    has_date1 = bool(y1 or m1 or d1)
+    has_date2 = bool(y2 or m2 or d2)
+    if has_date1 or has_date2:
+        # 若两名称均包含年份且不一致，禁止合并
+        if y1 and y2 and y1 != y2:
+            return False
+        # 若两名称均包含月份且不一致，禁止合并
+        if m1 and m2 and m1 != m2:
+            return False
+        # 若两名称均包含日期且不一致，禁止合并
+        if d1 and d2 and d1 != d2:
+            return False
+        # 粒度不同禁止合并（如：一方有完整日期，另一方只有年月；或一方有月份，另一方没有）
+        if bool(d1) != bool(d2) or bool(m1) != bool(m2) or bool(y1) != bool(y2):
+            return False
+
+    # 2. 剥离括号后的核心名相同
+    clean1 = re.sub(r'[\(（].*?[\)）]', '', name1).strip()
+    clean2 = re.sub(r'[\(（].*?[\)）]', '', name2).strip()
+    if clean1 == clean2 and clean1:
+        return True
+
+    # 3. 去除核心修饰后缀后一致（如“2000万日元欠款”与“2000万日元”，“雷曼危机”与“雷曼事件”）
+    suffixes = ['欠款', '债务', '亏损', '借款', '损失', '事件', '危机']
+    c1 = clean1
+    for s in suffixes:
+        if c1.endswith(s) and len(c1) > len(s):
+            c1 = c1[:-len(s)]
+            break
+    c2 = clean2
+    for s in suffixes:
+        if c2.endswith(s) and len(c2) > len(s):
+            c2 = c2[:-len(s)]
+            break
+    if c1 == c2 and len(c1) >= 2:
+        return True
+
+    # 4. 限定性词汇防吞噬（如“FX开户年龄限制”不能并入“FX”）
+    restrictive_words = ['限制', '规则', '流程', '指南', '操作', '条件', '账户', '平台']
+    if any(rw in name1 for rw in restrictive_words) != any(rw in name2 for rw in restrictive_words):
+        return False
+
+    # 5. 字符 Jaccard 重合度 >= 60%
+    s1 = set(clean1)
+    s2 = set(clean2)
+    if s1 and s2:
+        jaccard = len(s1 & s2) / max(len(s1), len(s2))
+        if jaccard >= 0.60:
+            return True
+
     return False
 
 
@@ -3131,10 +3320,11 @@ class InsightDerivedRepository:
 
             # 2. 统计本章实体词频与出现页码
             raw_stats = {
-                "characters": defaultdict(lambda: {"count": 0, "pages": []}),
-                "items": defaultdict(lambda: {"count": 0, "pages": []}),
-                "abilities": defaultdict(lambda: {"count": 0, "pages": []}),
-                "locations": defaultdict(lambda: {"count": 0, "pages": []}),
+                "characters": defaultdict(lambda: {"count": 0, "pages": [], "types": []}),
+                "items": defaultdict(lambda: {"count": 0, "pages": [], "types": []}),
+                "abilities": defaultdict(lambda: {"count": 0, "pages": [], "types": []}),
+                "locations": defaultdict(lambda: {"count": 0, "pages": [], "types": []}),
+                "concepts": defaultdict(lambda: {"count": 0, "pages": [], "types": []}),
             }
             for p in pages_analysis:
                 pn = p.get("page_number", 0)
@@ -3145,6 +3335,9 @@ class InsightDerivedRepository:
                             if name:
                                 raw_stats[cat][name]["count"] += 1
                                 raw_stats[cat][name]["pages"].append(pn)
+                                it_type = it.get("type")
+                                if it_type and str(it_type).strip():
+                                    raw_stats[cat][name]["types"].append(str(it_type).strip())
 
             # 3. 解析 alias_seed_config
             seed = dict(alias_seed_config or {})
@@ -3308,16 +3501,16 @@ class InsightDerivedRepository:
 
                             # 分类别定制归并判定：
                             if cat == "characters":
-                                # 角色归并：仅允许明确称谓别名（如 "高木" 与 "高木老师"）或 alias_seed
-                                if is_character_name_alias(name, c_name):
+                                # 角色归并：支持全名/简称、关系代称、称谓别名，禁止跨角色或同姓不同人误并
+                                if can_merge_character_names(name, c_name):
                                     target_id = existing_ent["entity_id"]
-                                    merge_rule_hit = "title_suffix_alias"
+                                    merge_rule_hit = "character_alias_merge"
                                     merge_confidence = "high"
                                     break
                                 for ex_alias in c_aliases:
-                                    if is_character_name_alias(name, ex_alias):
+                                    if can_merge_character_names(name, ex_alias):
                                         target_id = existing_ent["entity_id"]
-                                        merge_rule_hit = "title_suffix_alias"
+                                        merge_rule_hit = "character_alias_merge"
                                         merge_confidence = "high"
                                         break
                                 if target_id:
@@ -3355,8 +3548,44 @@ class InsightDerivedRepository:
                                 if target_id:
                                     break
 
+                            elif cat == "items":
+                                # 物品归并：必须核心名词一致，不能只因共享单字（如“书”）就合并；要求去修饰词后核心名词相同，或重合度 >= 80%
+                                if can_merge_item_names(name, c_name):
+                                    target_id = existing_ent["entity_id"]
+                                    merge_rule_hit = "item_core_match"
+                                    merge_confidence = "high"
+                                    break
+                                for ex_alias in c_aliases:
+                                    if can_merge_item_names(name, ex_alias):
+                                        target_id = existing_ent["entity_id"]
+                                        merge_rule_hit = "item_core_match"
+                                        merge_confidence = "high"
+                                        break
+                                if target_id:
+                                    break
+
+                            elif cat == "concepts":
+                                # 概念归并：必须语义类型相同且名称核心词一致，禁止仅因共享数字（如2000万与2008年）合并
+                                cur_types = info.get("types", [])
+                                cur_type = cur_types[0] if cur_types else ""
+                                exist_types = existing_ent.get("concept_types", [])
+                                exist_type = exist_types[0] if exist_types else ""
+                                if can_merge_concept_names(name, c_name, cur_type, exist_type):
+                                    target_id = existing_ent["entity_id"]
+                                    merge_rule_hit = "concept_semantic_match"
+                                    merge_confidence = "high"
+                                    break
+                                for ex_alias in c_aliases:
+                                    if can_merge_concept_names(name, ex_alias, cur_type, exist_type):
+                                        target_id = existing_ent["entity_id"]
+                                        merge_rule_hit = "concept_semantic_match"
+                                        merge_confidence = "high"
+                                        break
+                                if target_id:
+                                    break
+
                             else:
-                                # 其他类别（如 items 等通用规则）：
+                                # 其他类别（通用兜底规则）：
                                 # 规则 2.1: 子串重合（同类别内两个名称共享 60% 以上字符）
                                 overlap = calculate_char_overlap_ratio(name, c_name)
                                 if overlap >= 0.60:
@@ -3401,6 +3630,11 @@ class InsightDerivedRepository:
                         orig = ent.setdefault("original_names", [])
                         if name not in orig:
                             orig.append(name)
+                        if cat == "concepts" and info.get("types"):
+                            concept_types = ent.setdefault("concept_types", [])
+                            for ct in info["types"]:
+                                if ct not in concept_types:
+                                    concept_types.append(ct)
 
                         # 如果当前名称是新别名，则挂入 aliases
                         if name != ent["canonical_name"] and name not in ent["aliases"]:
@@ -3461,7 +3695,8 @@ class InsightDerivedRepository:
                                 "valid_chapters": [chapter_id],
                                 "aliases": [],
                                 "original_names": [name],
-                                "alias_details": {}
+                                "alias_details": {},
+                                "concept_types": list(info.get("types", [])) if cat == "concepts" else [],
                             }
                             canonical_by_id[final_slug_id] = ent
                             canonical_by_name[(cat, name)] = final_slug_id
