@@ -325,7 +325,7 @@ def get_run_extra_entities(
         if isinstance(extra_entities, (list, tuple)):
             return tuple(str(x) for x in extra_entities if isinstance(x, str) and x.strip())
     elif knowledge_mode:
-        return ("characters", "locations", "abilities", "items")
+        return ("characters", "locations", "abilities", "items", "concepts")
     return ()
 
 

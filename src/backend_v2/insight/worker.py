@@ -84,13 +84,16 @@ class ProviderInsightAlgorithms:
         extra_entities = list(analysis_cfg.get("extraEntities") or config.get("extraEntities") or [])
         knowledge_mode = bool(analysis_cfg.get("knowledgeMode") or config.get("knowledgeMode") or extra_entities)
         if knowledge_mode and not extra_entities:
-            extra_entities = ["characters", "locations", "abilities", "items"]
+            extra_entities = ["characters", "locations", "abilities", "items", "concepts"]
 
         extra_template_parts = ""
         if extra_entities:
             parts = []
             for ent in extra_entities:
-                parts.append(f'"{ent}":[{{"name":"..."}}]')
+                if ent == "concepts":
+                    parts.append('"concepts":[{"name":"...","type":"...","description":"..."}]')
+                else:
+                    parts.append(f'"{ent}":[{{"name":"..."}}]')
             extra_template_parts = "," + ",".join(parts)
 
         page_templates = ",".join(
@@ -124,10 +127,11 @@ class ProviderInsightAlgorithms:
                 f"必须提取的实体字段：{', '.join(extra_entities)}。\n"
                 "每个实体列表必须是对象数组，且每个对象必须包含非空的 'name' 字段。\n"
                 "实体分类与边界定义（严禁混淆）：\n"
-                "  - items（物品）：仅收录可随身携带、可移动、具备独立实体属性的具体物品/道具/咒物（如：手机、特级咒物、宿傩之指、硬币）。严禁将建筑物、房间、固定设施、家具或环境结构归入 items！\n"
+                "  - items（物品）：仅收录可随身携带、可移动、具备独立实体属性的具体物品/道具/书籍（如：电脑、公文包、全家福照片、FX交易入门书、手机、特级咒物）。严禁将建筑物、房间、固定设施、家具、环境结构或抽象概念/数字金额归入 items！\n"
                 "  - locations（地点）：收录场景发生的具体地理位置、建筑、房间、固定设施或环境结构。"
                 "【地点粒度与命名规则（严格执行）】：同一场景只保留一个条目，采用完整层级路径命名（例如：'杉泽第三高中·家庭科准备室'、'杉泽第三高中·操场百叶箱'），严禁拆分成'学校'和'房间'两条独立记录！同一场景在连续页面中必须保持完全一致的命名与粒度。\n"
-                "  - abilities（能力/招式）：收录明确施展或提及的技能、术式、咒术、超常能力（如：十种影法术·蟾蜍）。\n"
+                "  - abilities（能力/招式）：收录明确施展或提及的技能、术式、咒术、超常能力（如：十种影法术·蟾蜍）。严禁将金融机制、现实技能或抽象概念归入 abilities！\n"
+                "  - concepts（概念/设定）：作品特有的抽象概念——交易机制、心理状态、社会现象、专业术语、规则设定、关键数字/金额（如：FX、杠杆、爆仓、追加保证金、2000万日元欠款、雷曼危机）。每个 concept 是 {\"name\": \"...\", \"type\": \"...\", \"description\": \"...\"}，type 字段开放，由模型自行判断（如：交易机制、金融术语、心理状态、关键金额、历史事件等）。明确要求：FX、杠杆、爆仓、欠款金额、金融危机等，必须放入 concepts，绝对不要放入 items 或 abilities！\n"
                 "  - 确定性原则：实体归属不确定或边界模糊时，宁可留空 []，绝不要归入错误的字段中。\n"
                 "强制判定：只要本页有角色、对话、战斗或能力展示，即使不是重大转折，也必须提取实体。只有纯风景页或纯过渡页才允许返回空列表 []。\n"
             )
@@ -192,6 +196,7 @@ class InsightAnalysisWorkerService:
         algorithms: InsightAlgorithms | None = None,
     ) -> None:
         self.jobs = jobs
+        self.engine = engine
         self.repository = InsightRepository(engine)
         self.storage = AssetStorageService(data_root, engine)
         self.credentials = SettingsRepository(engine)

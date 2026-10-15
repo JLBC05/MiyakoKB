@@ -110,7 +110,7 @@ DEFAULT_INSIGHT_SETTINGS: dict[str, object] = {
             "architecturePreset": "standard",
             "customLayers": [],
             "knowledgeMode": False,
-            "extraEntities": ["characters", "locations", "abilities", "items"],
+            "extraEntities": ["characters", "locations", "abilities", "items", "concepts"],
             "slugMode": "pinyin",
         }
     },

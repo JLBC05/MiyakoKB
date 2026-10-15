@@ -992,7 +992,7 @@ class SettingsResolver:
         pages_per_batch = batch["pagesPerBatch"]
         context_batch_count = batch["contextBatchCount"]
         knowledge_mode = batch.get("knowledgeMode", False)
-        extra_entities = batch.get("extraEntities", ["characters", "locations", "abilities", "items"] if knowledge_mode else [])
+        extra_entities = batch.get("extraEntities", ["characters", "locations", "abilities", "items", "concepts"] if knowledge_mode else [])
         slug_mode = batch.get("slugMode", "pinyin")
         if isinstance(slug_mode, str):
             slug_mode = slug_mode.strip().lower()

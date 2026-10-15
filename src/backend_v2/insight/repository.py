@@ -3000,7 +3000,7 @@ class InsightRepository:
                     "analysis page source checksum",
                 ),
                 run_id=_required_string(result["run_id"], "analysis page result run id"),
-                connection=connection,
+                connection=self.engine,
             )
             stale_reasons = []
             if analysis["source_asset_id"] != source_asset_id:
