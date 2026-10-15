@@ -708,6 +708,7 @@ def _validate_insight(payload: dict[str, Any]) -> None:
         "customLayers",
         "knowledgeMode",
         "extraEntities",
+        "slugMode",
     }
     unknown_batch_keys = set(batch) - allowed_batch_keys
     if unknown_batch_keys:
@@ -729,6 +730,9 @@ def _validate_insight(payload: dict[str, Any]) -> None:
         for ent in batch["extraEntities"]:
             if not isinstance(ent, str) or not ent.strip():
                 raise ValueError("insight extraEntities entries must be non-empty strings")
+    if "slugMode" in batch:
+        if not isinstance(batch["slugMode"], str) or batch["slugMode"].strip().lower() not in {"pinyin", "romanized", "english"}:
+            raise ValueError("insight slugMode must be 'pinyin' or 'romanized'")
     _integer(
         batch["pagesPerBatch"],
         "insight.analysis.batch.pagesPerBatch",

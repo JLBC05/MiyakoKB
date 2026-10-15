@@ -111,6 +111,7 @@ DEFAULT_INSIGHT_SETTINGS: dict[str, object] = {
             "customLayers": [],
             "knowledgeMode": False,
             "extraEntities": ["characters", "locations", "abilities", "items"],
+            "slugMode": "pinyin",
         }
     },
     "vlm": {"provider": "gemini"},

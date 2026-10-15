@@ -48,6 +48,8 @@ ALLOWED_COMMAND_KEYS = frozenset(
         "scope",
         "chapterIds",
         "pageIds",
+        "slugMode",
+        "slug_mode",
     }
 )
 
@@ -122,6 +124,10 @@ class InsightAnalysisCommandService:
             book_id=book_id,
             scope=scope,
         )
+        if "slugMode" in normalized:
+            config["slugMode"] = normalized["slugMode"]
+            if isinstance(config.get("analysis"), dict):
+                config["analysis"]["slugMode"] = normalized["slugMode"]
         validate_insight_job_requirements(config, scope=scope)
         config["runId"] = run_id
         config["bookId"] = book_id
@@ -437,12 +443,21 @@ def normalize_analysis_command(command: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("chapter scope does not accept page selectors")
     if scope == "page" and chapter_ids:
         raise ValueError("page scope does not accept chapter selectors")
-    return {
+    result: dict[str, Any] = {
         "bookId": book_id,
         "scope": scope,
         "chapterIds": chapter_ids,
         "pageIds": page_ids,
     }
+    slug_mode = command.get("slugMode") or command.get("slug_mode")
+    if slug_mode is not None:
+        if not isinstance(slug_mode, str) or slug_mode.strip().lower() not in {"pinyin", "romanized", "english"}:
+            raise ValueError("slugMode must be 'pinyin' or 'romanized'")
+        val = slug_mode.strip().lower()
+        if val == "english":
+            val = "romanized"
+        result["slugMode"] = val
+    return result
 
 
 def _ids(

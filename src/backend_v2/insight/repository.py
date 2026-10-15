@@ -516,7 +516,32 @@ class InsightRepository:
                 raise InsightConflict(
                     "cannot re-initialize or update config_json for run with existing results"
                 )
+            raise InsightConflict(
+                "cannot re-initialize or overwrite config_json for existing analysis run: config_json is immutable"
+            )
         now = utcnow()
+        config_to_store = dict(config)
+        # analysis.slugMode 为唯一权威来源
+        analysis_part = config_to_store.get("analysis")
+        slug_mode = None
+        if isinstance(analysis_part, Mapping):
+            slug_mode = analysis_part.get("slugMode") or analysis_part.get("slug_mode")
+        if not slug_mode:
+            slug_mode = config_to_store.get("slugMode") or config_to_store.get("slug_mode")
+        if not slug_mode:
+            slug_mode = "pinyin"
+        slug_mode = str(slug_mode).strip().lower()
+        if slug_mode == "english":
+            slug_mode = "romanized"
+        if slug_mode not in {"pinyin", "romanized"}:
+            slug_mode = "pinyin"
+            
+        # 确保 analysis.slugMode 作为权威写入，并保持根层别名与其完全一致
+        if not isinstance(analysis_part, dict):
+            config_to_store["analysis"] = dict(analysis_part) if isinstance(analysis_part, Mapping) else {}
+        config_to_store["analysis"]["slugMode"] = slug_mode
+        config_to_store["slugMode"] = slug_mode
+
         connection.execute(
             insert(analysis_runs).values(
                 id=run_id,
@@ -525,7 +550,7 @@ class InsightRepository:
                 job_id=job_id,
                 scope=scope,
                 status="staging",
-                config_json=_json(dict(config)),
+                config_json=_json(config_to_store),
                 target_count=len(targets),
                 success_count=0,
                 failed_count=0,
@@ -533,23 +558,82 @@ class InsightRepository:
                 updated_at=now,
             )
         )
-        connection.execute(
-            insert(analysis_run_targets),
-            [
-                {
-                    "run_id": run_id,
-                    "ordinal": index,
-                    "page_id": target["page_id"],
-                    "chapter_id": target["chapter_id"],
-                    "source_asset_id": target["source_asset_id"],
-                    "source_checksum": target["source_checksum"],
-                    "page_id_snapshot": target["page_id"],
-                    "page_number_snapshot": target["page_number"],
-                    "status": "pending",
-                }
-                for index, target in enumerate(targets, start=1)
-            ],
-        )
+        if targets:
+            connection.execute(
+                insert(analysis_run_targets),
+                [
+                    {
+                        "run_id": run_id,
+                        "ordinal": index,
+                        "page_id": target["page_id"],
+                        "chapter_id": target["chapter_id"],
+                        "source_asset_id": target["source_asset_id"],
+                        "source_checksum": target["source_checksum"],
+                        "page_id_snapshot": target["page_id"],
+                        "page_number_snapshot": target["page_number"],
+                        "status": "pending",
+                    }
+                    for index, target in enumerate(targets, start=1)
+                ],
+            )
+
+    @staticmethod
+    def get_run_slug_mode(
+        arg1: Any,
+        arg2: Any,
+    ) -> str:
+        """Read slugMode / slug_mode configuration from analysis_runs.config_json for the specified run."""
+        if isinstance(arg1, str):
+            run_id = arg1
+            target = arg2
+        else:
+            target = arg1
+            run_id = arg2
+
+        if not isinstance(run_id, str) or not run_id:
+            return "pinyin"
+        stmt = select(analysis_runs.c.config_json).where(analysis_runs.c.id == run_id)
+        if isinstance(target, Engine):
+            with target.connect() as conn:
+                raw_json = conn.execute(stmt).scalar_one_or_none()
+        elif hasattr(target, "execute"):
+            raw_json = target.execute(stmt).scalar_one_or_none()
+        else:
+            return "pinyin"
+
+        if raw_json is None:
+            return "pinyin"
+
+        if isinstance(raw_json, (bytes, bytearray)):
+            raw_json = raw_json.decode("utf-8")
+        if isinstance(raw_json, str):
+            try:
+                config = json.loads(raw_json)
+            except Exception:
+                return "pinyin"
+        elif isinstance(raw_json, Mapping):
+            config = raw_json
+        else:
+            return "pinyin"
+
+        analysis_cfg = config.get("analysis")
+        slug_mode = None
+        if isinstance(analysis_cfg, Mapping):
+            slug_mode = analysis_cfg.get("slugMode") or analysis_cfg.get("slug_mode")
+        if not slug_mode:
+            slug_mode = config.get("slugMode") or config.get("slug_mode")
+
+        if isinstance(slug_mode, str) and slug_mode.strip():
+            mode = slug_mode.strip().lower()
+            if mode == "english":
+                mode = "romanized"
+            if mode in {"pinyin", "romanized"}:
+                return mode
+        return "pinyin"
+
+    def get_slug_mode(self, run_id: str) -> str:
+        """Instance helper to read slug_mode for a run."""
+        return self.get_run_slug_mode(self.engine, run_id)
 
     def run_target(
         self,
@@ -3979,3 +4063,7 @@ class InsightRepository:
                 _required_datetime(row["updated_at"], "note updatedAt")
             ),
         }
+
+
+get_run_slug_mode = InsightRepository.get_run_slug_mode
+

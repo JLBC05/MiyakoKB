@@ -993,6 +993,15 @@ class SettingsResolver:
         context_batch_count = batch["contextBatchCount"]
         knowledge_mode = batch.get("knowledgeMode", False)
         extra_entities = batch.get("extraEntities", ["characters", "locations", "abilities", "items"] if knowledge_mode else [])
+        slug_mode = batch.get("slugMode", "pinyin")
+        if isinstance(slug_mode, str):
+            slug_mode = slug_mode.strip().lower()
+            if slug_mode == "english":
+                slug_mode = "romanized"
+            if slug_mode not in {"pinyin", "romanized"}:
+                slug_mode = "pinyin"
+        else:
+            slug_mode = "pinyin"
 
         vlm_section = provider("insight_vlm", "vlm")
         chat_settings = dict(effective["chat"])
@@ -1044,7 +1053,9 @@ class SettingsResolver:
                 "layers": layers,
                 "knowledgeMode": knowledge_mode,
                 "extraEntities": list(extra_entities),
+                "slugMode": slug_mode,
             },
+            "slugMode": slug_mode,
             **sections,
             "prompts": frozen_prompts,
             "settingsSnapshot": {

@@ -5767,3 +5767,151 @@ def test_qa_http_response_streams_without_creating_job_history(
     assert "event: error" in empty_payload
     assert "QA provider returned an empty answer" in empty_payload
     assert "event: done" not in empty_payload
+
+
+def test_insight_slug_mode_written_to_analysis_runs_config_json(insight_platform):
+    platform = insight_platform
+    from copy import deepcopy
+    from src.backend_v2.insight.derived import InsightDerivedRepository, to_romanized_slug
+    from src.backend_v2.insight.page_schema import get_run_slug_mode as page_schema_get_slug_mode
+    from src.backend_v2.insight.repository import InsightRepository, get_run_slug_mode
+    from src.backend_v2.settings.resolver import SettingsResolver
+    from src.backend_v2.settings.validation import _validate_insight as validate_insight_settings
+    from src.backend_v2.auth.ownership import effective_owner_id
+    from src.backend_v2.storage.defaults import DEFAULT_INSIGHT_SETTINGS
+
+    # 1. Validation test
+    valid_settings = deepcopy(DEFAULT_INSIGHT_SETTINGS)
+    valid_settings["analysis"]["batch"]["slugMode"] = "romanized"
+    validate_insight_settings(valid_settings)
+
+    invalid_settings = deepcopy(DEFAULT_INSIGHT_SETTINGS)
+    invalid_settings["analysis"]["batch"]["slugMode"] = "japanese"
+    with pytest.raises(ValueError, match="insight slugMode must be 'pinyin' or 'romanized'"):
+        validate_insight_settings(invalid_settings)
+
+    # 2. SettingsResolver test
+    with platform["engine"].begin() as conn:
+        conn.execute(
+            update(app_settings)
+            .where(app_settings.c.domain == "insight")
+            .values(payload_json=json.dumps(valid_settings))
+        )
+    resolver = SettingsResolver(platform["engine"])
+    resolved = resolver.resolve_insight(book_id=platform["book"]["id"], scope="full")
+    assert resolved["slugMode"] == "romanized"
+    assert resolved["analysis"]["slugMode"] == "romanized"
+
+    # 3. Insert run and verify config_json
+    run_id_pinyin = str(uuid.uuid4())
+    job_id_pinyin = str(uuid.uuid4())
+    now = utcnow()
+    with platform["engine"].begin() as conn:
+        conn.execute(
+            jobs.insert().values(
+                id=job_id_pinyin,
+                owner_user_id=effective_owner_id(),
+                kind="insight_analysis",
+                status="running",
+                config_json="{}",
+                latest_progress_json="{}",
+                target_display_json="{}",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        InsightRepository.insert_run(
+            conn,
+            run_id=run_id_pinyin,
+            job_id=job_id_pinyin,
+            book_id=platform["book"]["id"],
+            scope="full",
+            config={"slugMode": "pinyin", "analysis": {"slugMode": "pinyin"}},
+            targets=[],
+        )
+
+    # Verify analysis_runs.config_json content in database
+    with platform["engine"].connect() as conn:
+        row = conn.execute(
+            select(analysis_runs.c.config_json).where(analysis_runs.c.id == run_id_pinyin)
+        ).scalar_one()
+        stored_cfg = json.loads(row)
+        assert stored_cfg["slugMode"] == "pinyin"
+        assert stored_cfg["analysis"]["slugMode"] == "pinyin"
+
+    # Verify get_run_slug_mode
+    assert InsightRepository.get_run_slug_mode(platform["engine"], run_id_pinyin) == "pinyin"
+    assert InsightRepository.get_run_slug_mode(run_id_pinyin, platform["engine"]) == "pinyin"
+    assert get_run_slug_mode(platform["engine"], run_id_pinyin) == "pinyin"
+    assert page_schema_get_slug_mode(run_id_pinyin, platform["engine"]) == "pinyin"
+
+    # 4. Insert another run with romanized slugMode
+    run_id_romanized = str(uuid.uuid4())
+    job_id_romanized = str(uuid.uuid4())
+    with platform["engine"].begin() as conn:
+        conn.execute(
+            jobs.insert().values(
+                id=job_id_romanized,
+                owner_user_id=effective_owner_id(),
+                kind="insight_analysis",
+                status="completed",
+                config_json="{}",
+                latest_progress_json="{}",
+                target_display_json="{}",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        InsightRepository.insert_run(
+            conn,
+            run_id=run_id_romanized,
+            job_id=job_id_romanized,
+            book_id=platform["book"]["id"],
+            scope="full",
+            config={"slugMode": "romanized"},
+            targets=[],
+        )
+
+    with platform["engine"].connect() as conn:
+        row_ro = conn.execute(
+            select(analysis_runs.c.config_json).where(analysis_runs.c.id == run_id_romanized)
+        ).scalar_one()
+        stored_ro_cfg = json.loads(row_ro)
+        assert stored_ro_cfg["slugMode"] == "romanized"
+        assert stored_ro_cfg["analysis"]["slugMode"] == "romanized"
+
+    assert get_run_slug_mode(platform["engine"], run_id_romanized) == "romanized"
+
+    # 5. Verify derived.py align_entities inherits slug_mode from analysis_runs via run_id
+    derived_repo = InsightDerivedRepository(platform["engine"])
+    pages_analysis = [
+        {
+            "page_id": platform["page_ids"][0],
+            "page_number": 1,
+            "characters": [{"name": "未知测试角色"}],
+            "items": [{"name": "未知测试道具"}],
+        }
+    ]
+
+    # Test align with run_id_romanized -> unmapped entities should get 'romanized_' prefix
+    res_ro = derived_repo.align_entities(
+        book_id=platform["book"]["id"],
+        chapter_id=platform["chapter"]["id"],
+        pages_analysis=pages_analysis,
+        run_id=run_id_romanized,
+    )
+    assert res_ro["payload"]["slug_mode"] == "romanized"
+    ent_char = next(e for e in res_ro["payload"]["canonical_entities"] if e["canonical_name"] == "未知测试角色")
+    assert "_romanized_" in ent_char["entity_id"]
+
+    # Test list_pinyin_entities filtering
+    ro_ents = derived_repo.list_pinyin_entities(book_id=platform["book"]["id"], mode="romanized")
+    assert any(e["canonical_name"] == "未知测试角色" for e in ro_ents)
+
+    # Test list_pinyin_entities default multi-mode return
+    grouped_ents = derived_repo.list_pinyin_entities(book_id=platform["book"]["id"])
+    assert isinstance(grouped_ents, dict)
+    assert "pinyin" in grouped_ents
+    assert "romanized" in grouped_ents
+    assert any(e["canonical_name"] == "未知测试角色" for e in grouped_ents["romanized"])
+

@@ -36,12 +36,20 @@
    - 核心角色 ID 100% 保持稳定：虎杖悠仁 (`character_itadori_yuji`)、伏黑惠 (`character_fushiguro_megumi`)、五条悟 (`character_gojo_satoru`)、钉崎野蔷薇 (`character_kugisaki_nobara`)、两面宿傩 (`character_ryomen_sukuna`)。
    - 自动归并记录完整追踪（累计记录 44 次决策），`pinyin_` 实体通过自动归并从 23 个大幅缩减至 16 个。
 
+6. **`SLUG_MODE` 写入 `analysis_runs.config_json` 与全链路贯通**:
+   - **权威来源与收敛**: 确立 `analysis.slugMode` 为唯一权威来源，根层 `slugMode` 作为严格同步的向后兼容别名。合法枚举规范为 `"pinyin"` 与 `"romanized"`（同时兼容历史别名 `"english"`）。
+   - **默认配置与校验**: `DEFAULT_INSIGHT_SETTINGS` 默认包含 `"slugMode": "pinyin"`，`validation.py` 与 `resolver.py` 严格校验并解析 `slugMode`。
+   - **指令支持与持久化**: `InsightAnalysisCommandService` 支持通过 analysis command 指定 `slugMode`；`InsightRepository.insert_run` 将配置固化写入 `analysis_runs.config_json`。
+   - **安全提取接口**: 在 `repository.py` 与 `page_schema.py` 提供 `get_run_slug_mode` 工具函数，严格遵循 `AGENTS.md` 规范读取 `analysis.slugMode`。
+   - **对齐引擎联动与实体纯拼音化**: `derived.py` 的 `align_entities` 优先通过 `run_id` 继承权威 `slug_mode`；在拼音模式（`pinyin`）下生成不带冗余前缀的纯拼音 ID（如 `character_hu_zhang_you_ren`），消除历史残留的 `pinyin_` 杂质；`romanized` 模式下未映射实体回退并打上 `romanized_` 标记；`list_pinyin_entities` 与 `unmerge_alias` 完整适配。
+   - **全链路自动化测试与验证**:
+     * 单元测试 `test_insight_slug_mode_written_to_analysis_runs_config_json` 100% 通过。
+     * 第 1 话完整回测验证通过：`revision=1`, `entityCount=24`，产物 `slug_mode='pinyin'`，核心角色 ID 纯拼音化且 `_pinyin_` 残留数为 0。
+
 ---
 
 ### 2.2 进行中 (In Progress)
-- **`SLUG_MODE` 写入 `analysis_runs.config_json`**:
-   - 目前已在 `derived.py` 的 `to_romanized_slug` 方法中支持 `slug_mode` 参数（支持 `"pinyin"` 与 `"english"` 模式）。
-   - 当前已完成底层方法的参数兼容，下一步需要将其固化进入 `src/backend_v2/insight/repository.py` 的 `analysis_runs.config_json` 流程，使整书分析任务在初始化时即可声明此配置项。
+- 暂无进行中阻塞项，准备开展跨作品通用性测试。
 
 ---
 

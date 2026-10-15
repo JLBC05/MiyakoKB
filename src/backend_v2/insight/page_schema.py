@@ -329,6 +329,51 @@ def get_run_extra_entities(
     return ()
 
 
+def get_run_slug_mode(
+    run_id: str,
+    target: Connection | Engine,
+) -> str:
+    """Read slugMode / slug_mode configuration from analysis_runs.config_json for the specified run."""
+    if not isinstance(run_id, str) or not run_id:
+        return "pinyin"
+    stmt = select(analysis_runs.c.config_json).where(analysis_runs.c.id == run_id)
+    if isinstance(target, Engine):
+        with target.connect() as conn:
+            raw_json = conn.execute(stmt).scalar_one_or_none()
+    else:
+        raw_json = target.execute(stmt).scalar_one_or_none()
+
+    if raw_json is None:
+        return "pinyin"
+
+    if isinstance(raw_json, (bytes, bytearray)):
+        raw_json = raw_json.decode("utf-8")
+    if isinstance(raw_json, str):
+        try:
+            config = json.loads(raw_json)
+        except Exception:
+            return "pinyin"
+    elif isinstance(raw_json, Mapping):
+        config = raw_json
+    else:
+        return "pinyin"
+
+    analysis_cfg = config.get("analysis")
+    slug_mode = None
+    if isinstance(analysis_cfg, Mapping):
+        slug_mode = analysis_cfg.get("slugMode") or analysis_cfg.get("slug_mode")
+    if not slug_mode:
+        slug_mode = config.get("slugMode") or config.get("slug_mode")
+
+    if isinstance(slug_mode, str) and slug_mode.strip():
+        mode = slug_mode.strip().lower()
+        if mode == "english":
+            mode = "romanized"
+        if mode in {"pinyin", "romanized"}:
+            return mode
+    return "pinyin"
+
+
 def deserialize_page_analysis(
     payload: object,
     *,
