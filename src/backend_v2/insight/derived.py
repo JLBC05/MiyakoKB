@@ -201,29 +201,42 @@ def romanize_location_string(loc_str: str) -> str:
             roman_parts.append(cleaned)
     return "_".join(roman_parts) or "location_unknown"
 
-def to_romanized_slug(category: str, text: str, slug_map: Mapping[str, Mapping[str, str]] | None = None) -> str:
+def to_romanized_slug(
+    category: str,
+    text: str,
+    slug_map: Mapping[str, Mapping[str, str]] | None = None,
+    slug_mode: str = "pinyin",
+) -> str:
     """根据 category 和 text 生成 slug。
     
     规则：
     1. 地点优先走 romanize_location_string；
-    2. 命中 entity_slug_map 配置 → 返回正式罗马音/英文 slug；
-    3. 未命中 → 采用 pypinyin 生成拼音，并强制添加 'pinyin_' 显式前缀，以便人工识别补全。
+    2. "romanized" 模式：
+       - 优先命中 entity_slug_map 配置 → 返回正式罗马音/英文 slug；
+       - 未命中配置 → 回退并在 slug 中添加 'romanized_' 前缀供 list_pinyin_entities 提取审核。
+    3. "pinyin" 模式：
+       - 全量采用拼音格式生成 slug（如 'hu_zhang_you_ren'），不附加前缀。
     """
     if category == "locations":
         return romanize_location_string(text)
     
-    if slug_map:
-        cat_map = slug_map.get(category, {})
-        if text in cat_map:
-            return cat_map[text]
-    else:
-        # 尝试默认加载
-        default_map = load_entity_slug_map()
-        cat_map = default_map.get(category, {})
-        if text in cat_map:
-            return cat_map[text]
+    mode = (slug_mode or "pinyin").strip().lower()
+    if mode == "english":
+        mode = "romanized"
+    if mode not in {"pinyin", "romanized"}:
+        mode = "pinyin"
 
-    # 未命中配置，走 pypinyin 兜底，并强制加 'pinyin_' 标记
+    if mode == "romanized":
+        if slug_map:
+            cat_map = slug_map.get(category, {})
+            if text in cat_map:
+                return cat_map[text]
+        else:
+            default_map = load_entity_slug_map()
+            cat_map = default_map.get(category, {})
+            if text in cat_map:
+                return cat_map[text]
+
     pinyin_str = ""
     try:
         import pypinyin
@@ -249,7 +262,10 @@ def to_romanized_slug(category: str, text: str, slug_map: Mapping[str, Mapping[s
         slug = re.sub(r'_+', '_', "".join(res)).strip('_').lower()
         pinyin_str = slug or "entity"
 
-    return f"pinyin_{pinyin_str}"
+    if mode == "pinyin":
+        return pinyin_str
+
+    return f"romanized_{pinyin_str}"
 
 def calculate_confidence(best_freq: int, other_freqs: list[int]) -> str:
     if not other_freqs:
@@ -277,6 +293,60 @@ def calculate_char_overlap_ratio(str1: str, str2: str) -> float:
     if min_len == 0:
         return 0.0
     return len(common) / min_len
+
+
+CHARACTER_TITLE_SUFFIXES = ("老师", "同学", "前辈", "学长", "学姐", "会长", "校长", "爷爷", "奶奶", "队长", "医生", "大人")
+
+
+def is_character_name_alias(name1: str, name2: str) -> bool:
+    """判断两个角色名称是否为合法的角色别名（如 '高木' 与 '高木老师'）。
+    
+    禁止仅凭同姓或部分重合就合并不同角色（如 '虎杖倭助' 与 '虎杖悠仁'）。
+    """
+    if name1 == name2:
+        return True
+    shorter, longer = (name1, name2) if len(name1) <= len(name2) else (name2, name1)
+    for suffix in CHARACTER_TITLE_SUFFIXES:
+        if longer == shorter + suffix:
+            return True
+    return False
+
+
+def can_merge_ability_names(name1: str, name2: str) -> bool:
+    """判断两个能力名称是否允许归并。
+    
+    带有式神/分支后缀的能力，核心名不同禁止合并：
+    - '十种影法术·玉犬' 和 '十种影法术·蟾蜍' -> 禁止合并 (玉犬 != 蟾蜍)
+    - '十种影法术·玉犬' 和 '十种影法术·玉犬（黑）' -> 允许合并 (核心名均为玉犬)
+    """
+    if name1 == name2:
+        return True
+    core1 = name1.split("·")[-1] if "·" in name1 else name1
+    core2 = name2.split("·")[-1] if "·" in name2 else name2
+    clean1 = re.sub(r'[\(（].*?[\)）]', '', core1).strip()
+    clean2 = re.sub(r'[\(（].*?[\)）]', '', core2).strip()
+    return clean1 == clean2 and bool(clean1)
+
+
+def can_merge_location_names(name1: str, name2: str) -> bool:
+    """判断两个地点名称是否允许归并。
+    
+    包含层级分隔符 · 的地点，必须比较最末级具体位置名称，禁止仅凭上级机构名重合就合并：
+    - '杉泽第三高中·操场' 和 '杉泽第三高中·连接走廊天台' -> 禁止合并 (末级名称不同)
+    - '杉泽第三高中·教学楼走廊' 和 '杉泽第三高中·教学楼4楼走廊' -> 允许合并 (末级名称高度相似 >= 60%)
+    - '杉泽医院' 和 '杉泽第三高中·连接走廊天台' -> 禁止合并 (上级机构不同)
+    """
+    if name1 == name2:
+        return True
+    if "·" in name1 and "·" in name2:
+        parts1 = name1.split("·")
+        parts2 = name2.split("·")
+        org1, detail1 = "·".join(parts1[:-1]), parts1[-1]
+        org2, detail2 = "·".join(parts2[:-1]), parts2[-1]
+        if org1 != org2:
+            return False
+        return calculate_char_overlap_ratio(detail1, detail2) >= 0.60
+    return False
 
 
 def check_model_entity_similarity(
@@ -2965,6 +3035,7 @@ class InsightDerivedRepository:
         entity_slug_map_config: Mapping[str, Mapping[str, str]] | None = None,
         llm_callable: Callable[[str], str] | None = None,
         run_id: str | None = None,
+        slug_mode: str | None = None,
     ) -> dict[str, Any]:
         """Align entities extracted from chapter pages with existing canonical entities,
 
@@ -2976,6 +3047,31 @@ class InsightDerivedRepository:
 
         with self.engine.begin() as connection:
             self._assert_book_owned(connection, book_id)
+
+            # 解析 slug_mode: 优先使用显式传参，若为空且有 run_id 则从 analysis_runs.config_json.analysis.slugMode 读取（唯一权威来源）
+            effective_slug_mode = slug_mode
+            if not effective_slug_mode and run_id:
+                try:
+                    stmt = select(analysis_runs.c.config_json).where(analysis_runs.c.id == run_id)
+                    raw_cfg = connection.execute(stmt).scalar_one_or_none()
+                    if raw_cfg:
+                        if isinstance(raw_cfg, (bytes, bytearray)):
+                            raw_cfg = raw_cfg.decode("utf-8")
+                        cfg_obj = json.loads(raw_cfg) if isinstance(raw_cfg, str) else raw_cfg
+                        ac = cfg_obj.get("analysis", {}) if isinstance(cfg_obj, Mapping) else {}
+                        # analysis.slugMode 为唯一权威来源；根层仅做极弱兼容兜底
+                        effective_slug_mode = ac.get("slugMode") or ac.get("slug_mode")
+                        if not effective_slug_mode and isinstance(cfg_obj, Mapping):
+                            effective_slug_mode = cfg_obj.get("slugMode") or cfg_obj.get("slug_mode")
+                except Exception:
+                    pass
+            if not effective_slug_mode:
+                effective_slug_mode = "pinyin"
+            effective_slug_mode = str(effective_slug_mode).strip().lower()
+            if effective_slug_mode == "english":
+                effective_slug_mode = "romanized"
+            if effective_slug_mode not in {"pinyin", "romanized"}:
+                effective_slug_mode = "pinyin"
 
             # 1. 悲观行锁/乐观版本读取现有 active 产物
             select_query = (
@@ -3008,6 +3104,30 @@ class InsightDerivedRepository:
                     existing_auto_merge_log = list(existing_payload.get("auto_merge_log", []))
                 except Exception:
                     pass
+
+            # 若已有产物的 slug_mode 与当前 effective_slug_mode 不一致，或者处于 pinyin 模式但存在旧的 _pinyin_ 前缀实体：
+            # 执行旧数据平滑升级，将旧 ID 彻底替换为新模式下的合法 ID，杜绝新旧 ID 并存
+            if existing_canonical_entities:
+                old_artifact_slug_mode = existing_payload.get("slug_mode") if existing_artifact else None
+                should_refresh_ids = (
+                    (old_artifact_slug_mode and old_artifact_slug_mode != effective_slug_mode)
+                    or (effective_slug_mode == "pinyin" and any("_pinyin_" in ent.get("entity_id", "") for ent in existing_canonical_entities))
+                )
+                if should_refresh_ids:
+                    id_replacements = {}
+                    for ent in existing_canonical_entities:
+                        old_id = ent.get("entity_id", "")
+                        cat = ent.get("category", "")
+                        canon = ent.get("canonical_name", "")
+                        new_slug = to_romanized_slug(cat, canon, slug_map=slug_map, slug_mode=effective_slug_mode)
+                        new_id = f"{CATEGORY_PREFIX.get(cat, cat)}_{new_slug}"
+                        if new_id != old_id:
+                            id_replacements[old_id] = new_id
+                            ent["entity_id"] = new_id
+                    if id_replacements:
+                        for k, v in list(existing_alias_map.items()):
+                            if v in id_replacements:
+                                existing_alias_map[k] = id_replacements[v]
 
             # 2. 统计本章实体词频与出现页码
             raw_stats = {
@@ -3113,7 +3233,7 @@ class InsightDerivedRepository:
 
                     confidence = calculate_confidence(best_freq, other_freqs)
                     aliases = [m for m in members if m != canonical_name]
-                    slug = cl.get("slug") or to_romanized_slug(cat, canonical_name, slug_map=slug_map)
+                    slug = cl.get("slug") or to_romanized_slug(cat, canonical_name, slug_map=slug_map, slug_mode=effective_slug_mode)
                     expected_id = f"{CATEGORY_PREFIX[cat]}_{slug}"
 
                     existing_id = canonical_by_name.get((cat, canonical_name)) or (
@@ -3167,17 +3287,13 @@ class InsightDerivedRepository:
                         for a in aliases:
                             updated_alias_map[a] = expected_id
 
-                # 处理非聚类的独立实体，引入三条全自动归并规则
+                # 处理非聚类的独立实体，引入类别特定的受控自动归并规则
                 for name, info in raw_dict.items():
                     if name in processed_names:
                         continue
 
                     # 1) 精确命中已存在的 canonical_name 或 alias
                     target_id = canonical_by_name.get((cat, name)) or canonical_by_alias.get((cat, name))
-                    slug = to_romanized_slug(cat, name, slug_map=slug_map)
-                    slug_id = f"{CATEGORY_PREFIX[cat]}_{slug}"
-                    if not target_id and slug_id in canonical_by_id:
-                        target_id = slug_id
 
                     # 2) 自动归并规则探测（若未直接命中现有实体）
                     merge_rule_hit = None
@@ -3190,39 +3306,89 @@ class InsightDerivedRepository:
                             c_freq = existing_ent["total_frequency"]
                             c_aliases = existing_ent.get("aliases", [])
 
-                            # 规则 2.1: 子串重合（同类别内两个名称共享 60% 以上字符）
-                            overlap = calculate_char_overlap_ratio(name, c_name)
-                            if overlap >= 0.60:
-                                target_id = existing_ent["entity_id"]
-                                merge_rule_hit = "substring_overlap"
-                                merge_confidence = "high"
-                                break
+                            # 分类别定制归并判定：
+                            if cat == "characters":
+                                # 角色归并：仅允许明确称谓别名（如 "高木" 与 "高木老师"）或 alias_seed
+                                if is_character_name_alias(name, c_name):
+                                    target_id = existing_ent["entity_id"]
+                                    merge_rule_hit = "title_suffix_alias"
+                                    merge_confidence = "high"
+                                    break
+                                for ex_alias in c_aliases:
+                                    if is_character_name_alias(name, ex_alias):
+                                        target_id = existing_ent["entity_id"]
+                                        merge_rule_hit = "title_suffix_alias"
+                                        merge_confidence = "high"
+                                        break
+                                if target_id:
+                                    break
 
-                            # 检查是否与该实体的现有别名达到 60% 重合
-                            for ex_alias in c_aliases:
-                                if calculate_char_overlap_ratio(name, ex_alias) >= 0.60:
+                            elif cat == "abilities":
+                                # 能力归并：带有式神/分支后缀的，核心名不同禁止合并
+                                if can_merge_ability_names(name, c_name):
+                                    target_id = existing_ent["entity_id"]
+                                    merge_rule_hit = "ability_core_match"
+                                    merge_confidence = "high"
+                                    break
+                                for ex_alias in c_aliases:
+                                    if can_merge_ability_names(name, ex_alias):
+                                        target_id = existing_ent["entity_id"]
+                                        merge_rule_hit = "ability_core_match"
+                                        merge_confidence = "high"
+                                        break
+                                if target_id:
+                                    break
+
+                            elif cat == "locations":
+                                # 地点归并：包含 · 的必须比较最末级具体位置名称，禁止仅凭上级机构名重合合并
+                                if can_merge_location_names(name, c_name):
+                                    target_id = existing_ent["entity_id"]
+                                    merge_rule_hit = "location_detail_overlap"
+                                    merge_confidence = "high"
+                                    break
+                                for ex_alias in c_aliases:
+                                    if can_merge_location_names(name, ex_alias):
+                                        target_id = existing_ent["entity_id"]
+                                        merge_rule_hit = "location_detail_overlap"
+                                        merge_confidence = "high"
+                                        break
+                                if target_id:
+                                    break
+
+                            else:
+                                # 其他类别（如 items 等通用规则）：
+                                # 规则 2.1: 子串重合（同类别内两个名称共享 60% 以上字符）
+                                overlap = calculate_char_overlap_ratio(name, c_name)
+                                if overlap >= 0.60:
                                     target_id = existing_ent["entity_id"]
                                     merge_rule_hit = "substring_overlap"
                                     merge_confidence = "high"
                                     break
-                            if target_id:
-                                break
 
-                            # 规则 2.2: 模糊重合度在 40%-60% 之间，调用模型辅助判定
-                            if 0.40 <= overlap < 0.60 and llm_callable is not None:
-                                if check_model_entity_similarity(name, c_name, cat, llm_callable=llm_callable):
-                                    target_id = existing_ent["entity_id"]
-                                    merge_rule_hit = "model_assisted"
-                                    merge_confidence = "medium"
+                                # 检查是否与该实体的现有别名达到 60% 重合
+                                for ex_alias in c_aliases:
+                                    if calculate_char_overlap_ratio(name, ex_alias) >= 0.60:
+                                        target_id = existing_ent["entity_id"]
+                                        merge_rule_hit = "substring_overlap"
+                                        merge_confidence = "high"
+                                        break
+                                if target_id:
                                     break
 
-                            # 规则 2.3: 频次主导（高频名称自动当 canonical_name，低频挂 aliases；频次差异 >= 2倍且包含核心字）
-                            # 此时若两者重合度 >= 0.35 且频次差距大
-                            if overlap >= 0.35 and c_freq >= 2 * info["count"]:
-                                target_id = existing_ent["entity_id"]
-                                merge_rule_hit = "frequency_dominant"
-                                merge_confidence = "high"
-                                break
+                                # 规则 2.2: 模糊重合度在 40%-60% 之间，调用模型辅助判定
+                                if 0.40 <= overlap < 0.60 and llm_callable is not None:
+                                    if check_model_entity_similarity(name, c_name, cat, llm_callable=llm_callable):
+                                        target_id = existing_ent["entity_id"]
+                                        merge_rule_hit = "model_assisted"
+                                        merge_confidence = "medium"
+                                        break
+
+                                # 规则 2.3: 频次主导（高频名称自动当 canonical_name，低频挂 aliases；频次差异 >= 2倍且包含核心字）
+                                if overlap >= 0.35 and c_freq >= 2 * info["count"]:
+                                    target_id = existing_ent["entity_id"]
+                                    merge_rule_hit = "frequency_dominant"
+                                    merge_confidence = "high"
+                                    break
 
                     # 3) 执行并入或创建新实体
                     if target_id and target_id in canonical_by_id:
@@ -3244,8 +3410,8 @@ class InsightDerivedRepository:
                             if merge_rule_hit:
                                 record_merge_log(name, ent["canonical_name"], merge_rule_hit, merge_confidence)
 
-                        # 规则 2.1 逆向频次主导：如果本实体频次已经大幅反超现有 canonical_name（>= 2 倍），自动晋升为 canonical_name
-                        if name != ent["canonical_name"] and info["count"] >= 2 * ent["total_frequency"] - 2 * info["count"]:
+                        # 逆向频次主导（非 characters 类别）：如果本实体频次已经大幅反超现有 canonical_name（>= 2 倍），自动晋升为 canonical_name
+                        if cat != "characters" and name != ent["canonical_name"] and info["count"] >= 2 * ent["total_frequency"] - 2 * info["count"]:
                             old_canon = ent["canonical_name"]
                             ent["canonical_name"] = name
                             if old_canon not in ent["aliases"]:
@@ -3257,22 +3423,50 @@ class InsightDerivedRepository:
                         if name not in updated_alias_map:
                             updated_alias_map[name] = target_id
                     else:
-                        ent = {
-                            "entity_id": slug_id,
-                            "category": cat,
-                            "canonical_name": name,
-                            "confidence": "high",
-                            "total_frequency": info["count"],
-                            "pages": sorted(list(set(info["pages"]))),
-                            "valid_chapters": [chapter_id],
-                            "aliases": [],
-                            "original_names": [name],
-                            "alias_details": {}
-                        }
-                        canonical_by_id[slug_id] = ent
-                        canonical_by_name[(cat, name)] = slug_id
-                        if name not in updated_alias_map:
-                            updated_alias_map[name] = slug_id
+                        # 4) 生成 slug_id 并进行冲突检测
+                        slug = to_romanized_slug(cat, name, slug_map=slug_map, slug_mode=effective_slug_mode)
+                        base_slug_id = f"{CATEGORY_PREFIX[cat]}_{slug}"
+                        final_slug_id = base_slug_id
+                        counter = 2
+                        while final_slug_id in canonical_by_id:
+                            existing_ent = canonical_by_id[final_slug_id]
+                            # 如果已有实体和当前新实体同名同类别，直接使用已有实体（防御性兜底）
+                            if existing_ent["category"] == cat and existing_ent["canonical_name"] == name:
+                                break
+                            final_slug_id = f"{base_slug_id}_{counter}"
+                            counter += 1
+
+                        if final_slug_id in canonical_by_id:
+                            # 命中了同名实体，执行并入
+                            ent = canonical_by_id[final_slug_id]
+                            ent["total_frequency"] += info["count"]
+                            ent["pages"] = sorted(list(set(ent.get("pages", []) + info["pages"])))
+                            valid_ch = ent.setdefault("valid_chapters", [])
+                            if chapter_id not in valid_ch:
+                                valid_ch.append(chapter_id)
+                            orig = ent.setdefault("original_names", [])
+                            if name not in orig:
+                                orig.append(name)
+                            if name not in updated_alias_map:
+                                updated_alias_map[name] = final_slug_id
+                        else:
+                            # 创建全新实体
+                            ent = {
+                                "entity_id": final_slug_id,
+                                "category": cat,
+                                "canonical_name": name,
+                                "confidence": "high",
+                                "total_frequency": info["count"],
+                                "pages": sorted(list(set(info["pages"]))),
+                                "valid_chapters": [chapter_id],
+                                "aliases": [],
+                                "original_names": [name],
+                                "alias_details": {}
+                            }
+                            canonical_by_id[final_slug_id] = ent
+                            canonical_by_name[(cat, name)] = final_slug_id
+                            if name not in updated_alias_map:
+                                updated_alias_map[name] = final_slug_id
 
             # 5. 应用种子配置（全局层 global_terms 与章节层 chapter_overrides）
             for cat, terms in global_terms.items():
@@ -3324,6 +3518,7 @@ class InsightDerivedRepository:
                 "canonical_entities": final_canonical_entities,
                 "alias_map": updated_alias_map,
                 "auto_merge_log": auto_merge_log,
+                "slug_mode": effective_slug_mode,
                 "version": current_revision + 1,
                 "updated_at": utcnow().isoformat(),
             }
@@ -3380,6 +3575,7 @@ class InsightDerivedRepository:
         alias_to_detach: str,
         new_canonical_name: str | None = None,
         new_entity_id: str | None = None,
+        slug_mode: str | None = None,
     ) -> dict[str, Any]:
         """手动回滚/拆分自动归并的别名，使其恢复为一个独立的标准实体。
         
@@ -3415,6 +3611,9 @@ class InsightDerivedRepository:
             canonical_entities = list(payload.get("canonical_entities", []))
             alias_map = dict(payload.get("alias_map", {}))
             auto_merge_log = list(payload.get("auto_merge_log", []))
+            effective_slug_mode = slug_mode or payload.get("slug_mode") or "pinyin"
+            if isinstance(effective_slug_mode, str) and effective_slug_mode.strip().lower() == "english":
+                effective_slug_mode = "romanized"
 
             # 寻找拥有该别名的源实体
             source_entity: dict[str, Any] | None = None
@@ -3444,7 +3643,7 @@ class InsightDerivedRepository:
             if new_entity_id:
                 detached_id = new_entity_id
             else:
-                slug = to_romanized_slug(category, new_canon)
+                slug = to_romanized_slug(category, new_canon, slug_mode=effective_slug_mode)
                 detached_id = f"{CATEGORY_PREFIX[category]}_{slug}"
 
             detached_entity = {
@@ -3482,6 +3681,7 @@ class InsightDerivedRepository:
                 "canonical_entities": canonical_entities,
                 "alias_map": alias_map,
                 "auto_merge_log": auto_merge_log,
+                "slug_mode": effective_slug_mode,
                 "version": new_revision,
                 "updated_at": now.isoformat(),
             }
@@ -3531,10 +3731,15 @@ class InsightDerivedRepository:
         *,
         book_id: str,
         category: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """获取当前活跃 entity_alignment 产物中所有带有 '_pinyin_' 标记的实体清单。
+        mode: str | None = None,
+    ) -> list[dict[str, Any]] | dict[str, list[dict[str, Any]]]:
+        """获取当前活跃 entity_alignment 产物中所有带有未命中回退标记（如 '_pinyin_' 或 '_romanized_'）的实体清单。
         
-        用于支持人工审核并快速在 entity_slug_map.json 中补全正式英文/罗马音。
+        参数:
+        - mode: "pinyin" 或 "romanized"（或 "english"）。
+          - 若指定 mode，返回符合该模式的实体列表 list[dict]。
+          - 若未指定 mode（默认同时检索），返回按模式区分的字典:
+            {"pinyin": [...], "romanized": [...]}
         """
         with self.engine.connect() as connection:
             self._assert_book_owned(connection, book_id)
@@ -3549,18 +3754,46 @@ class InsightDerivedRepository:
             ).mappings().one_or_none()
 
             if not row or not row["payload_json"]:
-                return []
+                if mode is not None:
+                    return []
+                return {"pinyin": [], "romanized": []}
 
             payload = _json_object(row["payload_json"], "entity_alignment payload")
             canonical_entities = payload.get("canonical_entities", [])
-            pinyin_entities = []
-            for ent in canonical_entities:
-                if "_pinyin_" in ent.get("entity_id", ""):
-                    if category and ent.get("category") != category:
-                        continue
-                    pinyin_entities.append(ent)
+            
+            pinyin_list = []
+            romanized_list = []
 
-            return pinyin_entities
+            for ent in canonical_entities:
+                if category and ent.get("category") != category:
+                    continue
+                ent_id = ent.get("entity_id", "")
+                
+                is_pinyin = "_pinyin_" in ent_id
+                is_romanized = ("_romanized_" in ent_id) or ("_english_" in ent_id)
+
+                if is_pinyin:
+                    item = dict(ent)
+                    item["mode"] = "pinyin"
+                    pinyin_list.append(item)
+                if is_romanized:
+                    item = dict(ent)
+                    item["mode"] = "romanized"
+                    romanized_list.append(item)
+
+            target_mode = mode.strip().lower() if isinstance(mode, str) else None
+            if target_mode == "english":
+                target_mode = "romanized"
+
+            if target_mode == "pinyin":
+                return pinyin_list
+            elif target_mode == "romanized":
+                return romanized_list
+            else:
+                return {
+                    "pinyin": pinyin_list,
+                    "romanized": romanized_list,
+                }
 
     def publish_timeline(
         self,
