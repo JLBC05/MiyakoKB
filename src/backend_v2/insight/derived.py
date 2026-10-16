@@ -482,7 +482,22 @@ def can_merge_concept_names(name1: str, name2: str, type1: str = '', type2: str 
     return False
 
 
-LLM_JUDGE_CACHE_FILE = r"D:\My_Doc\Mine\manga-knowledge\llm_entity_judge_cache.json"
+def _resolve_llm_judge_cache_file() -> str:
+    """动态解析 LLM 裁决缓存文件路径，优先存放在项目根目录或其父级工作区。"""
+    # derived.py 位于 src/backend_v2/insight/derived.py -> parents[3] 即为 Saber-Translator-main 根目录
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    parent_workspace = os.path.dirname(repo_root)
+    # 优先检查父级工作区是否有历史缓存，若有则沿用，否则默认保存在项目根目录下
+    parent_cache = os.path.join(parent_workspace, "llm_entity_judge_cache.json")
+    if os.path.exists(parent_cache):
+        return parent_cache
+    repo_cache = os.path.join(repo_root, "llm_entity_judge_cache.json")
+    if os.path.exists(repo_cache):
+        return repo_cache
+    return parent_cache
+
+
+LLM_JUDGE_CACHE_FILE = _resolve_llm_judge_cache_file()
 
 
 class LLMBatchJudge:

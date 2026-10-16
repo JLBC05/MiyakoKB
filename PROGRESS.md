@@ -1,8 +1,9 @@
 # 项目开发进展报告 (PROGRESS.md)
 
 ## 1. 项目基本信息
-- **项目路径**: `D:\My_Doc\Mine\manga-knowledge\Saber-Translator-main`
-- **远端仓库**: `https://github.com/JLBC05/manga-knowledge.git` (分支: `main`)
+- **项目名称**: `MiyakoKB`
+- **项目路径**: `D:\My_Doc\Mine\MiyakoKB` (当前工作区: `Saber-Translator-main`)
+- **远端仓库**: `https://github.com/JLBC05/MiyakoKB.git` (分支: `main`)
 
 ---
 
