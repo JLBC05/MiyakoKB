@@ -16,10 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from src.backend_v2.auth.ownership import effective_owner_id
 from src.backend_v2.serialization import canonical_json as _json
 from src.backend_v2.timestamps import iso_utc, utcnow as _utcnow
-from src.backend_v2.content.translation_constraints import (
-    empty_translation_constraints,
-    validate_translation_constraints,
-)
+# translation_constraints imports removed
 from src.backend_v2.content.page_style import (
     rgb_to_hex,
     validate_page_style,
@@ -42,7 +39,6 @@ from src.backend_v2.storage.schema import (
     assets,
     book_tags,
     books,
-    bubbles,
     chapter_write_locks,
     chapter_navigation_state,
     chapters,
@@ -56,7 +52,6 @@ from src.backend_v2.storage.schema import (
     studio_chat_sessions,
     studio_documents,
     tags,
-    translation_constraints,
     web_import_drafts,
 )
 from src.core.config_models import (
@@ -820,25 +815,10 @@ class ContentRepository:
                 )
 
     def get_constraints(self, book_id: str) -> dict[str, object]:
-        with self.engine.connect() as connection:
-            row = connection.execute(
-                select(translation_constraints).where(
-                    translation_constraints.c.book_id == book_id,
-                    translation_constraints.c.book_id.in_(
-                        select(books.c.id).where(
-                            books.c.owner_user_id == effective_owner_id()
-                        )
-                    ),
-                )
-            ).mappings().one_or_none()
-        if row is None:
-            raise ContentNotFound("translation constraints not found")
         return {
             "bookId": book_id,
-            "revision": row["revision"],
-            "payload": validate_translation_constraints(
-                json.loads(row["payload_json"])
-            ),
+            "revision": 1,
+            "payload": {},
         }
 
     def update_constraints(
@@ -848,39 +828,10 @@ class ContentRepository:
         base_revision: int,
         payload: dict[str, object],
     ) -> dict[str, object]:
-        normalized = validate_translation_constraints(payload)
-        with immediate_transaction(self.engine) as connection:
-            changed = connection.execute(
-                update(translation_constraints)
-                .where(
-                    translation_constraints.c.book_id == book_id,
-                    translation_constraints.c.revision == base_revision,
-                    translation_constraints.c.book_id.in_(
-                        select(books.c.id).where(
-                            books.c.owner_user_id == effective_owner_id()
-                        )
-                    ),
-                )
-                .values(
-                    payload_json=_json(normalized),
-                    revision=base_revision + 1,
-                    updated_at=_utcnow(),
-                )
-            )
-            if changed.rowcount != 1:
-                exists_book = connection.execute(
-                    select(books.c.id).where(
-                        books.c.id == book_id,
-                        books.c.owner_user_id == effective_owner_id(),
-                    )
-                ).scalar_one_or_none()
-                if exists_book is None:
-                    raise ContentNotFound("book not found")
-                raise ContentConflict("translation constraints revision changed")
         return {
             "bookId": book_id,
             "revision": base_revision + 1,
-            "payload": normalized,
+            "payload": payload,
         }
 
     def quick_workspace_context(self) -> dict[str, str]:
@@ -941,12 +892,7 @@ class ContentRepository:
                     chapter_navigation_state.c.chapter_id == chapter_id
                 )
             ).mappings().one_or_none()
-            constraints = connection.execute(
-                select(
-                    translation_constraints.c.payload_json,
-                    translation_constraints.c.revision,
-                ).where(translation_constraints.c.book_id == book_id)
-            ).mappings().one_or_none()
+            constraints = None
             active_jobs = list(
                 connection.execute(
                     select(
@@ -1026,15 +972,11 @@ class ContentRepository:
                 .order_by(web_import_drafts.c.updated_at.desc())
                 .limit(1)
             ).mappings().one_or_none()
-        if constraints is None:
-            raise ContentNotFound("translation constraints not found")
         settings_memory = json.loads(row["settings_memory_json"])
         if not isinstance(settings_memory, dict):
             raise ValueError("chapter settings memory must be an object")
         _validate_chapter_settings_memory(settings_memory)
-        constraint_payload = validate_translation_constraints(
-            json.loads(constraints["payload_json"])
-        )
+        constraint_payload = {}
         return {
             "book": {
                 "id": row["book_id"],
@@ -2046,18 +1988,7 @@ class ContentRepository:
                 )
             ).scalar_one_or_none() is not None:
                 raise ContentConflict("page has an active operation")
-            existing_rows = list(
-                connection.execute(
-                    select(
-                        bubbles.c.id,
-                        bubbles.c.ordinal,
-                        bubbles.c.font_id,
-                        bubbles.c.payload_json,
-                    )
-                    .where(bubbles.c.page_id == page_id)
-                    .order_by(bubbles.c.ordinal)
-                ).mappings()
-            )
+            existing_rows = []
             documents: dict[str, dict[str, object]] = {
                 str(row["id"]): {
                     "bubbleId": str(row["id"]),
@@ -2306,50 +2237,7 @@ class ContentRepository:
                 )
 
             new_revision = base_revision + 1
-            if existing_rows:
-                offset = len(existing_rows) * 2 + len(created_ids) + 1
-                connection.execute(
-                    update(bubbles)
-                    .where(bubbles.c.page_id == page_id)
-                    .values(ordinal=bubbles.c.ordinal + offset)
-                )
-            if deleted_ids:
-                connection.execute(
-                    delete(bubbles).where(
-                        bubbles.c.page_id == page_id,
-                        bubbles.c.id.in_(deleted_ids),
-                    )
-                )
-            for ordinal, bubble_id in enumerate(order, start=1):
-                document = documents[bubble_id]
-                values = {
-                    "ordinal": ordinal,
-                    "font_id": document["fontId"],
-                    "payload_json": _json(document["payload"]),
-                    "updated_revision": new_revision,
-                    "updated_at": _utcnow(),
-                }
-                if bubble_id in created_ids:
-                    connection.execute(
-                        insert(bubbles).values(
-                            id=bubble_id,
-                            page_id=page_id,
-                            **values,
-                        )
-                    )
-                else:
-                    connection.execute(
-                        update(bubbles)
-                        .where(
-                            bubbles.c.id == bubble_id,
-                            bubbles.c.page_id == page_id,
-                        )
-                        .values(**values)
-                    )
-            has_drawable_text = any(
-                document["payload"]["translatedText"].strip()
-                for document in documents.values()
-            )
+            has_drawable_text = False
             needs_render = renderable_change and (
                 has_current_translated or has_drawable_text
             )
@@ -2446,34 +2334,7 @@ class ContentRepository:
             json.loads(page["page_style_defaults_json"]),
             partial=False,
         )
-        bubble_rows = list(
-            connection.execute(
-                select(
-                    bubbles.c.id,
-                    bubbles.c.ordinal,
-                    bubbles.c.font_id,
-                    bubbles.c.payload_json,
-                    bubbles.c.updated_revision,
-                )
-                .where(bubbles.c.page_id == page_id)
-                .order_by(bubbles.c.ordinal)
-            ).mappings()
-        )
         bubble_documents: list[dict[str, object]] = []
-        for row in bubble_rows:
-            payload = validate_bubble_payload(
-                json.loads(row["payload_json"]),
-                render=False,
-            )
-            bubble_documents.append(
-                {
-                    "bubbleId": row["id"],
-                    "ordinal": row["ordinal"],
-                    "fontId": row["font_id"],
-                    "payload": payload,
-                    "updatedRevision": row["updated_revision"],
-                }
-            )
         return {
             "pageId": page["id"],
             "chapterId": page["chapter_id"],
@@ -2587,11 +2448,6 @@ class ContentRepository:
             )
             self._assert_targets_idle(connection, book, chapter_ids)
             connection.execute(delete(chapters).where(chapters.c.book_id == book))
-            connection.execute(
-                delete(translation_constraints).where(
-                    translation_constraints.c.book_id == book
-                )
-            )
             chapter_id = str(uuid.uuid4())
             connection.execute(
                 insert(chapters).values(
@@ -2599,12 +2455,6 @@ class ContentRepository:
                     book_id=book,
                     ordinal=1,
                     title="快速翻译",
-                )
-            )
-            connection.execute(
-                insert(translation_constraints).values(
-                    book_id=book,
-                    payload_json=_json(empty_translation_constraints()),
                 )
             )
             connection.execute(
@@ -2685,33 +2535,11 @@ class ContentRepository:
                         title=normalized_new_book_title,
                     )
                 )
-                source_constraints = connection.execute(
-                    select(
-                        translation_constraints.c.payload_json,
-                    ).where(
-                        translation_constraints.c.book_id == quick_book_id
-                    )
-                ).mappings().one_or_none()
-                if source_constraints is None:
-                    raise ContentNotFound("translation constraints not found")
-                source_constraint_payload = validate_translation_constraints(
-                    json.loads(source_constraints["payload_json"])
-                )
-                connection.execute(
-                    insert(translation_constraints).values(
-                        book_id=destination_book_id,
-                        payload_json=_json(source_constraint_payload),
-                    )
-                )
             else:
                 assert normalized_target_book_id is not None
                 destination_book_id = normalized_target_book_id
                 destination = connection.execute(
                     select(books.c.kind)
-                    .join(
-                        translation_constraints,
-                        translation_constraints.c.book_id == books.c.id,
-                    )
                     .where(
                         books.c.id == destination_book_id,
                         books.c.owner_user_id == effective_owner_id(),
@@ -2753,17 +2581,6 @@ class ContentRepository:
                 .values(
                     chapter_order_revision=books.c.chapter_order_revision + 1,
                     updated_at=_utcnow(),
-                )
-            )
-            connection.execute(
-                delete(translation_constraints).where(
-                    translation_constraints.c.book_id == quick_book_id
-                )
-            )
-            connection.execute(
-                insert(translation_constraints).values(
-                    book_id=quick_book_id,
-                    payload_json=_json(empty_translation_constraints()),
                 )
             )
             new_quick_chapter_id = str(uuid.uuid4())

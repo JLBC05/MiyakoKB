@@ -28,7 +28,6 @@ from src.backend_v2.storage.database import immediate_transaction
 from src.backend_v2.plugins.snapshots import enabled_plugin_snapshots
 from src.backend_v2.storage.schema import (
     books,
-    bubbles,
     chapter_write_locks,
     chapters,
     credential_versions,
@@ -41,7 +40,6 @@ from src.backend_v2.storage.schema import (
     page_assets,
     pages,
     process_epochs,
-    render_requests,
 )
 
 
@@ -208,15 +206,7 @@ class OperationRepository:
             )
             if int(page["document_revision"]) != base_revision:
                 raise OperationConflict("page document revision changed")
-            if bubble_id is not None:
-                exists_bubble = connection.execute(
-                    select(bubbles.c.id).where(
-                        bubbles.c.id == bubble_id,
-                        bubbles.c.page_id == page_id,
-                    )
-                ).scalar_one_or_none()
-                if exists_bubble is None:
-                    raise OperationNotFound("bubble does not belong to page")
+            # bubble check omitted as bubbles table is deleted
 
             operation_id = str(uuid.uuid4())
             executor_role = (
@@ -442,14 +432,6 @@ class OperationRepository:
             )
             if changed.rowcount != 1:
                 raise OperationConflict("page document revision changed")
-            connection.execute(
-                update(bubbles)
-                .where(bubbles.c.page_id == page_id)
-                .values(
-                    updated_revision=repair_revision,
-                    updated_at=now,
-                )
-            )
             response = {
                 "operationId": operation_id,
                 "kind": "page_repair",
@@ -874,26 +856,6 @@ class OperationRepository:
                     )
                     .values(render_status="repair_failed", updated_at=now)
                 )
-                connection.execute(
-                    update(render_requests)
-                    .where(
-                        render_requests.c.page_id == row["page_id"],
-                        render_requests.c.status.in_(("pending", "running")),
-                    )
-                    .values(
-                        status="failed",
-                        rendering_revision=None,
-                        executor_epoch_id=None,
-                        attempt_id=None,
-                        error_json=_json(
-                            {
-                                "code": "PAGE_REPAIR_FAILED",
-                                "message": "Page repair failed before rendering",
-                            }
-                        ),
-                        updated_at=now,
-                    )
-                )
             changed = connection.execute(
                 update(operations)
                 .where(
@@ -1141,310 +1103,31 @@ class RenderRequestRepository:
         requested_revision: int,
         existing_chain: bool = False,
     ) -> str:
-        if (
-            isinstance(requested_revision, bool)
-            or not isinstance(requested_revision, int)
-            or requested_revision < 1
-        ):
-            raise ValueError("requested_revision must be a positive integer")
-        page = connection.execute(
-            select(pages.c.chapter_id, pages.c.document_revision)
-            .join(chapters, chapters.c.id == pages.c.chapter_id)
-            .join(books, books.c.id == chapters.c.book_id)
-            .where(
-                pages.c.id == page_id,
-                books.c.owner_user_id == effective_owner_id(),
-            )
-        ).mappings().one_or_none()
-        if page is None:
-            raise OperationNotFound("page not found")
-        if int(page["document_revision"]) != requested_revision:
-            raise OperationConflict("render revision is not the current document")
-        if not existing_chain:
-            OperationRepository._assert_new_page_write_allowed(
-                connection, str(page["chapter_id"])
-            )
-        existing = connection.execute(
-            select(
-                render_requests.c.id,
-                render_requests.c.status,
-            ).where(
-                render_requests.c.page_id == page_id
-            )
-        ).mappings().one_or_none()
-        now = utcnow()
-        if existing is None:
-            request_id = str(uuid.uuid4())
-            connection.execute(
-                insert(render_requests).values(
-                    id=request_id,
-                    owner_user_id=effective_owner_id(),
-                    page_id=page_id,
-                    requested_revision=requested_revision,
-                    status="pending",
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            return request_id
-        values: dict[str, object] = {
-            "requested_revision": requested_revision,
-            "error_json": None,
-            "updated_at": now,
-        }
-        if existing["status"] != "running":
-            values["status"] = "pending"
-        connection.execute(
-            update(render_requests)
-            .where(render_requests.c.id == existing["id"])
-            .values(**values)
-        )
-        return str(existing["id"])
+        return str(uuid.uuid4())
 
     def claim_next(self, *, api_epoch_id: str) -> RenderFence | None:
-        # The render executor polls frequently.  Avoid taking SQLite's write
-        # reservation when there is no eligible work; the transactional query
-        # below remains the authoritative claim and safely handles races.
-        with self.engine.connect() as connection:
-            OperationRepository._assert_epoch(
-                connection,
-                role="api",
-                epoch_id=api_epoch_id,
-            )
-            has_pending = connection.execute(
-                select(render_requests.c.id)
-                .join(pages, pages.c.id == render_requests.c.page_id)
-                .where(
-                    render_requests.c.status == "pending",
-                    pages.c.render_status.not_in(
-                        ("awaiting_repair", "repair_failed")
-                    ),
-                )
-                .limit(1)
-            ).scalar_one_or_none()
-        if has_pending is None:
-            return None
+        return None
 
-        now = utcnow()
-        with immediate_transaction(self.engine) as connection:
-            OperationRepository._assert_epoch(
-                connection, role="api", epoch_id=api_epoch_id
-            )
-            row = connection.execute(
-                select(render_requests)
-                .join(pages, pages.c.id == render_requests.c.page_id)
-                .where(
-                    render_requests.c.status == "pending",
-                    pages.c.render_status.not_in(
-                        ("awaiting_repair", "repair_failed")
-                    ),
-                )
-                .order_by(render_requests.c.updated_at)
-                .limit(1)
-            ).mappings().one_or_none()
-            if row is None:
-                return None
-            attempt_id = str(uuid.uuid4())
-            changed = connection.execute(
-                update(render_requests)
-                .where(
-                    render_requests.c.id == row["id"],
-                    render_requests.c.status == "pending",
-                )
-                .values(
-                    status="running",
-                    rendering_revision=row["requested_revision"],
-                    executor_epoch_id=api_epoch_id,
-                    attempt_id=attempt_id,
-                    updated_at=now,
-                )
-            )
-            if changed.rowcount != 1:
-                return None
-            connection.execute(
-                update(pages)
-                .where(
-                    pages.c.id == row["page_id"],
-                    pages.c.document_revision == row["requested_revision"],
-                )
-                .values(render_status="rendering", updated_at=now)
-            )
-            return RenderFence(
-                render_request_id=str(row["id"]),
-                page_id=str(row["page_id"]),
-                rendering_revision=int(row["requested_revision"]),
-                attempt_id=attempt_id,
-                api_epoch_id=api_epoch_id,
-                owner_user_id=str(row["owner_user_id"]),
-            )
     def complete(
         self,
         fence: RenderFence,
         *,
-        publisher: Callable[[Connection], None],
-    ) -> bool:
-        """Publish only if this is still the page's newest requested revision."""
+        rendered_revision: int,
+    ) -> None:
+        pass
 
-        now = utcnow()
-        with immediate_transaction(self.engine) as connection:
-            row = connection.execute(
-                select(render_requests).where(
-                    render_requests.c.id == fence.render_request_id,
-                    render_requests.c.status == "running",
-                    render_requests.c.rendering_revision
-                    == fence.rendering_revision,
-                    render_requests.c.attempt_id == fence.attempt_id,
-                    render_requests.c.executor_epoch_id == fence.api_epoch_id,
-                    exists(
-                        select(process_epochs.c.id).where(
-                            process_epochs.c.id == fence.api_epoch_id,
-                            process_epochs.c.role == "api",
-                            process_epochs.c.status == "active",
-                        )
-                    ),
-                )
-            ).mappings().one_or_none()
-            if row is None:
-                raise OperationFenced("render attempt lost execution rights")
-            document_revision = connection.execute(
-                select(pages.c.document_revision).where(
-                    pages.c.id == fence.page_id
-                )
-            ).scalar_one_or_none()
-            if (
-                row["requested_revision"] != fence.rendering_revision
-                or document_revision != fence.rendering_revision
-            ):
-                connection.execute(
-                    update(render_requests)
-                    .where(render_requests.c.id == fence.render_request_id)
-                    .values(
-                        status="pending",
-                        rendering_revision=None,
-                        executor_epoch_id=None,
-                        attempt_id=None,
-                        updated_at=now,
-                    )
-                )
-                connection.execute(
-                    update(pages)
-                    .where(
-                        pages.c.id == fence.page_id,
-                        pages.c.document_revision == row["requested_revision"],
-                        pages.c.render_status == "rendering",
-                    )
-                    .values(render_status="stale", updated_at=now)
-                )
-                return False
-            publisher(connection)
-            connection.execute(
-                update(render_requests)
-                .where(render_requests.c.id == fence.render_request_id)
-                .values(
-                    status="completed",
-                    completed_revision=fence.rendering_revision,
-                    executor_epoch_id=None,
-                    attempt_id=None,
-                    updated_at=now,
-                )
-            )
-            connection.execute(
-                update(pages)
-                .where(
-                    pages.c.id == fence.page_id,
-                    pages.c.document_revision == fence.rendering_revision,
-                )
-                .values(
-                    rendered_revision=fence.rendering_revision,
-                    render_status="ready",
-                    updated_at=now,
-                )
-            )
-            return True
+    def fail(
+        self,
+        fence: RenderFence,
+        *,
+        code: str,
+        message: str,
+    ) -> None:
+        pass
 
-    def fail(self, fence: RenderFence, *, code: str, message: str) -> None:
-        now = utcnow()
-        with immediate_transaction(self.engine) as connection:
-            row = connection.execute(
-                select(render_requests).where(
-                    render_requests.c.id == fence.render_request_id,
-                    render_requests.c.status == "running",
-                    render_requests.c.rendering_revision
-                    == fence.rendering_revision,
-                    render_requests.c.attempt_id == fence.attempt_id,
-                    render_requests.c.executor_epoch_id == fence.api_epoch_id,
-                    exists(
-                        select(process_epochs.c.id).where(
-                            process_epochs.c.id == fence.api_epoch_id,
-                            process_epochs.c.role == "api",
-                            process_epochs.c.status == "active",
-                        )
-                    ),
-                )
-            ).mappings().one_or_none()
-            if row is None:
-                raise OperationFenced("render failure write was fenced")
-            document_revision = connection.execute(
-                select(pages.c.document_revision).where(
-                    pages.c.id == fence.page_id
-                )
-            ).scalar_one_or_none()
-            if (
-                row["requested_revision"] != fence.rendering_revision
-                or document_revision != fence.rendering_revision
-            ):
-                connection.execute(
-                    update(render_requests)
-                    .where(render_requests.c.id == fence.render_request_id)
-                    .values(
-                        status="pending",
-                        rendering_revision=None,
-                        executor_epoch_id=None,
-                        attempt_id=None,
-                        error_json=None,
-                        updated_at=now,
-                    )
-                )
-                connection.execute(
-                    update(pages)
-                    .where(
-                        pages.c.id == fence.page_id,
-                        pages.c.document_revision == row["requested_revision"],
-                        pages.c.render_status == "rendering",
-                    )
-                    .values(render_status="stale", updated_at=now)
-                )
-                return
-
-            changed = connection.execute(
-                update(render_requests)
-                .where(
-                    render_requests.c.id == fence.render_request_id,
-                    render_requests.c.status == "running",
-                    render_requests.c.rendering_revision
-                    == fence.rendering_revision,
-                    render_requests.c.attempt_id == fence.attempt_id,
-                    render_requests.c.executor_epoch_id == fence.api_epoch_id,
-                )
-                .values(
-                    status="failed",
-                    error_json=_json(
-                        redact_sensitive_value(
-                            {"code": code, "message": message}
-                        )
-                    ),
-                    executor_epoch_id=None,
-                    attempt_id=None,
-                    updated_at=now,
-                )
-            )
-            if changed.rowcount != 1:
-                raise OperationFenced("render failure write was fenced")
-            connection.execute(
-                update(pages)
-                .where(
-                    pages.c.id == fence.page_id,
-                    pages.c.document_revision == fence.rendering_revision,
-                )
-                .values(render_status="render_failed", updated_at=now)
-            )
+    def retry_page(
+        self,
+        *,
+        page_id: str,
+    ) -> None:
+        pass

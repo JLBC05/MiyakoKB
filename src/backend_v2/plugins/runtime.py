@@ -42,7 +42,6 @@ from src.backend_v2.redaction import redact_sensitive_text
 from src.backend_v2.storage.assets import AssetStorageService
 from src.backend_v2.storage.schema import (
     assets,
-    bubbles,
     chapters,
     job_plugin_snapshots,
     jobs,
@@ -101,36 +100,7 @@ class ReadOnlyPluginRepository:
         return dict(row) if row is not None else None
 
     def get_bubbles(self, page_id: str) -> list[dict[str, Any]]:
-        with self.engine.connect() as connection:
-            rows = connection.execute(
-                select(
-                    bubbles.c.id,
-                    bubbles.c.ordinal,
-                    bubbles.c.payload_json,
-                    bubbles.c.updated_revision,
-                    pages.c.document_revision,
-                )
-                .join(pages, pages.c.id == bubbles.c.page_id)
-                .where(bubbles.c.page_id == page_id)
-                .order_by(bubbles.c.ordinal)
-            ).mappings()
-            result: list[dict[str, Any]] = []
-            for row in rows:
-                if row["updated_revision"] != row["document_revision"]:
-                    raise RuntimeError(
-                        "bubble revision does not match page document"
-                    )
-                result.append(
-                    {
-                        "id": str(row["id"]),
-                        "ordinal": int(row["ordinal"]),
-                        "payload": validate_bubble_payload(
-                            _json_object(row["payload_json"]),
-                            render=False,
-                        ),
-                    }
-                )
-            return result
+        return []
 
 
 class PluginAssetAccess:

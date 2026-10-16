@@ -25,7 +25,6 @@ from src.backend_v2.storage.assets import AssetRecord, AssetStorageService
 from src.backend_v2.storage.schema import (
     assets,
     books,
-    bubbles,
     chapters,
     page_assets,
     pages,
@@ -65,38 +64,7 @@ class PageRepairService:
         base_revision: int,
         idempotency_key: str,
     ) -> tuple[dict[str, object], bool]:
-        with self.engine.connect() as connection:
-            row = connection.execute(
-                select(
-                    pages.c.document_revision,
-                    assets.c.width,
-                    assets.c.height,
-                    bubbles.c.payload_json,
-                    bubbles.c.updated_revision,
-                )
-                .join(bubbles, bubbles.c.page_id == pages.c.id)
-                .join(chapters, chapters.c.id == pages.c.chapter_id)
-                .join(books, books.c.id == chapters.c.book_id)
-                .join(
-                    page_assets,
-                    (page_assets.c.page_id == pages.c.id)
-                    & (page_assets.c.role == "source"),
-                )
-                .join(assets, assets.c.id == page_assets.c.asset_id)
-                .where(
-                    pages.c.id == page_id,
-                    bubbles.c.id == bubble_id,
-                    books.c.owner_user_id == effective_owner_id(),
-                )
-            ).mappings().one_or_none()
-        if row is None:
-            raise ValueError("page or bubble not found")
-        if row["updated_revision"] != row["document_revision"]:
-            raise ValueError("bubble revision does not match page document")
-        payload = validate_bubble_payload(
-            json.loads(row["payload_json"]),
-            render=False,
-        )
+        raise ValueError("bubbles feature is deprecated")
         width, height = int(row["width"]), int(row["height"])
         method = payload["inpaintMethod"]
         fill_color = payload["fillColor"] if method == "solid" else None
@@ -303,25 +271,7 @@ class PageRepairService:
         if not isinstance(inputs, Mapping):
             raise RuntimeError("repair operation inputs are missing")
         page_id = self._required_text(operation, "pageId")
-        with self.engine.connect() as connection:
-            bubble_payloads: list[dict[str, Any]] = []
-            for row in connection.execute(
-                select(
-                    bubbles.c.payload_json,
-                    bubbles.c.updated_revision,
-                )
-                .where(bubbles.c.page_id == page_id)
-                .order_by(bubbles.c.ordinal)
-            ).mappings():
-                if row["updated_revision"] != revision:
-                    raise RuntimeError(
-                        "bubble revision does not match page document"
-                    )
-                bubble_payload = validate_bubble_payload(
-                    json.loads(row["payload_json"]),
-                    render=False,
-                )
-                bubble_payloads.append(bubble_payload)
+        bubble_payloads: list[dict[str, Any]] = []
         source_asset_id = self._required_text(inputs, "source")
         input_asset_id = self._required_text(
             inputs,
