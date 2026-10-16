@@ -545,21 +545,6 @@ chapter_navigation_state = Table(
     CheckConstraint("revision >= 1", name="revision_positive"),
 )
 
-bubbles = Table(
-    "bubbles",
-    metadata,
-    Column("id", String(UUID_LENGTH), primary_key=True),
-    Column("page_id", String(UUID_LENGTH), ForeignKey("pages.id", ondelete="CASCADE"), nullable=False),
-    Column("ordinal", Integer, nullable=False),
-    Column("font_id", String(UUID_LENGTH), ForeignKey("fonts.id", ondelete="RESTRICT")),
-    Column("payload_json", Text, nullable=False),
-    Column("updated_revision", Integer, nullable=False),
-    *_timestamps(),
-    UniqueConstraint("page_id", "ordinal"),
-    CheckConstraint("ordinal >= 1", name="ordinal_positive"),
-    CheckConstraint("updated_revision >= 1", name="updated_revision_positive"),
-)
-
 tags = Table(
     "tags",
     metadata,
@@ -581,16 +566,6 @@ book_tags = Table(
     metadata,
     Column("book_id", String(UUID_LENGTH), ForeignKey("books.id", ondelete="CASCADE"), primary_key=True),
     Column("tag_id", String(UUID_LENGTH), ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
-)
-
-translation_constraints = Table(
-    "translation_constraints",
-    metadata,
-    Column("book_id", String(UUID_LENGTH), ForeignKey("books.id", ondelete="CASCADE"), primary_key=True),
-    Column("revision", Integer, nullable=False, server_default="1"),
-    Column("payload_json", Text, nullable=False, server_default="{}"),
-    *_timestamps(),
-    CheckConstraint("revision >= 1", name="revision_positive"),
 )
 
 app_settings = Table(
@@ -1019,14 +994,6 @@ job_plugin_snapshots = Table(
         primary_key=True,
     ),
     Column("config_json", Text, nullable=False, server_default="{}"),
-)
-
-job_font_snapshots = Table(
-    "job_font_snapshots",
-    metadata,
-    Column("job_id", String(UUID_LENGTH), ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True),
-    Column("font_id", String(UUID_LENGTH), ForeignKey("fonts.id", ondelete="RESTRICT"), primary_key=True),
-    Column("role", String(64), primary_key=True),
 )
 
 job_asset_inputs = Table(
@@ -1897,7 +1864,7 @@ operations = Table(
     Column("executor_role", String(16), nullable=False),
     Column("status", String(16), nullable=False, server_default="pending"),
     Column("page_id", String(UUID_LENGTH), ForeignKey("pages.id", ondelete="SET NULL")),
-    Column("bubble_id", String(UUID_LENGTH), ForeignKey("bubbles.id", ondelete="SET NULL")),
+    Column("bubble_id", String(UUID_LENGTH)),
     Column(
         "studio_document_id",
         String(UUID_LENGTH),
@@ -2027,19 +1994,6 @@ operation_plugin_snapshots = Table(
         primary_key=True,
     ),
     Column("config_json", Text, nullable=False, server_default="{}"),
-)
-
-operation_font_snapshots = Table(
-    "operation_font_snapshots",
-    metadata,
-    Column(
-        "operation_id",
-        String(UUID_LENGTH),
-        ForeignKey("operations.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column("font_id", String(UUID_LENGTH), ForeignKey("fonts.id", ondelete="RESTRICT"), primary_key=True),
-    Column("role", String(64), primary_key=True),
 )
 
 operation_asset_inputs = Table(
@@ -2280,7 +2234,6 @@ _FOREIGN_KEY_LOOKUP_INDEXES = (
     ("ix_books_cover_asset_id", books.c.cover_asset_id),
     ("ix_pages_default_font_id", pages.c.default_font_id),
     ("ix_chapter_navigation_state_last_page", chapter_navigation_state.c.last_visited_page_id),
-    ("ix_bubbles_font_id", bubbles.c.font_id),
     ("ix_provider_settings_credential_version", provider_settings.c.credential_version_id),
     ("ix_web_import_drafts_book_id", web_import_drafts.c.book_id),
     ("ix_web_import_draft_pages_thumbnail_asset", web_import_draft_pages.c.thumbnail_asset_id),

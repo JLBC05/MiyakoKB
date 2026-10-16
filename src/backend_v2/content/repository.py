@@ -414,12 +414,6 @@ class ContentRepository:
                     cover_asset_id=cover_asset_id,
                 )
             )
-            connection.execute(
-                insert(translation_constraints).values(
-                    book_id=book_id,
-                    payload_json=_json(empty_translation_constraints()),
-                )
-            )
             if tag_ids is not None:
                 self._replace_book_tags(connection, book_id, tag_ids)
         return {
@@ -1536,7 +1530,6 @@ class ContentRepository:
                 raise ContentConflict("page has an active operation")
             new_source_revision = base_source_revision + 1
             new_document_revision = int(page["document_revision"]) + 1
-            connection.execute(delete(bubbles).where(bubbles.c.page_id == page_id))
             connection.execute(
                 delete(page_assets).where(
                     page_assets.c.page_id == page_id,

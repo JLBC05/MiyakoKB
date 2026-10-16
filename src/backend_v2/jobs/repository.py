@@ -69,7 +69,6 @@ from src.backend_v2.storage.schema import (
     job_credential_snapshots,
     job_events,
     job_items,
-    job_font_snapshots,
     fonts,
     job_plugin_snapshots,
     job_steps,
@@ -904,18 +903,6 @@ class JobQueueRepository:
                                     "role": role,
                                 }
                                 for role, version_id in credential_refs.items()
-                            ],
-                        )
-                    if spec.font_snapshots:
-                        connection.execute(
-                            insert(job_font_snapshots),
-                            [
-                                {
-                                    "job_id": job_id,
-                                    "font_id": font_id,
-                                    "role": role,
-                                }
-                                for role, font_id in spec.font_snapshots.items()
                             ],
                         )
                     effective_plugin_snapshots = (

@@ -33,7 +33,6 @@ from src.backend_v2.storage.schema import (
     analysis_run_targets,
     job_asset_inputs,
     job_credential_snapshots,
-    job_font_snapshots,
     job_items,
     job_plugin_snapshots,
     job_steps,
@@ -733,15 +732,7 @@ class JobRetryService:
                     ).where(job_credential_snapshots.c.job_id == source_id)
                 ).mappings()
             }
-            original_fonts = {
-                str(row["role"]): str(row["font_id"])
-                for row in connection.execute(
-                    select(
-                        job_font_snapshots.c.role,
-                        job_font_snapshots.c.font_id,
-                    ).where(job_font_snapshots.c.job_id == source_id)
-                ).mappings()
-            }
+            original_fonts: dict[str, str] = {}
             original_plugins = {
                 str(row["plugin_version_id"]): _json_object(row["config_json"])
                 for row in connection.execute(
@@ -1025,15 +1016,7 @@ class JobRetryService:
                     ).where(job_credential_snapshots.c.job_id == source_id)
                 ).mappings()
             }
-            fonts = {
-                str(row["role"]): str(row["font_id"])
-                for row in connection.execute(
-                    select(
-                        job_font_snapshots.c.role,
-                        job_font_snapshots.c.font_id,
-                    ).where(job_font_snapshots.c.job_id == source_id)
-                ).mappings()
-            }
+            fonts: dict[str, str] = {}
             plugins = {
                 str(row["plugin_version_id"]): _json_object(row["config_json"])
                 for row in connection.execute(
