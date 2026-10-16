@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 from numbers import Real
+import os
 from pathlib import Path
 import re
 from typing import Any, Callable, Protocol
@@ -453,6 +454,174 @@ def can_merge_concept_names(name1: str, name2: str, type1: str = '', type2: str 
     if clean1 == clean2 and clean1:
         return True
     return False
+
+
+LLM_JUDGE_CACHE_FILE = r"D:\My_Doc\Mine\manga-knowledge\llm_entity_judge_cache.json"
+
+
+class LLMBatchJudge:
+    """LLM 实体对齐语义裁决器：三层架构（粗筛规则 + 批量LLM + 单项仲裁）与本地缓存持久化。"""
+
+    def __init__(self, base_url: str = "http://8.216.18.224:8317/v1", api_key: str = "123456", model: str = "gemini-3.8-flash-high"):
+        from src.core.manga_insight.embedding_client import ChatClient, ChatLLMConfig
+        cfg = ChatLLMConfig(
+            provider="gemini",
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+        )
+        self.client = ChatClient(cfg)
+        self.cache: dict[str, dict[str, Any]] = {}
+        self.load_cache()
+
+    @staticmethod
+    def make_key(category: str, name1: str, name2: str) -> str:
+        s1, s2 = sorted([name1, name2])
+        return f"{category}::{s1}::{s2}"
+
+    def load_cache(self) -> None:
+        if os.path.exists(LLM_JUDGE_CACHE_FILE):
+            try:
+                with open(LLM_JUDGE_CACHE_FILE, "r", encoding="utf-8") as f:
+                    self.cache = json.load(f)
+            except Exception:
+                self.cache = {}
+
+    def save_cache(self) -> None:
+        try:
+            with open(LLM_JUDGE_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.cache, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    async def judge_batch(self, candidate_pairs: list[tuple[str, str, str]]) -> dict[str, bool]:
+        results: dict[str, bool] = {}
+        to_query: list[dict[str, Any]] = []
+
+        for cat, n1, n2 in candidate_pairs:
+            key = self.make_key(cat, n1, n2)
+            if key in self.cache:
+                results[key] = self.cache[key].get("same", False)
+            else:
+                if key not in [item["key"] for item in to_query]:
+                    to_query.append({
+                        "key": key,
+                        "category": cat,
+                        "name1": n1,
+                        "name2": n2,
+                    })
+
+        if not to_query:
+            return results
+
+        batch_size = 15
+        for i in range(0, len(to_query), batch_size):
+            chunk = to_query[i:i + batch_size]
+            chunk_pairs = []
+            for idx, item in enumerate(chunk, 1):
+                chunk_pairs.append({
+                    "id": idx,
+                    "category": item["category"],
+                    "name1": item["name1"],
+                    "name2": item["name2"]
+                })
+
+            prompt = f"""你是一个漫画知识库实体对齐裁决专家。
+请逐一判断以下同一类别下的两个实体名称在漫画设定中是否指代同一个核心实体（即名称2是否为名称1的别名、简称、同义修饰变体或繁简异构）。
+
+判定规则：
+1. 数值不同（如 2000万 vs 1000万/300万，或正负不同、汇率数值不同）绝不是同一实体；
+2. 同一数值的不同表述（如 2000万日元 与 2000万日元欠款，300万日元 与 300萬日元融資）是同一实体的不同表述，应该合并；
+3. 日期时间不同（如 2008年 vs 2009年）绝不是同一实体；
+4. 物品核心概念不同（如 书包 与 FX超入门指导书）绝不是同一实体；全称/简称/特定型号（如 电脑 与 笔记本电脑）是同一实体；
+5. 角色本人 与 角色亲属/同学/关系称谓（如 久留美 与 久留美母亲，虎杖悠仁 与 虎杖倭助）绝不是同一实体；全名与简称（如 福贺久留美 与 久留美）是同一实体；
+6. 机构内的不同子地点（如 操场 与 百叶箱）绝不是同一实体；同一房间的不同表述（如 久留美的房间 与 个人房间）是同一实体；
+7. 繁简体异构（如 保证金维持率 与 保證金維持率）是同一实体。
+
+待判定对列表：
+{json.dumps(chunk_pairs, ensure_ascii=False, indent=2)}
+
+请严格返回如下 JSON:
+{{
+  "results": [
+    {{"id": 1, "same": true, "reason": "..."}}
+  ]
+}}
+如果某个实体对难以确切断定，"same" 可填 "ambiguous"（我们将对其进行单独二次仲裁）。"""
+
+            try:
+                resp = await self.client.generate_json(prompt=prompt, system="输出合法的JSON格式。")
+                ret_results = resp.get("results", []) if isinstance(resp, dict) else []
+                for r in ret_results:
+                    rid = r.get("id")
+                    if rid is not None and 1 <= rid <= len(chunk):
+                        target_item = chunk[rid - 1]
+                        same_val = r.get("same")
+                        reason = r.get("reason", "")
+
+                        if str(same_val).lower() == "ambiguous":
+                            arb_same, arb_reason = await self._arbitrate_single(target_item["category"], target_item["name1"], target_item["name2"])
+                            self.cache[target_item["key"]] = {"same": arb_same, "reason": arb_reason}
+                            results[target_item["key"]] = arb_same
+                        else:
+                            is_same = bool(same_val is True or str(same_val).lower() == "true")
+                            self.cache[target_item["key"]] = {"same": is_same, "reason": reason}
+                            results[target_item["key"]] = is_same
+            except Exception as e:
+                print(f"[LLMBatchJudge Error] {e}")
+                for target_item in chunk:
+                    if target_item["key"] not in results:
+                        results[target_item["key"]] = False
+
+        self.save_cache()
+        return results
+
+    async def _arbitrate_single(self, category: str, name1: str, name2: str) -> tuple[bool, str]:
+        prompt = f"""请深入裁决以下漫画实体对在剧情中是否指代同一个核心实体。
+类别: {category}
+名称1: {name1}
+名称2: {name2}
+
+请权衡漫画连载中的别名、设定和剧情一致性。
+最终只能二选一：true 代表应合并，false 代表应作为两个独立实体。
+返回 JSON: {{"same": true/false, "reason": "..."}}"""
+        try:
+            resp = await self.client.generate_json(prompt=prompt, system="输出合法的JSON格式。")
+            same = bool(resp.get("same") is True or str(resp.get("same")).lower() == "true")
+            return same, f"[Arbitrated] {resp.get('reason', '')}"
+        except Exception as e:
+            return False, f"[Arbitration failed: {e}]"
+
+    def judge_pair_sync(self, category: str, name1: str, name2: str) -> bool:
+        """同步查询或调用 LLM 进行单对判定。"""
+        key = self.make_key(category, name1, name2)
+        if key in self.cache:
+            return bool(self.cache[key].get("same", False))
+
+        async def _run():
+            await self.judge_batch([(category, name1, name2)])
+            return bool(self.cache.get(key, {}).get("same", False))
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    return pool.submit(lambda: asyncio.run(_run())).result()
+            else:
+                return loop.run_until_complete(_run())
+        except Exception:
+            return asyncio.run(_run())
+
+
+_GLOBAL_LLM_JUDGE: LLMBatchJudge | None = None
+
+
+def get_default_llm_judge() -> LLMBatchJudge:
+    global _GLOBAL_LLM_JUDGE
+    if _GLOBAL_LLM_JUDGE is None:
+        _GLOBAL_LLM_JUDGE = LLMBatchJudge()
+    return _GLOBAL_LLM_JUDGE
 
 
 def check_model_entity_similarity(
@@ -3466,7 +3635,7 @@ class InsightDerivedRepository:
                                     break
 
                             elif cat == "items":
-                                # 物品归并：必须核心名词一致，不能只因共享单字（如“书”）就合并；要求去修饰词后核心名词相同，或重合度 >= 80%
+                                # 物品归并：确定性规则（全同/剥离括号后同） + 语义裁决（重合度 >= 40% 查 LLM 缓存/判定）
                                 if can_merge_item_names(name, c_name):
                                     target_id = existing_ent["entity_id"]
                                     merge_rule_hit = "item_core_match"
@@ -3481,8 +3650,28 @@ class InsightDerivedRepository:
                                 if target_id:
                                     break
 
+                                # LLM 语义裁决（字符重合度 >= 40% 粗筛）
+                                overlap = calculate_char_overlap_ratio(name, c_name)
+                                if overlap >= 0.40:
+                                    judge = get_default_llm_judge()
+                                    if judge.judge_pair_sync(cat, name, c_name):
+                                        target_id = existing_ent["entity_id"]
+                                        merge_rule_hit = "llm_semantic_judge"
+                                        merge_confidence = "high"
+                                        break
+                                for ex_alias in c_aliases:
+                                    if calculate_char_overlap_ratio(name, ex_alias) >= 0.40:
+                                        judge = get_default_llm_judge()
+                                        if judge.judge_pair_sync(cat, name, ex_alias):
+                                            target_id = existing_ent["entity_id"]
+                                            merge_rule_hit = "llm_semantic_judge"
+                                            merge_confidence = "high"
+                                            break
+                                if target_id:
+                                    break
+
                             elif cat == "concepts":
-                                # 概念归并：必须语义类型相同且名称核心词一致，禁止仅因共享数字（如2000万与2008年）合并
+                                # 概念归并：确定性规则（全同/剥离括号后同） + 语义裁决（重合度 >= 40% 查 LLM 缓存/判定）
                                 cur_types = info.get("types", [])
                                 cur_type = cur_types[0] if cur_types else ""
                                 exist_types = existing_ent.get("concept_types", [])
@@ -3498,6 +3687,26 @@ class InsightDerivedRepository:
                                         merge_rule_hit = "concept_semantic_match"
                                         merge_confidence = "high"
                                         break
+                                if target_id:
+                                    break
+
+                                # LLM 语义裁决（字符重合度 >= 40% 粗筛）
+                                overlap = calculate_char_overlap_ratio(name, c_name)
+                                if overlap >= 0.40:
+                                    judge = get_default_llm_judge()
+                                    if judge.judge_pair_sync(cat, name, c_name):
+                                        target_id = existing_ent["entity_id"]
+                                        merge_rule_hit = "llm_semantic_judge"
+                                        merge_confidence = "high"
+                                        break
+                                for ex_alias in c_aliases:
+                                    if calculate_char_overlap_ratio(name, ex_alias) >= 0.40:
+                                        judge = get_default_llm_judge()
+                                        if judge.judge_pair_sync(cat, name, ex_alias):
+                                            target_id = existing_ent["entity_id"]
+                                            merge_rule_hit = "llm_semantic_judge"
+                                            merge_confidence = "high"
+                                            break
                                 if target_id:
                                     break
 
