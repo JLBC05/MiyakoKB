@@ -28,7 +28,6 @@ import UiCheckbox from '@/components/ui/UiCheckbox.vue'
 import BaseModal from '@/components/common/BaseModal.vue'
 import { copyTextToClipboard } from '@/utils/clipboard'
 import { showToast, useToast } from '@/utils/toast'
-import { createTranslationBatch } from '@/api/v2/translation'
 import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import { useRuntimeStore } from '@/stores/runtimeStore'
 import { useSettingsStore } from '@/stores/settings'
@@ -59,12 +58,10 @@ const publicTrialNoticeDismissed = ref(
 const showPublicTrialNotice = computed(
   () => isPublicProfile.value && !publicTrialNoticeDismissed.value,
 )
-const canTranslate = computed(() => publicAccess.featureAllowed('translation'))
 const canUseInsight = computed(() => publicAccess.featureAllowed('insight'))
 const canUseCharacterStudio = computed(() => publicAccess.featureAllowed('characterStudio'))
 const disabledFeatureMessage = computed(() => {
   const key = route.query.disabledFeature
-  if (key === 'translation') return '管理员已关闭翻译功能。'
   if (key === 'insight') return '管理员已关闭漫画分析功能。'
   if (key === 'characterStudio') return '管理员已关闭角色工坊。'
   return ''
@@ -193,38 +190,12 @@ function openTagManageModal() {
   showTagManageModal.value = true
 }
 
-function goToTranslate() {
-  router.push('/translate')
-}
-
 function setSort(value: UiSelectValue) {
   const [by, order] = String(value).split(':') as [
     'title' | 'createdAt' | 'updatedAt',
     'asc' | 'desc',
   ]
   bookshelfStore.setSort(by, order)
-}
-
-async function translateSelectedBooks() {
-  const bookIds = [...bookshelfStore.selectedBookIds]
-  if (!bookIds.length || batchBusy.value) return
-  batchBusy.value = true
-  try {
-    const result = await createTranslationBatch({ bookIds }, { mode: 'standard' })
-    for (const jobId of result.jobIds) taskCenterStore.trackJob(jobId)
-    await bookshelfStore.loadBooks()
-    showToast(
-      result.skipped.length
-        ? `已创建 ${result.jobIds.length} 个任务，跳过 ${result.skipped.length} 个章节`
-        : `已创建 ${result.jobIds.length} 个后端翻译任务`,
-      result.skipped.length ? 'warning' : 'success',
-    )
-    taskCenterStore.open({ batchId: result.batchId })
-  } catch (error) {
-    showToast(error instanceof Error ? error.message : '创建批量翻译失败', 'error')
-  } finally {
-    batchBusy.value = false
-  }
 }
 
 async function downloadSelectedBooks() {
@@ -405,10 +376,6 @@ async function applyBatchTags() {
             <UiIcon name="tags" size="16" />
             <span>管理标签</span>
           </UiButton>
-          <UiButton v-if="canTranslate" variant="secondary" @click="goToTranslate">
-            <UiIcon name="languages" size="16" />
-            <span>快速翻译</span>
-          </UiButton>
           <UiButton
             :variant="bookshelfStore.batchMode ? 'primary' : 'secondary'"
             @click="bookshelfStore.batchMode ? bookshelfStore.exitBatchMode() : bookshelfStore.enterBatchMode()"
@@ -476,14 +443,6 @@ async function applyBatchTags() {
           {{ bookshelfStore.isAllSelected ? '取消全选' : '全选当前书籍' }}
         </UiButton>
         <span class="bookshelf-batch-bar__count">已选择 {{ selectedBookCount }} 本</span>
-        <UiButton
-          v-if="canTranslate"
-          variant="primary"
-          :disabled="!hasSelectedChapters || batchBusy"
-          @click="translateSelectedBooks"
-        >
-          翻译全部章节
-        </UiButton>
         <UiButton
           variant="secondary"
           :disabled="!hasSelectedPages || batchBusy"
@@ -584,7 +543,6 @@ async function applyBatchTags() {
       v-if="showDetailModal"
       :character-studio-allowed="canUseCharacterStudio"
       :insight-allowed="canUseInsight"
-      :translation-allowed="canTranslate"
       @close="closeBookDetail"
       @edit="openEditBookModal"
     />

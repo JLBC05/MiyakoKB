@@ -23,7 +23,6 @@ import NotesPanel from '@/components/insight/NotesPanel.vue'
 import PageDetail from '@/components/insight/PageDetail.vue'
 import PagesTree from '@/components/insight/PagesTree.vue'
 import InsightSettingsModal from '@/components/insight/InsightSettingsModal.vue'
-import ChapterSelectModal from '@/components/insight/ChapterSelectModal.vue'
 import ContinuationPanel from '@/components/insight/ContinuationPanel.vue'
 import CharacterStudioEntryPanel from '@/components/insight/CharacterStudioEntryPanel.vue'
 import * as insightApi from '@/api/insight'
@@ -78,8 +77,6 @@ const loadedBookDetail = ref<{
   cover?: string
   totalPages: number
 } | null>(null)
-
-const showChapterSelectModal = ref(false)
 
 const currentBook = computed(() => {
   if (loadedBookDetail.value?.id === insightStore.currentBookId) return loadedBookDetail.value
@@ -139,7 +136,6 @@ async function loadBook(bookId: string): Promise<void> {
   if (!bookId) return
 
   const loadId = ++bookLoadSequence
-  showChapterSelectModal.value = false
   showMobileSidebar.value = false
   showMobileWorkspace.value = false
   loadedBookDetail.value = null
@@ -305,48 +301,6 @@ function toggleMobileWorkspace(): void {
   }
 }
 
-function goToTranslate(): void {
-  if (!insightStore.currentBookId) {
-    router.push('/translate')
-    return
-  }
-
-  const chapters = insightStore.chapters
-
-  if (chapters.length === 0) {
-    showToast('当前书籍还没有章节，请先在书架中创建章节', 'warning')
-  } else if (chapters.length === 1) {
-    const onlyChapter = chapters[0]
-    if (!onlyChapter) return
-    router.push({
-      path: '/translate',
-      query: {
-        book: insightStore.currentBookId,
-        chapter: onlyChapter.id
-      }
-    })
-  } else {
-    showChapterSelectModal.value = true
-  }
-}
-
-function handleChapterSelect(chapterId: string): void {
-  const bookId = insightStore.currentBookId
-  showChapterSelectModal.value = false
-  if (!bookId || !insightStore.chapters.some(chapter => chapter.id === chapterId)) return
-  router.push({
-    path: '/translate',
-    query: {
-      book: bookId,
-      chapter: chapterId
-    }
-  })
-}
-
-function closeChapterSelectModal(): void {
-  showChapterSelectModal.value = false
-}
-
 function retryCurrentBook(): void {
   if (insightStore.currentBookId) void loadBook(insightStore.currentBookId)
 }
@@ -354,7 +308,6 @@ function retryCurrentBook(): void {
 function resetBookSelection(): void {
   bookLoadSequence += 1
   loadedBookDetail.value = null
-  showChapterSelectModal.value = false
   showMobileSidebar.value = false
   showMobileWorkspace.value = false
   observedTerminalKeys.clear()
@@ -426,13 +379,6 @@ watch(
           icon-name="book-open"
           label="书架"
           collapse-label-on-mobile
-        />
-        <ProductHeaderAction
-          class="insight-header__nav-link"
-          icon-name="globe"
-          label="翻译"
-          collapse-label-on-mobile
-          @click="goToTranslate"
         />
         <ProductHeaderAction
           as="span"
@@ -641,13 +587,6 @@ watch(
     <InsightSettingsModal
       v-if="showSettingsModal"
       @close="closeSettingsModal"
-    />
-
-    <ChapterSelectModal
-      v-if="showChapterSelectModal && hasLoadedBook"
-      :chapters="insightStore.chapters"
-      @select="handleChapterSelect"
-      @close="closeChapterSelectModal"
     />
   </AppShell>
 </template>

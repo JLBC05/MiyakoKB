@@ -5,7 +5,6 @@ export const APP_ROUTE_PATHS = {
   account: '/account',
   admin: '/admin',
   bookshelf: '/',
-  translate: '/translate',
   reader: '/reader',
   insight: '/insight',
   characterStudio: '/insight/character-studio',

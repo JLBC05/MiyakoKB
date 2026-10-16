@@ -41,12 +41,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '书架' }
   },
   {
-    path: APP_ROUTE_PATHS.translate,
-    name: 'translate',
-    component: () => import('@/views/TranslateView.vue'),
-    meta: { title: '翻译', publicFeature: 'translation' }
-  },
-  {
     path: APP_ROUTE_PATHS.reader,
     name: 'reader',
     component: () => import('@/views/ReaderView.vue'),

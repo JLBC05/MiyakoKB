@@ -41,7 +41,7 @@ const images = computed(() =>
 )
 const loading = ref(true)
 const error = ref('')
-const viewMode = ref<'original' | 'translated'>('translated')
+const viewMode = ref<'original'>('original')
 const settings = ref<ReaderSettings>(
   loadReaderSettings() ?? { ...DEFAULT_READER_SETTINGS, fits: { ...DEFAULT_READER_SETTINGS.fits } }
 )
@@ -202,10 +202,6 @@ function chapter(id: string) {
   persist()
   void router.push({ path: '/reader', query: { book: props.bookId, chapter: id } })
 }
-function translate() {
-  persist()
-  void router.push({ path: '/translate', query: { book: props.bookId, chapter: props.chapterId } })
-}
 async function toggleFullscreen() {
   try {
     if (document.fullscreenElement) await document.exitFullscreen()
@@ -325,32 +321,10 @@ watch(
         <strong>{{ book?.title || '阅读器' }}</strong><span>{{ chapterTitle }}</span>
       </div>
       <span class="reader-header__page-info">{{ range }} / {{ images.length }}</span>
-      <div class="reader-header__modes">
-        <UiButton
-          v-for="mode in ['original', 'translated'] as const"
-          :key="mode"
-          size="sm"
-          :variant="viewMode === mode ? 'primary' : 'inverse'"
-          :aria-pressed="viewMode === mode"
-          :data-mode="mode"
-          @click="viewMode = mode"
-        >
-          {{ mode === 'original' ? '原图' : '译图' }}
-        </UiButton>
-      </div>
       <UiButton variant="inverse" size="sm" @click="toggleFullscreen">
         {{
           fullscreen ? '退出全屏' : '全屏'
         }}
-      </UiButton>
-      <UiButton
-        v-if="access.featureAllowed('translation')"
-        class="reader-header__translate"
-        variant="inverse"
-        size="sm"
-        @click="translate"
-      >
-        编辑翻译
       </UiButton>
       <UiButton variant="inverse" size="sm" aria-label="收起菜单" @click="controls = false">
         收起
@@ -385,7 +359,6 @@ watch(
           :can-prev="canPrev"
           :can-next="canNext"
           @position-change="setPosition"
-          @go-translate="translate"
           @navigate="navigate"
           @size="learnedSize"
         />
@@ -593,10 +566,6 @@ watch(
   .reader-header__title {
     order: -1;
     flex-basis: 100%;
-  }
-
-  .reader-header__translate {
-    display: none;
   }
 
   .reader-header__page-info {
