@@ -823,111 +823,6 @@ job_items = Table(
     ),
 )
 
-browser_sessions = Table(
-    "browser_sessions",
-    metadata,
-    Column("id", String(UUID_LENGTH), primary_key=True),
-    Column(
-        "owner_user_id",
-        String(UUID_LENGTH),
-        nullable=False,
-        server_default=LOCAL_USER_ID,
-    ),
-    Column(
-        "book_id",
-        String(UUID_LENGTH),
-        ForeignKey("books.id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,
-    ),
-    Column(
-        "chapter_id",
-        String(UUID_LENGTH),
-        ForeignKey("chapters.id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,
-    ),
-    Column("page_url", Text, nullable=False),
-    Column("page_title", String(500), nullable=False),
-    Column("settings_json", Text),
-    Column("mode", String(16), nullable=False, server_default="standard"),
-    Column("status", String(16), nullable=False, server_default="active"),
-    Column("expires_at", DateTime(timezone=True), nullable=False),
-    *_timestamps(),
-    CheckConstraint("mode IN ('standard','hq')", name="mode_values"),
-    CheckConstraint("status IN ('active','cancelled')", name="status_values"),
-)
-Index("ix_browser_sessions_expiry", browser_sessions.c.expires_at)
-
-browser_session_credentials = Table(
-    "browser_session_credentials",
-    metadata,
-    Column("session_id", String(UUID_LENGTH), ForeignKey("browser_sessions.id", ondelete="CASCADE"), primary_key=True),
-    Column("credential_version_id", String(UUID_LENGTH), ForeignKey("credential_versions.id", ondelete="RESTRICT"), primary_key=True),
-)
-Index("ix_browser_session_credentials_version", browser_session_credentials.c.credential_version_id)
-
-browser_session_pages = Table(
-    "browser_session_pages",
-    metadata,
-    Column("id", String(UUID_LENGTH), primary_key=True),
-    Column(
-        "session_id",
-        String(UUID_LENGTH),
-        ForeignKey("browser_sessions.id", ondelete="CASCADE"),
-        nullable=False,
-    ),
-    Column("client_page_key", String(200), nullable=False),
-    Column("ordinal", Integer, nullable=False),
-    Column("logical_path", Text, nullable=False),
-    Column("source_url", Text),
-    Column(
-        "source_asset_id",
-        String(UUID_LENGTH),
-        ForeignKey("assets.id", ondelete="RESTRICT"),
-        nullable=False,
-    ),
-    Column(
-        "thumbnail_asset_id",
-        String(UUID_LENGTH),
-        ForeignKey("assets.id", ondelete="RESTRICT"),
-        nullable=False,
-    ),
-    Column(
-        "page_id",
-        String(UUID_LENGTH),
-        ForeignKey("pages.id", ondelete="CASCADE"),
-        unique=True,
-    ),
-    Column(
-        "job_id",
-        String(UUID_LENGTH),
-        ForeignKey("jobs.id", ondelete="SET NULL"),
-    ),
-    Column("retry_count", Integer, nullable=False, server_default="0"),
-    Column("error_json", Text),
-    *_timestamps(),
-    UniqueConstraint("session_id", "client_page_key"),
-    UniqueConstraint("session_id", "ordinal"),
-    CheckConstraint("ordinal >= 1", name="ordinal_positive"),
-    CheckConstraint("retry_count >= 0", name="retry_count_nonnegative"),
-)
-Index(
-    "ix_browser_session_pages_pending",
-    browser_session_pages.c.session_id,
-    browser_session_pages.c.page_id,
-    browser_session_pages.c.job_id,
-)
-Index(
-    "ix_browser_session_pages_source_asset",
-    browser_session_pages.c.source_asset_id,
-)
-Index(
-    "ix_browser_session_pages_thumbnail_asset",
-    browser_session_pages.c.thumbnail_asset_id,
-)
-Index("ix_browser_session_pages_job", browser_session_pages.c.job_id)
-
 job_steps = Table(
     "job_steps",
     metadata,
@@ -2095,41 +1990,6 @@ Index(
     transient_requests.c.created_at,
 )
 
-render_requests = Table(
-    "render_requests",
-    metadata,
-    Column("id", String(UUID_LENGTH), primary_key=True),
-    Column(
-        "owner_user_id",
-        String(UUID_LENGTH),
-        nullable=False,
-        server_default=LOCAL_USER_ID,
-    ),
-    Column("page_id", String(UUID_LENGTH), ForeignKey("pages.id", ondelete="CASCADE"), nullable=False, unique=True),
-    Column("requested_revision", Integer, nullable=False),
-    Column("rendering_revision", Integer),
-    Column("completed_revision", Integer),
-    Column("status", String(16), nullable=False, server_default="pending"),
-    Column("executor_epoch_id", String(UUID_LENGTH), ForeignKey("process_epochs.id", ondelete="SET NULL")),
-    Column("attempt_id", String(UUID_LENGTH)),
-    Column("error_json", Text),
-    *_timestamps(),
-    CheckConstraint("requested_revision >= 1", name="requested_revision_positive"),
-    CheckConstraint(
-        "rendering_revision IS NULL OR rendering_revision >= 1",
-        name="rendering_revision_positive",
-    ),
-    CheckConstraint(
-        "completed_revision IS NULL OR completed_revision >= 1",
-        name="completed_revision_positive",
-    ),
-    CheckConstraint(
-        f"status IN ({_sql_values(RENDER_REQUEST_STATUSES)})",
-        name="status_values",
-    ),
-)
-Index("ix_render_requests_claim", render_requests.c.status, render_requests.c.updated_at)
-
 page_assets = Table(
     "page_assets",
     metadata,
@@ -2141,11 +2001,7 @@ page_assets = Table(
     Column("parent_asset_id", String(UUID_LENGTH), ForeignKey("assets.id", ondelete="RESTRICT")),
     Column("producer_job_step_id", String(UUID_LENGTH), ForeignKey("job_steps.id", ondelete="SET NULL")),
     Column("producer_operation_id", String(UUID_LENGTH), ForeignKey("operations.id", ondelete="SET NULL")),
-    Column(
-        "producer_render_request_id",
-        String(UUID_LENGTH),
-        ForeignKey("render_requests.id", ondelete="SET NULL"),
-    ),
+    Column("producer_render_request_id", String(UUID_LENGTH)),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
     CheckConstraint(f"role IN ({_sql_values(PAGE_ASSET_ROLES)})", name="role_values"),
     CheckConstraint(
@@ -2282,12 +2138,10 @@ _FOREIGN_KEY_LOOKUP_INDEXES = (
     ("ix_operation_artifacts_asset_id", operation_artifacts.c.asset_id),
     ("ix_operation_artifacts_page_id", operation_artifacts.c.page_id),
     ("ix_transient_requests_worker_epoch_id", transient_requests.c.worker_epoch_id),
-    ("ix_render_requests_executor_epoch_id", render_requests.c.executor_epoch_id),
     ("ix_page_assets_asset_id", page_assets.c.asset_id),
     ("ix_page_assets_parent_asset_id", page_assets.c.parent_asset_id),
     ("ix_page_assets_producer_job_step_id", page_assets.c.producer_job_step_id),
     ("ix_page_assets_producer_operation_id", page_assets.c.producer_operation_id),
-    ("ix_page_assets_producer_render_request_id", page_assets.c.producer_render_request_id),
 )
 
 for _index_name, _column in _FOREIGN_KEY_LOOKUP_INDEXES:

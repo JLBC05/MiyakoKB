@@ -38,7 +38,6 @@ from src.backend_v2.storage.defaults import (
 )
 from src.backend_v2.storage.schema import (
     ACTIVE_OPERATION_STATUSES,
-    ACTIVE_RENDER_REQUEST_STATUSES,
     NONTERMINAL_JOB_STATUSES,
     assets,
     book_tags,
@@ -54,7 +53,6 @@ from src.backend_v2.storage.schema import (
     operations,
     page_assets,
     pages,
-    render_requests,
     studio_chat_sessions,
     studio_documents,
     tags,
@@ -2114,17 +2112,7 @@ class ContentRepository:
                 ).scalar_one_or_none()
                 is not None
             )
-            has_active_render = (
-                connection.execute(
-                    select(render_requests.c.id).where(
-                        render_requests.c.page_id == page_id,
-                        render_requests.c.status.in_(
-                            ACTIVE_RENDER_REQUEST_STATUSES
-                        ),
-                    )
-                ).scalar_one_or_none()
-                is not None
-            )
+            has_active_render = False
             calculate_auto_font_size = None
             if "fontSize" in propagation and bool(
                 current_style["autoFontSize"]

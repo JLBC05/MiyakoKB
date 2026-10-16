@@ -27,7 +27,6 @@ from src.backend_v2.storage.schema import (
     book_settings,
     books,
     chapters,
-    browser_sessions,
     pages,
     prompts,
     provider_settings,
@@ -358,9 +357,7 @@ class SettingsResolver:
                     translation_constraints.c.book_id == chapter_row["book_id"]
                 )
             ).mappings().one_or_none()
-            browser_book = connection.execute(select(browser_sessions.c.book_id).where(
-                browser_sessions.c.chapter_id == chapter_id,
-            )).scalar_one_or_none()
+            browser_book = None
             if browser_book is not None:
                 from src.backend_v2.browser_extension.settings import session_settings
 

@@ -56,8 +56,6 @@ from src.backend_v2.storage.schema import (
     chapter_write_locks,
     chapters,
     books,
-    browser_sessions,
-    browser_session_pages,
     continuation_projects,
     credentials,
     credential_versions,
@@ -79,7 +77,6 @@ from src.backend_v2.storage.schema import (
     pages,
     process_epochs,
     queue_state,
-    render_requests,
     analysis_runs,
     analysis_run_targets,
     web_import_drafts,
@@ -837,11 +834,6 @@ class JobQueueRepository:
                     else {}
                 )
                 for spec in specs:
-                    if spec.book_id and connection.execute(select(browser_sessions.c.id).where(
-                        browser_sessions.c.book_id == spec.book_id,
-                        browser_sessions.c.expires_at <= now,
-                    )).first():
-                        raise JobConflict("网页已退出，不能继续创建翻译任务")
                     next_rank += 1
                     job_id = str(uuid.uuid4())
                     created_ids.append(job_id)
@@ -980,19 +972,6 @@ class JobQueueRepository:
                         },
                         now=now,
                     )
-                    if spec.retry_of_job_id:
-                        connection.execute(update(browser_sessions).where(
-                            browser_sessions.c.id.in_(select(browser_session_pages.c.session_id).where(
-                                browser_session_pages.c.job_id == spec.retry_of_job_id
-                            )),
-                        ).values(status="active"))
-                        connection.execute(update(browser_session_pages).where(
-                            browser_session_pages.c.job_id == spec.retry_of_job_id,
-                            browser_session_pages.c.page_id.in_([
-                                item.page_id for item in spec.items if item.page_id
-                            ]),
-                        ).values(job_id=job_id, error_json=None,
-                            retry_count=browser_session_pages.c.retry_count + 1, updated_at=now))
                 if transaction_hook is not None:
                     transaction_hook(
                         connection,
@@ -4256,48 +4235,6 @@ class JobQueueRepository:
                     )
                     .values(render_status="repair_failed", updated_at=now)
                 )
-
-        render_rows = list(
-            connection.execute(
-                select(render_requests.c.id, render_requests.c.page_id)
-                .join(pages, pages.c.id == render_requests.c.page_id)
-                .where(
-                    pages.c.chapter_id.in_(chapter_ids),
-                    render_requests.c.status.in_(("pending", "running")),
-                )
-            ).mappings()
-        )
-        render_ids = [str(row["id"]) for row in render_rows]
-        if not render_ids:
-            return
-        error = {
-            "code": "DURABLE_JOB_PREEMPTED",
-            "message": "A queued durable job superseded this render request",
-        }
-        connection.execute(
-            update(render_requests)
-            .where(
-                render_requests.c.id.in_(render_ids),
-                render_requests.c.status.in_(("pending", "running")),
-            )
-            .values(
-                status="failed",
-                rendering_revision=None,
-                executor_epoch_id=None,
-                attempt_id=None,
-                error_json=_json(error),
-                updated_at=now,
-            )
-        )
-        render_page_ids = [str(row["page_id"]) for row in render_rows]
-        connection.execute(
-            update(pages)
-            .where(
-                pages.c.id.in_(render_page_ids),
-                pages.c.render_status == "rendering",
-            )
-            .values(render_status="stale", updated_at=now)
-        )
 
     def _set_blocked(
         self,
