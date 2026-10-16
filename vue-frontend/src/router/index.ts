@@ -58,10 +58,28 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
-    path: APP_ROUTE_PATHS.insight,
-    name: 'insight',
-    component: () => import('@/views/InsightView.vue'),
-    meta: { title: '漫画分析', publicFeature: 'insight' }
+    path: APP_ROUTE_PATHS.bookDetail,
+    name: 'book-detail',
+    component: () => import('@/views/BookDetailView.vue'),
+    meta: { title: '书籍详情' }
+  },
+  {
+    path: APP_ROUTE_PATHS.graph,
+    name: 'graph',
+    component: () => import('@/views/GraphView.vue'),
+    meta: { title: '知识图谱', publicFeature: 'insight' }
+  },
+  {
+    path: APP_ROUTE_PATHS.qa,
+    name: 'qa',
+    component: () => import('@/views/QaView.vue'),
+    meta: { title: '智能问答', publicFeature: 'insight' }
+  },
+  {
+    path: APP_ROUTE_PATHS.settings,
+    name: 'settings',
+    component: () => import('@/views/SettingsView.vue'),
+    meta: { title: '系统设置' }
   },
   {
     path: APP_ROUTE_PATHS.characterStudio,
@@ -126,7 +144,7 @@ router.beforeEach(async (to, _from, next) => {
     // Let the page mount so the existing backend error UI can explain outages.
   }
   const title = to.meta.title as string | undefined
-  document.title = title ? `${title} - Saber Translator` : 'Saber Translator'
+  document.title = title ? `${title} - MiyakoKB` : 'MiyakoKB 漫画知识库'
   next()
 })
 

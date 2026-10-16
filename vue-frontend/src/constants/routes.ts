@@ -5,7 +5,10 @@ export const APP_ROUTE_PATHS = {
   account: '/account',
   admin: '/admin',
   bookshelf: '/',
+  bookDetail: '/books/:bookId',
+  graph: '/graph',
+  qa: '/qa',
+  settings: '/settings',
   reader: '/reader',
-  insight: '/insight',
   characterStudio: '/insight/character-studio',
 } as const

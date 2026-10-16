@@ -278,10 +278,10 @@ async function hydrateWorkspace(nextBookId: string) {
 
 function goBack() {
   if (!props.bookId) {
-    void router.push({ name: 'insight' })
+    void router.push({ name: 'bookshelf' })
     return
   }
-  void router.push({ name: 'insight', query: { book: props.bookId } })
+  void router.push({ name: 'book-detail', params: { bookId: props.bookId } })
 }
 
 async function openDocument(docId: string) {

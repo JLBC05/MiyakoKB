@@ -308,7 +308,7 @@ function goToReader(chapterId: string) {
 function goToInsight() {
   if (currentBook.value) {
     router.push({
-      path: '/insight',
+      path: '/graph',
       query: {
         book: currentBook.value.id,
       },

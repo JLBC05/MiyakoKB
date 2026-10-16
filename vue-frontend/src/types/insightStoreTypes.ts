@@ -40,6 +40,9 @@ export interface BatchConfig {
   contextBatchCount: number
   architecturePreset: string
   customLayers: Array<{ name: string; units: number; align: boolean }>
+  knowledgeMode?: boolean
+  extraEntities?: string[]
+  slugMode?: 'pinyin' | 'romanized'
 }
 
 export type StoreOpenAICompatibleOptions = OpenAICompatibleOptions

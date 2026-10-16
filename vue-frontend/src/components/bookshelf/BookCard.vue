@@ -23,6 +23,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   click: []
   select: [selected: boolean]
+  buildKnowledge: []
 }>()
 
 const coverFailed = ref(false)
@@ -90,6 +91,16 @@ function handleImageError() {
           aria-label="书籍标签"
           :items="tagItems"
         />
+        <div v-if="!selectable" class="book-card__actions" @click.stop>
+          <button
+            type="button"
+            class="build-knowledge-btn"
+            title="开始构建该漫画的知识库"
+            @click.stop="emit('buildKnowledge')"
+          >
+            ⚡ 构建知识库
+          </button>
+        </div>
       </div>
     </ProductRecordCard>
     <UiCheckbox
@@ -257,5 +268,34 @@ function handleImageError() {
 
 .book-card__tags {
   margin-top: 4px;
+}
+
+.book-card__actions {
+  margin-top: 8px;
+  display: flex;
+}
+
+.build-knowledge-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+.build-knowledge-btn:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.build-knowledge-btn:active {
+  transform: translateY(0);
 }
 </style>

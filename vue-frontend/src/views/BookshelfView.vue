@@ -4,9 +4,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { useBookshelfStore } from '@/stores/bookshelfStore'
 import { getV2ServerInfo } from '@/api/v2/system'
 import { createBooksExportJob, getBookDetail } from '@/api/bookshelf'
+import { startAnalysis } from '@/api/insight'
 import BookCard from '@/components/bookshelf/BookCard.vue'
 import BookSearch from '@/components/bookshelf/BookSearch.vue'
 import BookModal from '@/components/bookshelf/BookModal.vue'
+import MiyakoNavbar from '@/components/common/MiyakoNavbar.vue'
 import BookDetailModal from '@/components/bookshelf/BookDetailModal.vue'
 import TagManageModal from '@/components/bookshelf/TagManageModal.vue'
 import PublicTrialNotice from '@/components/common/PublicTrialNotice.vue'
@@ -169,21 +171,9 @@ function closeBookDetail() {
   showDetailModal.value = false
 }
 
-async function openBookDetail(bookId: string) {
-  const requestVersion = ++detailRequestVersion
-  try {
-    const book = await getBookDetail(bookId)
-    if (requestVersion !== detailRequestVersion) return
-    bookshelfStore.updateBook(bookId, book)
-
-    bookshelfStore.setCurrentBook(bookId)
-    showDetailModal.value = true
-
-  } catch (error) {
-    if (requestVersion !== detailRequestVersion) return
-    const errorMsg = error instanceof Error ? error.message : '未知错误'
-    showToast(`加载书籍详情失败: ${errorMsg}`, 'error')
-  }
+function openBookDetail(bookId: string) {
+  bookshelfStore.setCurrentBook(bookId)
+  void router.push({ name: 'book-detail', params: { bookId } })
 }
 
 function openTagManageModal() {
@@ -259,6 +249,41 @@ async function deleteSelectedBooks() {
   }
 }
 
+async function handleBuildKnowledge(bookId: string, title: string) {
+  try {
+    const res = await startAnalysis(bookId, { mode: 'full' })
+    taskCenterStore.trackJob(res.jobId)
+    taskCenterStore.open()
+    showToast(`已提交《${title}》知识库构建任务`, 'success')
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '启动构建任务失败', 'error')
+  }
+}
+
+async function handleBatchBuildKnowledge() {
+  const bookIds = [...bookshelfStore.selectedBookIds]
+  if (!bookIds.length || batchBusy.value) return
+  batchBusy.value = true
+  try {
+    let count = 0
+    for (const id of bookIds) {
+      try {
+        const res = await startAnalysis(id, { mode: 'full' })
+        taskCenterStore.trackJob(res.jobId)
+        count++
+      } catch (e) {
+        console.error(`书籍 ${id} 启动构建失败:`, e)
+      }
+    }
+    taskCenterStore.open()
+    showToast(`已成功为 ${count} 本书籍提交知识库构建任务`, 'success')
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '批量构建任务失败', 'error')
+  } finally {
+    batchBusy.value = false
+  }
+}
+
 function openBatchTags(action: 'add' | 'remove') {
   batchTagAction.value = action
   selectedBatchTagNames.value = new Set()
@@ -295,57 +320,7 @@ async function applyBatchTags() {
 
 <template>
   <AppShell class="bookshelf-page">
-    <ProductPageHeader
-      variant="brand"
-      logo-title="书架首页"
-      nav-label="书架外部链接"
-      actions-label="书架偏好操作"
-    >
-      <template v-if="showLanAccess" #meta>
-        <ProductHeaderMetaPill
-          label="局域网访问"
-          :value="lanUrl || ''"
-          title="其他设备可通过此地址访问"
-        >
-          <template #actions>
-            <ProductHeaderAction
-              variant="plain"
-              title="复制地址"
-              aria-label="复制局域网地址"
-              label="复制"
-              @click="copyLanUrl"
-            />
-          </template>
-        </ProductHeaderMetaPill>
-      </template>
-
-      <template #nav>
-        <ProductHeaderAction
-          as="a"
-          href="http://www.mashirosaber.top"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="bookshelf-header__tutorial-link"
-          label="使用教程"
-        />
-        <ProductHeaderAction
-          as="a"
-          href="https://github.com/MashiroSaber03/Saber-Translator"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="bookshelf-header__github-link"
-          aria-label="打开 GitHub 仓库"
-          icon-name="github"
-          icon-only
-        />
-      </template>
-
-      <template #actions>
-        <ProductThemeToggle
-          class="bookshelf-header__theme-toggle"
-        />
-      </template>
-    </ProductPageHeader>
+    <MiyakoNavbar />
 
     <main class="bookshelf-main">
       <ProductStatusBanner
@@ -451,6 +426,13 @@ async function applyBatchTags() {
           下载选中书籍
         </UiButton>
         <UiButton
+          variant="primary"
+          :disabled="selectedBookCount === 0 || batchBusy"
+          @click="handleBatchBuildKnowledge"
+        >
+          ⚡ 批量生成知识库
+        </UiButton>
+        <UiButton
           variant="secondary"
           :disabled="selectedBookCount === 0 || batchBusy"
           @click="openBatchTags('add')"
@@ -503,6 +485,7 @@ async function applyBatchTags() {
             :selected="bookshelfStore.selectedBookIds.has(book.id)"
             @click="openBookDetail(book.id)"
             @select="bookshelfStore.toggleBookSelection(book.id)"
+            @build-knowledge="handleBuildKnowledge(book.id, book.title)"
           />
         </ProductCardGrid>
 

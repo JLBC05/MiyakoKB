@@ -8,6 +8,7 @@ import './styles/tokens/foundation.css'
 import './styles/tokens/semantic.css'
 import './styles/tokens/component.css'
 import './styles/tokens/domain.css'
+import './styles/theme.css'
 import './styles/reset.css'
 
 const app = createApp(App)
