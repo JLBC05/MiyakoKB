@@ -15,9 +15,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Saber Translator backend-first v2")
     parser.add_argument(
         "--role",
-        choices=("desktop", "launcher", "api", "worker", "storage-migrator"),
-        default="desktop",
-        help="Process role. The packaged executable defaults to the desktop shell.",
+        choices=("launcher", "api", "worker", "storage-migrator"),
+        default="api",
+        help="Process role.",
     )
     from src.version import APP_VERSION
     parser.add_argument("--version", action="version", version=APP_VERSION)
@@ -83,13 +83,6 @@ def dispatch(argv: Sequence[str] | None = None) -> int:
             logging.getLogger(f"saber.{args.role}").exception(message)
             user_log("error", message, level=logging.ERROR)
             return 1
-
-    if args.role == "desktop":
-        if args.profile != "local":
-            parser.error("the desktop role only supports the local profile")
-        from src.backend_v2.desktop.entrypoint import run_desktop
-
-        return run_desktop(args)
 
     from src.backend_v2.launcher.entrypoint import run_launcher
 
