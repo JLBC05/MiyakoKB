@@ -401,11 +401,12 @@ def can_merge_location_names(name1: str, name2: str) -> bool:
 
 
 def can_merge_item_names(name1: str, name2: str) -> bool:
-    """判断两个物品名称是否允许归并。
+    """判断两个物品名称是否允许归并（仅保留确定性规则）。
 
-    物品的归并必须名称核心词一致（比如“电脑”和“笔记本电脑”共享“电脑”，“书包”和“学生书包”共享“书包”），
-    不能只因为共享一个“书”字就合并（如“FX超入门指导书”与“书包”禁止合并）。
-    规则：去除修饰词后的核心名词相同，或者子串重合度 >= 80%（核心词无冲突）。
+    规则只剩两条：
+    1. 名称完全一致 -> True
+    2. 剥离括号后一致 -> True
+    其余情形一律交给 align_entities 里的 LLM 语义裁决（overlap >= 0.40 粗筛）。
     """
     if name1 == name2:
         return True
@@ -413,30 +414,6 @@ def can_merge_item_names(name1: str, name2: str) -> bool:
     clean2 = re.sub(r'[\(（].*?[\)）]', '', name2).strip()
     if clean1 == clean2 and clean1:
         return True
-
-    # 常见物品前缀修饰词
-    prefixes = ['笔记本', '台式', '平板', '智能', '学生', '双肩', '单肩', '外置', '手提', '随身', '便携', '电子', '纸质']
-    core1 = clean1
-    for p in prefixes:
-        if core1.startswith(p) and len(core1) > len(p):
-            core1 = core1[len(p):]
-            break
-    core2 = clean2
-    for p in prefixes:
-        if core2.startswith(p) and len(core2) > len(p):
-            core2 = core2[len(p):]
-            break
-    if core1 == core2 and len(core1) >= 2:
-        return True
-
-    # 包含关系或重合度 >= 80%
-    overlap = calculate_char_overlap_ratio(name1, name2)
-    if overlap >= 0.80:
-        # 防冲突：如果一个包含“书包”，另一个包含“书/书籍/指导书”但不是“书包”，禁止合并
-        if ('书包' in name1 and '书包' not in name2) or ('书包' in name2 and '书包' not in name1):
-            return False
-        return True
-
     return False
 
 
@@ -461,80 +438,20 @@ def get_concept_semantic_type(t: str | None) -> str:
 
 
 def can_merge_concept_names(name1: str, name2: str, type1: str = '', type2: str = '') -> bool:
-    """判断两个概念是否允许归并。
+    """判断两个概念是否允许归并（仅保留确定性规则）。
 
-    概念类的归并必须语义类型相同（都是债务金额，或都是时间点），不能只因为共享数字就合并。
-    例如：“2000万日元”（关键金额）和“2008年10月24日”（关键时间）禁止合并。
-    规则：type 字段相同（或语义大类一致），且名称核心词一致。
+    规则只剩两条：
+    1. 名称完全一致 -> True
+    2. 剥离括号后一致 -> True
+    其余情形一律交给 align_entities 里的 LLM 语义裁决（overlap >= 0.40 粗筛），
+    由 LLM 负责区分数值/日期/汇率/OCR 变体，不再使用手工正则。
     """
     if name1 == name2:
         return True
-
-    # 1. 语义类型必须一致（如果两方均提供）
-    st1 = get_concept_semantic_type(type1)
-    st2 = get_concept_semantic_type(type2)
-    if st1 and st2 and st1 != st2:
-        return False
-
-    # 1.1 时间/日期类概念专属拦截规则
-    # 若包含年份、月份、日期的模式，严格检查时间一致性与时间粒度
-    y1 = re.findall(r'(\d{4})年', name1)
-    y2 = re.findall(r'(\d{4})年', name2)
-    m1 = re.findall(r'(\d{1,2})月', name1)
-    m2 = re.findall(r'(\d{1,2})月', name2)
-    d1 = re.findall(r'(\d{1,2})[日号]', name1)
-    d2 = re.findall(r'(\d{1,2})[日号]', name2)
-
-    has_date1 = bool(y1 or m1 or d1)
-    has_date2 = bool(y2 or m2 or d2)
-    if has_date1 or has_date2:
-        # 若两名称均包含年份且不一致，禁止合并
-        if y1 and y2 and y1 != y2:
-            return False
-        # 若两名称均包含月份且不一致，禁止合并
-        if m1 and m2 and m1 != m2:
-            return False
-        # 若两名称均包含日期且不一致，禁止合并
-        if d1 and d2 and d1 != d2:
-            return False
-        # 粒度不同禁止合并（如：一方有完整日期，另一方只有年月；或一方有月份，另一方没有）
-        if bool(d1) != bool(d2) or bool(m1) != bool(m2) or bool(y1) != bool(y2):
-            return False
-
-    # 2. 剥离括号后的核心名相同
     clean1 = re.sub(r'[\(（].*?[\)）]', '', name1).strip()
     clean2 = re.sub(r'[\(（].*?[\)）]', '', name2).strip()
     if clean1 == clean2 and clean1:
         return True
-
-    # 3. 去除核心修饰后缀后一致（如“2000万日元欠款”与“2000万日元”，“雷曼危机”与“雷曼事件”）
-    suffixes = ['欠款', '债务', '亏损', '借款', '损失', '事件', '危机']
-    c1 = clean1
-    for s in suffixes:
-        if c1.endswith(s) and len(c1) > len(s):
-            c1 = c1[:-len(s)]
-            break
-    c2 = clean2
-    for s in suffixes:
-        if c2.endswith(s) and len(c2) > len(s):
-            c2 = c2[:-len(s)]
-            break
-    if c1 == c2 and len(c1) >= 2:
-        return True
-
-    # 4. 限定性词汇防吞噬（如“FX开户年龄限制”不能并入“FX”）
-    restrictive_words = ['限制', '规则', '流程', '指南', '操作', '条件', '账户', '平台']
-    if any(rw in name1 for rw in restrictive_words) != any(rw in name2 for rw in restrictive_words):
-        return False
-
-    # 5. 字符 Jaccard 重合度 >= 60%
-    s1 = set(clean1)
-    s2 = set(clean2)
-    if s1 and s2:
-        jaccard = len(s1 & s2) / max(len(s1), len(s2))
-        if jaccard >= 0.60:
-            return True
-
     return False
 
 
