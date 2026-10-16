@@ -300,13 +300,40 @@ def calculate_char_overlap_ratio(str1: str, str2: str) -> float:
 
 CHARACTER_TITLE_SUFFIXES = ("老师", "同学", "前辈", "学长", "学姐", "会长", "校长", "爷爷", "奶奶", "队长", "医生", "大人")
 FAMILY_RELATION_SUFFIXES = ("母亲", "妈妈", "父亲", "爸爸", "爷爷", "奶奶", "姐姐", "妹妹", "哥哥", "弟弟")
+SUBORDINATE_RELATION_SUFFIXES = (
+    "母亲", "妈妈", "父亲", "爸爸", "爷爷", "奶奶", "姐姐", "妹妹", "哥哥", "弟弟",
+    "室友", "同屋", "朋友", "好友", "同学", "同事", "老师", "学生", "前男友", "前女友", "女友", "男友"
+)
+
+
+def is_character_subordinate_or_rel_blocked(name1: str, name2: str) -> bool:
+    """防从属/亲属跨角色合并安全红线（如“久留美”与“久留美母亲”、“斯科特”与“斯科特的室友”严禁合并）。"""
+    for s in SUBORDINATE_RELATION_SUFFIXES:
+        if name1.endswith(s) and not name2.endswith(s):
+            pre = name1[:-len(s)]
+            if pre.endswith("的"):
+                pre = pre[:-1]
+            if pre:
+                # 检查 name2 是否等于前缀，或以该前缀结尾，或前缀以 name2 结尾，或去掉常见外国名·分隔符后匹配
+                clean_n2 = name2.split("·")[0] if "·" in name2 else name2
+                if name2 == pre or name2.endswith(pre) or pre.endswith(name2) or clean_n2 == pre:
+                    return True
+        if name2.endswith(s) and not name1.endswith(s):
+            pre = name2[:-len(s)]
+            if pre.endswith("的"):
+                pre = pre[:-1]
+            if pre:
+                clean_n1 = name1.split("·")[0] if "·" in name1 else name1
+                if name1 == pre or name1.endswith(pre) or pre.endswith(name1) or clean_n1 == pre:
+                    return True
+    return False
 
 
 def can_merge_character_names(name1: str, name2: str) -> bool:
     """判断两个角色名称是否允许归并。
 
     规则与安全边界：
-    1. 跨角色安全红线：若其中一个是'X的关系称谓'（如'久留美母亲'/'久留美的母亲'），另一个是该角色本身（如'久留美'/'福贺久留美'），严禁合并！
+    1. 跨角色安全红线：若其中一个是'X的关系/从属称谓'（如'久留美母亲'/'斯科特室友'），另一个是该角色本身，严禁合并！
     2. 关系代称自动归并：如 '久留美母亲' / '久留美的母亲' / '母亲' 归并为同一实体。
     3. 称谓别名自动归并：如 '高木' 与 '高木老师'。
     4. 全名与简称自动归并：如 '福贺久留美' 与 '久留美'（姓氏长1~2字，后半部分完全一致）。
@@ -314,6 +341,10 @@ def can_merge_character_names(name1: str, name2: str) -> bool:
     """
     if name1 == name2:
         return True
+
+    # 1. 跨角色安全红线（亲属与从属称谓拦截）
+    if is_character_subordinate_or_rel_blocked(name1, name2):
+        return False
 
     def parse_rel(n: str):
         for s in FAMILY_RELATION_SUFFIXES:
@@ -326,11 +357,6 @@ def can_merge_character_names(name1: str, name2: str) -> bool:
 
     base1, rel1 = parse_rel(name1)
     base2, rel2 = parse_rel(name2)
-
-    # 1. 跨角色安全红线：角色本身与该角色的家属关系称谓绝对不能合并
-    if (rel1 and not rel2 and (name2 == base1 or name2.endswith(base1))) or \
-       (rel2 and not rel1 and (name1 == base2 or name1.endswith(base2))):
-        return False
 
     # 2. 关系代称自动归并（如 久留美母亲 / 久留美的母亲 / 母亲）
     if rel1 and rel2:
@@ -472,6 +498,8 @@ class LLMBatchJudge:
         )
         self.client = ChatClient(cfg)
         self.cache: dict[str, dict[str, Any]] = {}
+        self.cache_hits: int = 0
+        self.llm_calls: int = 0
         self.load_cache()
 
     @staticmethod
@@ -501,6 +529,7 @@ class LLMBatchJudge:
         for cat, n1, n2 in candidate_pairs:
             key = self.make_key(cat, n1, n2)
             if key in self.cache:
+                self.cache_hits += 1
                 results[key] = self.cache[key].get("same", False)
             else:
                 if key not in [item["key"] for item in to_query]:
@@ -527,16 +556,21 @@ class LLMBatchJudge:
                 })
 
             prompt = f"""你是一个漫画知识库实体对齐裁决专家。
-请逐一判断以下同一类别下的两个实体名称在漫画设定中是否指代同一个核心实体（即名称2是否为名称1的别名、简称、同义修饰变体或繁简异构）。
+请逐一判断以下同一类别下的两个实体名称在漫画设定中是否指代同一个核心实体（即名称2是否为名称1的别名、简称、同义修饰变体、繁简异构，或不同汉化译名音译/意译）。
 
 判定规则：
-1. 数值不同（如 2000万 vs 1000万/300万，或正负不同、汇率数值不同）绝不是同一实体；
-2. 同一数值的不同表述（如 2000万日元 与 2000万日元欠款，300万日元 与 300萬日元融資）是同一实体的不同表述，应该合并；
-3. 日期时间不同（如 2008年 vs 2009年）绝不是同一实体；
-4. 物品核心概念不同（如 书包 与 FX超入门指导书）绝不是同一实体；全称/简称/特定型号（如 电脑 与 笔记本电脑）是同一实体；
-5. 角色本人 与 角色亲属/同学/关系称谓（如 久留美 与 久留美母亲，虎杖悠仁 与 虎杖倭助）绝不是同一实体；全名与简称（如 福贺久留美 与 久留美）是同一实体；
-6. 机构内的不同子地点（如 操场 与 百叶箱）绝不是同一实体；同一房间的不同表述（如 久留美的房间 与 个人房间）是同一实体；
-7. 繁简体异构（如 保证金维持率 与 保證金維持率）是同一实体。
+1. 同一实体的不同译名/简称/OCR变体 → 必须合并 (true)。
+   - 例如角色不同汉化译名（斯科特·皮尔格林 与 斯科特·朝圣者，华莱士·威尔士 与 华莱士·富尔斯/华莱士·威尔斯，奈芙丝·周 与 奈夫斯·周/赵小刀/小刀·周/小刀·赵，斯蒂芬·斯蒂尔斯 与 史蒂芬·斯蒂尔斯，年轻尼尔 与 小尼尔）；
+   - 例如物品不同译名或规格（电脑 与 笔记本电脑，电贝斯 与 Rickenbacker电贝斯，直排轮滑鞋 与 轮滑鞋）；
+   - 例如繁简异构（保证金维持率 与 保證金維持率，爆仓 与 強制平倉）。
+2. 同类不同物（不同式神、不同具体地点、不同金额数值、不同日期） → 绝对不能合并 (false)。
+   - 式神/能力分支（十种影法术·玉犬 与 十种影法术·蟾蜍，玉犬 与 鵺）绝不是同一实体；
+   - 机构内不同子地点（操场 与 天台/连接走廊天台，操场 与 百叶箱）绝不是同一实体；
+   - 金额数值不同（2000万 与 1000万/300万/30万，或正负损益不同）绝不是同一实体；同一金额的不同表述（2000万日元 与 2000万日元欠款）是同一实体；
+   - 日期时间不同（2008年 与 2009年）绝不是同一实体。
+3. 从属关系/亲属关系/角色关系（XX的母亲、XX的室友、XX的朋友、XX的同学） → 绝对不能合并 (false)。
+   - 例如：久留美 与 久留美母亲，赵小刀 与 赵小刀的母亲，斯科特 与 斯科特的室友，虎杖悠仁 与 虎杖倭助，绝不是同一实体。
+4. 物品核心概念不同（如 书包 与 FX超入门指导书）绝不是同一实体。
 
 待判定对列表：
 {json.dumps(chunk_pairs, ensure_ascii=False, indent=2)}
@@ -550,6 +584,7 @@ class LLMBatchJudge:
 如果某个实体对难以确切断定，"same" 可填 "ambiguous"（我们将对其进行单独二次仲裁）。"""
 
             try:
+                self.llm_calls += 1
                 resp = await self.client.generate_json(prompt=prompt, system="输出合法的JSON格式。")
                 ret_results = resp.get("results", []) if isinstance(resp, dict) else []
                 for r in ret_results:
@@ -596,6 +631,7 @@ class LLMBatchJudge:
         """同步查询或调用 LLM 进行单对判定。"""
         key = self.make_key(category, name1, name2)
         if key in self.cache:
+            self.cache_hits += 1
             return bool(self.cache[key].get("same", False))
 
         async def _run():
@@ -3567,7 +3603,9 @@ class InsightDerivedRepository:
                             updated_alias_map[a] = expected_id
 
                 # 处理非聚类的独立实体，引入类别特定的受控自动归并规则
-                for name, info in raw_dict.items():
+                # 按频次从高到低排序处理，确保高频标准名称优先成为 canonical 实体
+                sorted_raw_items = sorted(raw_dict.items(), key=lambda it: it[1]["count"], reverse=True)
+                for name, info in sorted_raw_items:
                     if name in processed_names:
                         continue
 
@@ -3587,7 +3625,8 @@ class InsightDerivedRepository:
 
                             # 分类别定制归并判定：
                             if cat == "characters":
-                                # 角色归并：支持全名/简称、关系代称、称谓别名，禁止跨角色或同姓不同人误并
+                                # 角色归并：专属规则（支持全名/简称、关系代称、称谓别名，禁止跨角色或同姓不同人误并）
+                                # 专属规则内部已包含亲属/从属称谓防跨角色安全红线
                                 if can_merge_character_names(name, c_name):
                                     target_id = existing_ent["entity_id"]
                                     merge_rule_hit = "character_alias_merge"
@@ -3602,8 +3641,34 @@ class InsightDerivedRepository:
                                 if target_id:
                                     break
 
+                                # LLM 语义裁决（重合度 >= 40% 且严守亲属/从属防跨角色红线）
+                                overlap = calculate_char_overlap_ratio(name, c_name)
+                                if overlap >= 0.40 and not is_character_subordinate_or_rel_blocked(name, c_name):
+                                    judge = get_default_llm_judge()
+                                    if judge.judge_pair_sync(cat, name, c_name):
+                                        target_id = existing_ent["entity_id"]
+                                        merge_rule_hit = "llm_semantic_judge"
+                                        merge_confidence = "high"
+                                        break
+                                for ex_alias in c_aliases:
+                                    if calculate_char_overlap_ratio(name, ex_alias) >= 0.40 and not is_character_subordinate_or_rel_blocked(name, ex_alias):
+                                        judge = get_default_llm_judge()
+                                        if judge.judge_pair_sync(cat, name, ex_alias):
+                                            target_id = existing_ent["entity_id"]
+                                            merge_rule_hit = "llm_semantic_judge"
+                                            merge_confidence = "high"
+                                            break
+                                if target_id:
+                                    break
+
                             elif cat == "abilities":
-                                # 能力归并：带有式神/分支后缀的，核心名不同禁止合并
+                                # 能力归并：带有式神/分支后缀的，核心名不同禁止合并（专属规则第一道防线）
+                                # 若核心名不同，专属规则明确拒绝合并，不进入 LLM 判定
+                                core1 = name.split("·")[-1] if "·" in name else name
+                                core2 = c_name.split("·")[-1] if "·" in c_name else c_name
+                                clean_core1 = re.sub(r'[\(（].*?[\)）]', '', core1).strip()
+                                clean_core2 = re.sub(r'[\(（].*?[\)）]', '', core2).strip()
+
                                 if can_merge_ability_names(name, c_name):
                                     target_id = existing_ent["entity_id"]
                                     merge_rule_hit = "ability_core_match"
@@ -3618,8 +3683,44 @@ class InsightDerivedRepository:
                                 if target_id:
                                     break
 
+                                # 专属规则没命中时：若两者的核心名确实不同（如 玉犬 != 蟾蜍），绝对禁止合并，不走 LLM
+                                if clean_core1 and clean_core2 and clean_core1 != clean_core2:
+                                    pass
+                                else:
+                                    # LLM 语义裁决（重合度 >= 40% 粗筛）
+                                    overlap = calculate_char_overlap_ratio(name, c_name)
+                                    if overlap >= 0.40:
+                                        judge = get_default_llm_judge()
+                                        if judge.judge_pair_sync(cat, name, c_name):
+                                            target_id = existing_ent["entity_id"]
+                                            merge_rule_hit = "llm_semantic_judge"
+                                            merge_confidence = "high"
+                                            break
+                                    for ex_alias in c_aliases:
+                                        alias_core = ex_alias.split("·")[-1] if "·" in ex_alias else ex_alias
+                                        clean_alias_core = re.sub(r'[\(（].*?[\)）]', '', alias_core).strip()
+                                        if clean_core1 and clean_alias_core and clean_core1 != clean_alias_core:
+                                            continue
+                                        if calculate_char_overlap_ratio(name, ex_alias) >= 0.40:
+                                            judge = get_default_llm_judge()
+                                            if judge.judge_pair_sync(cat, name, ex_alias):
+                                                target_id = existing_ent["entity_id"]
+                                                merge_rule_hit = "llm_semantic_judge"
+                                                merge_confidence = "high"
+                                                break
+                                if target_id:
+                                    break
+
                             elif cat == "locations":
-                                # 地点归并：包含 · 的必须比较最末级具体位置名称，禁止仅凭上级机构名重合合并
+                                # 地点归并：包含 · 的必须比较最末级具体位置名称，禁止仅凭上级机构名重合合并（专属规则第一道防线）
+                                is_loc_blocked = False
+                                if "·" in name and "·" in c_name:
+                                    p1, p2 = name.split("·"), c_name.split("·")
+                                    o1, d1 = "·".join(p1[:-1]), p1[-1]
+                                    o2, d2 = "·".join(p2[:-1]), p2[-1]
+                                    if o1 != o2 or calculate_char_overlap_ratio(d1, d2) < 0.40:
+                                        is_loc_blocked = True
+
                                 if can_merge_location_names(name, c_name):
                                     target_id = existing_ent["entity_id"]
                                     merge_rule_hit = "location_detail_overlap"
@@ -3631,6 +3732,34 @@ class InsightDerivedRepository:
                                         merge_rule_hit = "location_detail_overlap"
                                         merge_confidence = "high"
                                         break
+                                if target_id:
+                                    break
+
+                                # 若层级路径校验未通过（不同末级设施如操场与天台），绝对禁止合并，不走 LLM
+                                if not is_loc_blocked:
+                                    overlap = calculate_char_overlap_ratio(name, c_name)
+                                    if overlap >= 0.40:
+                                        judge = get_default_llm_judge()
+                                        if judge.judge_pair_sync(cat, name, c_name):
+                                            target_id = existing_ent["entity_id"]
+                                            merge_rule_hit = "llm_semantic_judge"
+                                            merge_confidence = "high"
+                                            break
+                                    for ex_alias in c_aliases:
+                                        alias_blocked = False
+                                        if "·" in name and "·" in ex_alias:
+                                            p1, p2 = name.split("·"), ex_alias.split("·")
+                                            o1, d1 = "·".join(p1[:-1]), p1[-1]
+                                            o2, d2 = "·".join(p2[:-1]), p2[-1]
+                                            if o1 != o2 or calculate_char_overlap_ratio(d1, d2) < 0.40:
+                                                alias_blocked = True
+                                        if not alias_blocked and calculate_char_overlap_ratio(name, ex_alias) >= 0.40:
+                                            judge = get_default_llm_judge()
+                                            if judge.judge_pair_sync(cat, name, ex_alias):
+                                                target_id = existing_ent["entity_id"]
+                                                merge_rule_hit = "llm_semantic_judge"
+                                                merge_confidence = "high"
+                                                break
                                 if target_id:
                                     break
 

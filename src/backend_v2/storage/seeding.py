@@ -9,9 +9,6 @@ from sqlalchemy import Engine, case, insert, select, update
 from src.backend_v2.serialization import canonical_json
 from src.backend_v2.settings.validation import setting_storage_payload
 from src.backend_v2.storage.font_files import bundled_font_files
-from src.backend_v2.content.translation_constraints import (
-    empty_translation_constraints,
-)
 from src.backend_v2.storage.defaults import (
     DEFAULT_CUSTOM_AI_PROFILES,
     DEFAULT_EXPORT_PREFERENCES,
@@ -34,7 +31,6 @@ from src.backend_v2.storage.schema import (
     platform_config,
     prompts,
     queue_state,
-    translation_constraints,
     users,
 )
 from src.backend_v2.auth.constants import LOCAL_USER_ID, LOCAL_USERNAME
@@ -129,18 +125,6 @@ def seed_user_records_in_connection(connection: object, user_id: str) -> None:
                     book_id=quick_book_id,
                     ordinal=1,
                     title="快速翻译",
-                )
-            )
-
-        if connection.execute(
-            select(translation_constraints.c.book_id).where(
-                translation_constraints.c.book_id == quick_book_id
-            )
-        ).scalar_one_or_none() is None:
-            connection.execute(
-                insert(translation_constraints).values(
-                    book_id=quick_book_id,
-                    payload_json=canonical_json(empty_translation_constraints()),
                 )
             )
 

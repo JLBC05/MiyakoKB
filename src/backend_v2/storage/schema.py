@@ -121,11 +121,6 @@ PAGE_ASSET_ROLES = (
     "text_mask",
 )
 PROMPT_TYPES = (
-    "translate",
-    "textbox",
-    "ai_vision_ocr",
-    "hq_translate",
-    "proofreading",
     "batch_analysis",
     "segment_summary",
     "chapter_summary",

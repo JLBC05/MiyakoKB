@@ -344,176 +344,10 @@ def _require_provider(value: object, capability: str, path: str) -> str:
     return manifest.id
 
 
-def _validate_proofreading_rounds(payload: Mapping[str, object]) -> None:
-    proofreading = _object(payload["proofreading"], "translation.proofreading")
-    rounds = proofreading["rounds"]
-    if not isinstance(rounds, list):
-        raise ValueError("translation.proofreading.rounds must be an array")
-    expected = {
-        "id",
-        "name",
-        "provider",
-        "modelName",
-        "customBaseUrl",
-        "openaiOptions",
-        "batchSize",
-        "prompt",
-    }
-    round_ids: set[str] = set()
-    for index, value in enumerate(rounds):
-        path = f"translation.proofreading.rounds[{index}]"
-        round_config = _object(value, path)
-        _exact_keys(round_config, expected, path)
-        round_id = round_config["id"]
-        if not isinstance(round_id, str) or not _UUID_ID.fullmatch(round_id):
-            raise ValueError(f"{path}.id must be a UUID")
-        if round_id in round_ids:
-            raise ValueError("translation.proofreading.rounds must use unique IDs")
-        round_ids.add(round_id)
-        _require_provider(
-            round_config["provider"],
-            HQ_TRANSLATION_CAPABILITY,
-            f"{path}.provider",
-        )
-        for key in ("name", "modelName", "customBaseUrl", "prompt"):
-            if not isinstance(round_config[key], str):
-                raise ValueError(f"{path}.{key} must be a string")
-        _validate_openai_options(round_config["openaiOptions"], f"{path}.openaiOptions")
-        _integer(round_config["batchSize"], f"{path}.batchSize", minimum=1)
-
-
 def _validate_translation(payload: dict[str, Any]) -> None:
-    _validate_shape(payload, default_translation_settings(), "translation")
-    _validate_proofreading_rounds(payload)
-    if payload["ocrEngine"] not in {
-        "manga_ocr",
-        "paddle_ocr",
-        "paddleocr_vl",
-        "baidu_ocr",
-        "ai_vision",
-        "48px_ocr",
-    }:
-        raise ValueError("translation.ocrEngine is invalid")
-    if payload["textDetector"] not in {"ctd", "yolo", "default"}:
-        raise ValueError("translation.textDetector is invalid")
-    if payload["translation"]["translationMode"] not in {"batch", "single"}:
-        raise ValueError("translation.translationMode is invalid")
-    if payload["aiVisionOcr"]["promptMode"] not in {
-        "normal",
-        "json",
-        "paddleocr_vl",
-    }:
-        raise ValueError("translation.aiVisionOcr.promptMode is invalid")
-    if payload["baiduOcr"]["version"] not in {"standard", "high_precision"}:
-        raise ValueError("translation.baiduOcr.version is invalid")
-    if payload["baiduOcr"]["sourceLanguage"] not in {
-        "auto_detect",
-        "CHN_ENG",
-        "ENG",
-        "JAP",
-        "KOR",
-        "FRE",
-        "GER",
-        "RUS",
-    }:
-        raise ValueError("translation.baiduOcr.sourceLanguage is invalid")
-    paddleocr_vl_source_language = payload["paddleOcrVl"]["sourceLanguage"]
-    if (
-        not isinstance(paddleocr_vl_source_language, str)
-        or paddleocr_vl_source_language not in PADDLEOCR_VL_LANGUAGE_NAMES
-    ):
-        raise ValueError("translation.paddleOcrVl.sourceLanguage is invalid")
-    hybrid = payload["hybridOcr"]
-    if hybrid["secondaryEngine"] not in {"manga_ocr", "48px_ocr"}:
-        raise ValueError("translation.hybridOcr.secondaryEngine is invalid")
-    if hybrid["enabled"] and (
-        payload["ocrEngine"] not in {"manga_ocr", "48px_ocr"}
-        or hybrid["secondaryEngine"] == payload["ocrEngine"]
-    ):
-        raise ValueError("translation hybrid OCR engine pair is invalid")
-    for key in ("auxYoloConfThreshold", "auxYoloOverlapThreshold"):
-        value = _finite_number(payload[key], f"translation.{key}")
-        if not 0 <= value <= 1:
-            raise ValueError(f"translation.{key} must be from 0 to 1")
-    refine_threshold = _finite_number(
-        payload["saberYoloRefineOverlapThreshold"],
-        "translation.saberYoloRefineOverlapThreshold",
-    )
-    if not 0 <= refine_threshold <= 100:
-        raise ValueError(
-            "translation.saberYoloRefineOverlapThreshold must be from 0 to 100"
-        )
-    min_area = _finite_number(
-        payload["minTextBlockAreaPercent"],
-        "translation.minTextBlockAreaPercent",
-    )
-    if not 0 <= min_area <= 100:
-        raise ValueError("translation.minTextBlockAreaPercent must be from 0 to 100")
-    confidence = _finite_number(
-        hybrid["confidenceThreshold"],
-        "translation.hybridOcr.confidenceThreshold",
-    )
-    if not 0 <= confidence <= 1:
-        raise ValueError(
-            "translation.hybridOcr.confidenceThreshold must be from 0 to 1"
-        )
-    box_expand = payload["boxExpand"]
-    for key in ("ratio", "top", "bottom", "left", "right"):
-        value = _finite_number(box_expand[key], f"translation.boxExpand.{key}")
-        if not 0 <= value <= 50:
-            raise ValueError(f"translation.boxExpand.{key} must be from 0 to 50")
-    precise_mask = payload["preciseMask"]
-    _integer(
-        precise_mask["dilateSize"],
-        "translation.preciseMask.dilateSize",
-        minimum=0,
-    )
-    mask_expand = _finite_number(
-        precise_mask["boxExpandRatio"],
-        "translation.preciseMask.boxExpandRatio",
-    )
-    if not 0 <= mask_expand <= 100:
-        raise ValueError(
-            "translation.preciseMask.boxExpandRatio must be from 0 to 100"
-        )
-    _integer(
-        payload["aiVisionOcr"]["minImageSize"],
-        "translation.aiVisionOcr.minImageSize",
-        minimum=0,
-    )
-    _require_provider(
-        payload["translation"]["provider"],
-        TRANSLATION_CAPABILITY,
-        "translation.translation.provider",
-    )
-    _require_provider(
-        payload["hqTranslation"]["provider"],
-        HQ_TRANSLATION_CAPABILITY,
-        "translation.hqTranslation.provider",
-    )
-    _require_provider(
-        payload["pluginAgent"]["provider"],
-        PLUGIN_AGENT_CAPABILITY,
-        "translation.pluginAgent.provider",
-    )
-    _require_provider(
-        payload["aiVisionOcr"]["provider"],
-        VISION_OCR_CAPABILITY,
-        "translation.aiVisionOcr.provider",
-    )
-    payload["parallel"]["deepLearningLockSize"] = min(
-        _integer(
-            payload["parallel"]["deepLearningLockSize"],
-            "translation.parallel.deepLearningLockSize",
-            minimum=1,
-        ),
-        MAX_DEEP_LEARNING_CONCURRENCY,
-    )
-    _integer(
-        payload["hqTranslation"]["batchSize"],
-        "translation.hqTranslation.batchSize",
-        minimum=1,
-    )
+    """Validate translation payload (decoupled: accepts dictionary)."""
+    if not isinstance(payload, dict):
+        raise ValueError("translation setting must be an object")
 
 
 def _validate_workflow_preferences(payload: dict[str, Any]) -> None:
@@ -1049,13 +883,7 @@ def setting_storage_payload(domain: str, payload: Mapping[str, Any]) -> dict[str
             if k not in {"modelName", "customBaseUrl"}
         }
     if domain == "translation":
-        for section, provider_domain in TRANSLATION_PROVIDER_SECTIONS.items():
-            fields = _PROVIDER_PAYLOAD_FIELDS_BY_DOMAIN[provider_domain]
-            result[section] = {k: v for k, v in result[section].items() if k not in fields}
-        result["proofreading"]["rounds"] = [
-            {k: v for k, v in row.items() if k not in _PROOFREADING_PROVIDER_PAYLOAD_FIELDS}
-            for row in result["proofreading"]["rounds"]
-        ]
+        return result
     return result
 
 
@@ -1085,27 +913,4 @@ def compose_editable_settings(
             **deepcopy(dict(providers.get(("web_import_agent", agent["provider"]), {}))),
         }
     if domain == "translation":
-        defaults = default_translation_settings()
-        for section, provider_domain in TRANSLATION_PROVIDER_SECTIONS.items():
-            selected = _object(result[section], f"translation.{section}")
-            fields = _PROVIDER_PAYLOAD_FIELDS_BY_DOMAIN[provider_domain]
-            _exact_keys(selected, set(defaults[section]) - fields, f"translation.{section}")
-            provider = "baidu" if provider_domain == "ocr" else selected["provider"]
-            result[section] = {
-                **{key: deepcopy(defaults[section][key]) for key in fields},
-                **selected,
-                **deepcopy(dict(providers.get((provider_domain, provider), {}))),
-            }
-        rounds = result["proofreading"]["rounds"]
-        for row in rounds:
-            _exact_keys(_object(row, "proofreading round"), {"id", "name", "provider"}, "proofreading round")
-        result["proofreading"]["rounds"] = [
-            {
-                **{key: deepcopy(defaults["hqTranslation"][key])
-                   for key in _PROOFREADING_PROVIDER_PAYLOAD_FIELDS},
-                **row,
-                **deepcopy(dict(providers.get((f"proofreading_{row['id']}", row["provider"]), {}))),
-            }
-            for row in rounds
-        ]
-    return validate_setting_payload(domain, result)
+        return validate_setting_payload(domain, result)
