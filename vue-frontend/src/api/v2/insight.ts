@@ -212,3 +212,25 @@ export function insightPageExportUrl(pageId: string, format = 'markdown'): strin
 export function insightQaUrl(bookId: string): string {
   return `${ROOT}/books/${encodeURIComponent(bookId)}/qa`
 }
+
+export interface V2InsightEntity {
+  entity_id: string
+  canonical_name: string
+  category: string
+  aliases: string[]
+  pages: number[]
+  frequency: number
+}
+
+export function listInsightEntities(
+  bookId: string,
+  category?: string
+): Promise<{ entities: V2InsightEntity[] }> {
+  return apiClient.get(`${ROOT}/entities`, {
+    params: {
+      book_id: bookId,
+      ...(category ? { category } : {}),
+    },
+  })
+}
+

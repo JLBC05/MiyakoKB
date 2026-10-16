@@ -24,6 +24,7 @@ import PageDetail from '@/components/insight/PageDetail.vue'
 import PagesTree from '@/components/insight/PagesTree.vue'
 import InsightSettingsModal from '@/components/insight/InsightSettingsModal.vue'
 import ContinuationPanel from '@/components/insight/ContinuationPanel.vue'
+import EntityBrowserPanel from '@/components/insight/EntityBrowserPanel.vue'
 import CharacterStudioEntryPanel from '@/components/insight/CharacterStudioEntryPanel.vue'
 import * as insightApi from '@/api/insight'
 import { getBookDetail } from '@/api/bookshelf'
@@ -44,10 +45,11 @@ const insightStore = useInsightStore()
 const taskCenterStore = useTaskCenterStore()
 const publicAccess = usePublicUserAccess()
 
-type InsightTabId = 'overview' | 'qa' | 'timeline' | 'continuation' | 'character_studio'
+type InsightTabId = 'overview' | 'entities' | 'qa' | 'timeline' | 'continuation' | 'character_studio'
 
 const allInsightTabs: Array<{ id: InsightTabId; label: string; glyph: string }> = [
   { id: 'overview', label: '概览', glyph: '📊' },
+  { id: 'entities', label: '实体浏览', glyph: '🏷️' },
   { id: 'qa', label: '智能问答', glyph: '💬' },
   { id: 'timeline', label: '时间线', glyph: '📈' },
   { id: 'continuation', label: '续写', glyph: '🎨' },
@@ -520,6 +522,16 @@ watch(
             aria-labelledby="product-workspace-tab-overview"
           >
             <OverviewPanel />
+          </div>
+
+          <div
+            v-show="activeTab === 'entities'"
+            id="product-workspace-panel-entities"
+            class="insight-view__tab-content"
+            role="tabpanel"
+            aria-labelledby="product-workspace-tab-entities"
+          >
+            <EntityBrowserPanel />
           </div>
 
           <div

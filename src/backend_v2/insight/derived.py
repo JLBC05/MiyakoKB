@@ -4285,6 +4285,45 @@ class InsightDerivedRepository:
                     "romanized": romanized_list,
                 }
 
+    def get_entities(
+        self,
+        *,
+        book_id: str,
+        category: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """获取当前活跃 entity_alignment 产物中的所有实体列表。"""
+        with self.engine.connect() as connection:
+            self._assert_book_owned(connection, book_id)
+            row = connection.execute(
+                select(analysis_artifacts.c.payload_json)
+                .where(
+                    analysis_artifacts.c.book_id == book_id,
+                    analysis_artifacts.c.kind == "entity_alignment",
+                    analysis_artifacts.c.template == "default",
+                    analysis_artifacts.c.is_active.is_(True),
+                )
+            ).mappings().one_or_none()
+
+            if not row or not row["payload_json"]:
+                return []
+
+            payload = _json_object(row["payload_json"], "entity_alignment payload")
+            canonical_entities = payload.get("canonical_entities", [])
+
+            results: list[dict[str, Any]] = []
+            for ent in canonical_entities:
+                if category and ent.get("category") != category:
+                    continue
+                results.append({
+                    "entity_id": ent.get("entity_id", ""),
+                    "canonical_name": ent.get("canonical_name", ""),
+                    "category": ent.get("category", ""),
+                    "aliases": ent.get("aliases", []),
+                    "pages": ent.get("pages", []),
+                    "frequency": ent.get("total_frequency", ent.get("frequency", 0)),
+                })
+            return results
+
     def publish_timeline(
         self,
         *,

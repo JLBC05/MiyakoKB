@@ -75,8 +75,9 @@ def create_insight_blueprint(
     data_root: Path,
     qa_algorithms: QAApiAlgorithms | None = None,
     profile: RuntimeProfile,
+    url_prefix: str = "/api/v2/insight",
 ) -> Blueprint:
-    blueprint = Blueprint("insight_v2", __name__, url_prefix="/api/v2/insight")
+    blueprint = Blueprint(f"insight_v2_{abs(hash(url_prefix))}", __name__, url_prefix=url_prefix)
     public_access = PublicUserPolicyAccess(engine, profile)
     repository = InsightRepository(engine)
     commands = InsightAnalysisCommandService(engine)
@@ -247,6 +248,17 @@ def create_insight_blueprint(
         if timeline is None:
             raise InsightNotFound("timeline not found")
         return jsonify(timeline)
+
+    @blueprint.get("/entities")
+    def get_entities() -> Response:
+        book_id = request.args.get("book_id") or request.args.get("bookId")
+        if not book_id or not book_id.strip():
+            raise ValueError("book_id is required")
+        category = request.args.get("category")
+        if category is not None:
+            category = category.strip() or None
+        entities = derived.get_entities(book_id=book_id.strip(), category=category)
+        return jsonify({"entities": entities})
 
     @blueprint.post("/timeline")
     def rebuild_timeline():

@@ -447,6 +447,15 @@ def create_api_app(settings: ApiSettings) -> Flask:
             engine=engine,
             data_root=settings.data_root,
             profile=settings.profile,
+            url_prefix="/api/v2/insight",
+        )
+    )
+    app.register_blueprint(
+        create_insight_blueprint(
+            engine=engine,
+            data_root=settings.data_root,
+            profile=settings.profile,
+            url_prefix="/insight",
         )
     )
     app.register_blueprint(
