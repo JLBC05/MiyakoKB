@@ -41,8 +41,6 @@ from src.backend_v2.storage.schema import (
     pages,
     web_import_drafts,
 )
-from src.backend_v2.translation.auxiliary import AuxiliaryTranslationCommands
-from src.backend_v2.translation.commands import TranslationJobCommandService
 from src.backend_v2.transfer.commands import (
     TransferDataInvalid,
     validate_container_config,
@@ -600,54 +598,7 @@ class JobRetryService:
         failed_only: bool,
         idempotency_key: str,
     ) -> dict[str, object]:
-        chapter_id = source.get("chapter_id")
-        if not chapter_id:
-            raise JobConflict("translation retry target chapter no longer exists")
-        page_ids = self._page_ids(selected_items)
-        config = _json_object(source.get("config_json"))
-        mode = _required_text(config, "mode")
-        execution_mode = _required_text(config, "executionMode")
-        style_source: dict[str, object] = {}
-        frozen_style = config.get("textStyleSnapshot")
-        if frozen_style is not None:
-            if not isinstance(frozen_style, Mapping):
-                raise JobConflict("translation style snapshot is invalid")
-            source_page_id = _required_text(frozen_style, "sourcePageId")
-            with self.engine.connect() as connection:
-                source_revision = connection.execute(
-                    select(pages.c.document_revision).where(
-                        pages.c.id == source_page_id,
-                        pages.c.chapter_id == str(chapter_id),
-                    )
-                ).scalar_one_or_none()
-            if source_revision is None:
-                raise JobConflict(
-                    "translation style source page no longer exists"
-                )
-            style_source = {
-                "styleSourcePageId": source_page_id,
-                "styleSourceDocumentRevision": int(source_revision),
-            }
-        return TranslationJobCommandService(
-            self.engine,
-            profile=self.profile,
-        ).create_chapter_job(
-            chapter_id=str(chapter_id),
-            config={
-                "mode": mode,
-                "executionMode": execution_mode,
-                "skipCompleted": False,
-                **style_source,
-            },
-            page_ids=page_ids,
-            idempotency_key=idempotency_key,
-            retry_of_job_id=str(source["id"]),
-            retry_mode="current",
-            idempotency_scope=(
-                f"job-retry:{source['id']}:"
-                f"{'failed' if failed_only else 'all'}"
-            ),
-        )
+        raise NotImplementedError("translation retry is not supported in knowledge-only mode")
 
     def _retry_detection(
         self,
@@ -657,23 +608,7 @@ class JobRetryService:
         failed_only: bool,
         idempotency_key: str,
     ) -> dict[str, object]:
-        chapter_id = source.get("chapter_id")
-        if not chapter_id:
-            raise JobConflict("detection retry target chapter no longer exists")
-        return AuxiliaryTranslationCommands(
-            self.engine,
-            profile=self.profile,
-        ).create_detect_job(
-            chapter_id=str(chapter_id),
-            page_ids=self._page_ids(selected_items),
-            idempotency_key=idempotency_key,
-            retry_of_job_id=str(source["id"]),
-            retry_mode="current",
-            idempotency_scope=(
-                f"job-retry:{source['id']}:"
-                f"{'failed' if failed_only else 'all'}"
-            ),
-        )
+        raise NotImplementedError("detection retry is not supported in knowledge-only mode")
 
     def _retry_insight(
         self,

@@ -37,10 +37,8 @@ from src.backend_v2.logging_config import (
     configure_backend_logging,
 )
 from src.backend_v2.local_models import normalize_resident_models
-from src.backend_v2.browser_extension.auth import (
-    BROWSER_EXTENSION_ENABLED_ENV,
-    BROWSER_EXTENSION_TOKEN_ENV,
-)
+BROWSER_EXTENSION_ENABLED_ENV = "SABER_BROWSER_EXTENSION_ENABLED"
+BROWSER_EXTENSION_TOKEN_ENV = "SABER_BROWSER_EXTENSION_TOKEN"
 from src.backend_v2.paths import (
     data_root_fingerprint,
     ensure_data_root,

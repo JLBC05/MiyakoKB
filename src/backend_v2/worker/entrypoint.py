@@ -178,16 +178,6 @@ def run_worker(args: object) -> int:
             from src.backend_v2.plugins.agent_worker import (
                 PluginAgentWorkerService,
             )
-            from src.backend_v2.translation.interactive_operations import (
-                InteractivePageOperationService,
-            )
-            from src.backend_v2.translation.auxiliary import (
-                StyleApplyWorkerService,
-                TextImportWorkerService,
-            )
-            from src.backend_v2.translation.pipeline import (
-                TranslationPipelineService,
-            )
             from src.backend_v2.content.image_import import (
                 ImportSafetyLimits,
                 PUBLIC_IMPORT_SAFETY_LIMITS,
@@ -225,25 +215,6 @@ def run_worker(args: object) -> int:
                 engine=engine,
                 repository=job_repository,
             )
-            translation = TranslationPipelineService(
-                data_root=data_root,
-                engine=engine,
-                jobs=job_repository,
-                plugin_runtime=plugin_job_runtime,
-            )
-            translation_steps = {
-                "detect",
-                "ocr",
-                "color",
-                "auto_terms",
-                "translate",
-                "hq_translate",
-                "proofread",
-                "repair",
-                "render",
-                "save",
-                "publish_clean",
-            }
             transfer = TransferWorkerService(
                 data_root=data_root,
                 engine=engine,
@@ -255,19 +226,13 @@ def run_worker(args: object) -> int:
                 ),
             )
             job_handlers = {
-                step_kind: translation.handler
-                for step_kind in translation_steps
+                step_kind: transfer.handler
+                for step_kind in (
+                    "container_scan",
+                    "container_import_page",
+                    "export_package",
+                )
             }
-            job_handlers.update(
-                {
-                    step_kind: transfer.handler
-                    for step_kind in (
-                        "container_scan",
-                        "container_import_page",
-                        "export_package",
-                    )
-                }
-            )
             web_import = WebImportWorkerService(
                 data_root=data_root,
                 engine=engine,
@@ -286,16 +251,6 @@ def run_worker(args: object) -> int:
                     )
                 }
             )
-            style_apply = StyleApplyWorkerService(
-                engine=engine,
-                jobs=job_repository,
-            )
-            job_handlers["style_apply_document"] = style_apply.handle
-            text_import = TextImportWorkerService(
-                engine=engine,
-                jobs=job_repository,
-            )
-            job_handlers["text_import_apply"] = text_import.handle
             insight = InsightAnalysisWorkerService(
                 data_root=data_root,
                 engine=engine,
@@ -361,12 +316,6 @@ def run_worker(args: object) -> int:
                 engine=engine,
                 repository=operation_repository,
             )
-            interactive = InteractivePageOperationService(
-                data_root=data_root,
-                engine=engine,
-                repository=operation_repository,
-                plugin_runtime=plugin_operation_runtime,
-            )
             repairs = PageRepairService(
                 data_root=data_root,
                 engine=engine,
@@ -377,9 +326,6 @@ def run_worker(args: object) -> int:
                 operation_repository,
                 worker_epoch_id=identity.epoch_id,
                 handlers={
-                    "bubble_ocr": interactive.handle,
-                    "bubble_color": interactive.handle,
-                    "page_detect": interactive.handle,
                     "page_repair": repairs.handle,
                 },
             )
@@ -470,8 +416,6 @@ def run_worker(args: object) -> int:
                 worker_epoch_id=identity.epoch_id,
                 handlers=job_handlers,
                 batch_handlers={
-                    "hq_translate": translation.batch_handler,
-                    "proofread": translation.batch_handler,
                     "web_extract_page": web_import.handle_download_batch,
                 },
                 handler_resolver=lambda step_kind: _insight_layer_handler(

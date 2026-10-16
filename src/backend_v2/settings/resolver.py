@@ -349,71 +349,38 @@ class SettingsResolver:
             ).mappings().one_or_none()
             if chapter_row is None:
                 raise ValueError("chapter not found")
-            constraint_row = connection.execute(
+            constraint_row = None
+            app_row = connection.execute(
                 select(
-                    translation_constraints.c.payload_json,
-                    translation_constraints.c.revision,
+                    app_settings.c.payload_json,
+                    app_settings.c.revision,
                 ).where(
-                    translation_constraints.c.book_id == chapter_row["book_id"]
+                    app_settings.c.domain == "translation",
+                    app_settings.c.owner_user_id == effective_owner_id(),
                 )
             ).mappings().one_or_none()
-            browser_book = None
-            if browser_book is not None:
-                from src.backend_v2.browser_extension.settings import session_settings
-
-                snapshot = session_settings(connection, str(browser_book))
-                selected = next(row for row in snapshot["settings"] if row["domain"] == "translation")
-                app_row = {
-                    "payload_json": json.dumps(selected["payload"]),
-                    "revision": selected["revision"],
-                }
-                chapter_row = {**chapter_row, "settings_memory_json": "{}"}
-                provider_rows = {
-                    (row["domain"], row["provider"]): {
-                        "payload": validate_provider_setting_payload(
-                            row["domain"], row["provider"], row["payload"],
+            raw_provider_rows = connection.execute(
+                select(
+                    provider_settings.c.domain,
+                    provider_settings.c.provider,
+                    provider_settings.c.payload_json,
+                    provider_settings.c.credential_version_id,
+                    provider_settings.c.revision,
+                ).where(
+                    provider_settings.c.owner_user_id == effective_owner_id(),
+                    or_(
+                        provider_settings.c.domain.in_(
+                            ("translation", "hq", "ai_vision_ocr", "ocr")
                         ),
-                        "credentialVersionId": row["credentialVersionId"],
-                        "revision": row["revision"],
-                    }
-                    for row in snapshot["providerSettings"]
-                }
-                effective_settings = selected["payload"]
-                command = {**command, "executionMode": (
-                    "parallel" if effective_settings["parallel"]["enabled"] else "sequential"
-                )}
-            else:
-                app_row = connection.execute(
-                    select(
-                        app_settings.c.payload_json,
-                        app_settings.c.revision,
-                    ).where(
-                        app_settings.c.domain == "translation",
-                        app_settings.c.owner_user_id == effective_owner_id(),
+                        provider_settings.c.domain.like("proofreading_%"),
                     )
-                ).mappings().one_or_none()
-                raw_provider_rows = connection.execute(
-                    select(
-                        provider_settings.c.domain,
-                        provider_settings.c.provider,
-                        provider_settings.c.payload_json,
-                        provider_settings.c.credential_version_id,
-                        provider_settings.c.revision,
-                    ).where(
-                        provider_settings.c.owner_user_id == effective_owner_id(),
-                        or_(
-                            provider_settings.c.domain.in_(
-                                ("translation", "hq", "ai_vision_ocr", "ocr")
-                            ),
-                            provider_settings.c.domain.like("proofreading_%"),
-                        )
-                    )
-                ).mappings()
-                provider_rows = {
-                    (str(row["domain"]), str(row["provider"])):
-                        _validated_provider_row(row)
-                    for row in raw_provider_rows
-                }
+                )
+            ).mappings()
+            provider_rows = {
+                (str(row["domain"]), str(row["provider"])):
+                    _validated_provider_row(row)
+                for row in raw_provider_rows
+            }
 
         if app_row is None:
             raise ValueError("translation settings are missing")

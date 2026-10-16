@@ -376,16 +376,8 @@ def create_api_app(settings: ApiSettings) -> Flask:
         DurableRenderExecutor,
     )
     from src.backend_v2.operations.repair import PageRepairService
-    from src.backend_v2.operations.repository import (
-        OperationRepository,
-        RenderRequestRepository,
-    )
-    from src.backend_v2.rendering.service import AuthoritativeRenderService
+    from src.backend_v2.operations.repository import OperationRepository
     from src.backend_v2.settings.routes import create_settings_blueprint
-    from src.backend_v2.studio.routes import create_studio_blueprint
-    from src.backend_v2.studio.repository import StudioRepository
-    from src.backend_v2.studio.service import StudioOperationService
-    from src.backend_v2.translation.routes import create_translation_blueprint
     from src.backend_v2.transfer.routes import create_transfer_blueprint
     from src.backend_v2.web_import.routes import (
         create_web_import_blueprint,
@@ -404,34 +396,10 @@ def create_api_app(settings: ApiSettings) -> Flask:
     broadcaster = JobEventBroadcaster(
         JobQueueRepository(engine),
     )
-    render_service = AuthoritativeRenderService(
-        data_root=settings.data_root,
-        engine=engine,
-    )
-    render_executor = DurableRenderExecutor(
-        RenderRequestRepository(engine),
-        api_epoch_id=settings.identity.epoch_id,
-        handler=render_service.prepare,
-        poll_seconds=0.05,
-    )
     repair_service = PageRepairService(
         data_root=settings.data_root,
         engine=engine,
         repository=OperationRepository(engine),
-    )
-    from src.backend_v2.translation.interactive_operations import (
-        InteractivePageOperationService,
-    )
-
-    remote_page_operations = InteractivePageOperationService(
-        data_root=settings.data_root,
-        engine=engine,
-        repository=repair_service.repository,
-    )
-    studio_operations = StudioOperationService(
-        engine=engine,
-        data_root=settings.data_root,
-        repository=StudioRepository(engine),
     )
     scheduling_policy = (
         SchedulingPolicyCache(SchedulingPolicyRepository(engine))
@@ -444,10 +412,6 @@ def create_api_app(settings: ApiSettings) -> Flask:
         executor_epoch_id=settings.identity.epoch_id,
         handlers={
             "page_repair": repair_service.handle,
-            "bubble_translate": remote_page_operations.handle,
-            "studio_generate": studio_operations.handle,
-            "studio_chat": studio_operations.handle,
-            "studio_summary": studio_operations.handle,
         },
         max_workers=8 if scheduling_policy is not None else 4,
         concurrency_limit=(
@@ -457,45 +421,9 @@ def create_api_app(settings: ApiSettings) -> Flask:
         ),
     )
     browser_blueprint = None
-    if settings.profile.name == "local":
-        from src.backend_v2.browser_extension.auth import BrowserExtensionAccess
-        from src.backend_v2.browser_extension.routes import (
-            create_browser_extension_blueprint,
-        )
-        from src.backend_v2.browser_extension.dom_agent import BrowserDomAgentService
-        from src.backend_v2.browser_extension.service import BrowserSessionService
-
-        browser_service = BrowserSessionService(
-            data_root=settings.data_root,
-            engine=engine,
-            profile=settings.profile,
-        )
-        browser_access = BrowserExtensionAccess(
-            enabled=settings.browser_extension_enabled,
-            token=settings.browser_extension_token,
-        )
-        browser_blueprint = create_browser_extension_blueprint(
-            service=browser_service,
-            access=browser_access,
-            dom_detector=(
-                BrowserDomAgentService(engine)
-                if browser_access.enabled
-                else None
-            ),
-        )
-        # Reuse the local control plane under the extension token gate.
-        browser_blueprint.register_blueprint(
-            create_settings_blueprint(data_root=settings.data_root, engine=engine,
-                                      profile=settings.profile, browser_extension=True),
-            url_prefix="/manage",
-        )
-        browser_blueprint.register_blueprint(
-            create_jobs_blueprint(engine=engine, broadcaster=broadcaster, profile=settings.profile),
-            url_prefix="/manage",
-        )
     app.extensions["saber_v2_runtime"] = ApiRuntimeServices(
         job_events=broadcaster,
-        executors=(cpu_operation_executor, render_executor),
+        executors=(cpu_operation_executor,),
     )
     app.register_blueprint(
         create_content_blueprint(
@@ -522,13 +450,6 @@ def create_api_app(settings: ApiSettings) -> Flask:
         )
     )
     app.register_blueprint(
-        create_studio_blueprint(
-            engine=engine,
-            data_root=settings.data_root,
-            profile=settings.profile,
-        )
-    )
-    app.register_blueprint(
         create_operations_blueprint(
             data_root=settings.data_root,
             engine=engine,
@@ -548,9 +469,6 @@ def create_api_app(settings: ApiSettings) -> Flask:
                 engine=engine,
             )
         )
-    app.register_blueprint(
-        create_translation_blueprint(engine=engine, profile=settings.profile)
-    )
     app.register_blueprint(
         create_settings_blueprint(
             data_root=settings.data_root,

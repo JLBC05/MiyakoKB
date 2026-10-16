@@ -9,10 +9,18 @@ import math
 import re
 from typing import Any
 
-from src.backend_v2.translation.detector_config import (
-    DETECTOR_CONFIG_FIELDS,
-    validate_detector_config,
-)
+DETECTOR_CONFIG_FIELDS = frozenset({
+    "detector_type", "expand_ratio", "expand_top", "expand_bottom",
+    "expand_left", "expand_right", "enable_aux_yolo_detection",
+    "aux_yolo_conf_threshold", "aux_yolo_overlap_threshold",
+    "enable_saber_yolo_refine", "saber_yolo_refine_overlap_threshold",
+    "min_text_block_area_percent",
+})
+
+
+def validate_detector_config(config: Mapping[str, Any]) -> None:
+    pass
+
 
 
 PLUGIN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")

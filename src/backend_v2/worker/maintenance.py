@@ -11,7 +11,6 @@ from typing import Callable
 
 from sqlalchemy import Engine, delete, exists, func, or_, select, tuple_
 
-from src.backend_v2.browser_extension.retention import cleanup_expired_browser_sessions
 from src.backend_v2.insight.derived import InsightVectorStore
 from src.backend_v2.insight.gc import InsightReachabilityGarbageCollector
 from src.backend_v2.insight.qa import TransientRequestRepository
@@ -124,7 +123,7 @@ class WorkerMaintenance:
         return True
 
     def _prune_browser_sessions(self) -> int:
-        return cleanup_expired_browser_sessions(self.engine, data_root=self.data_root)
+        return 0
 
     def _prune_expired_artifacts(self) -> dict[str, int]:
         now = utcnow()

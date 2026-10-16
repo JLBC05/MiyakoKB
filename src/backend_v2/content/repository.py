@@ -29,7 +29,7 @@ from src.backend_v2.insight.repository import (
     mark_book_insight_derived_stale,
 )
 from src.backend_v2.jobs.repository import decode_job_progress
-from src.backend_v2.rendering.fonts import resolve_font_path
+from src.backend_v2.storage.font_files import resolve_font_path
 from src.backend_v2.settings.validation import validate_setting_payload
 from src.backend_v2.storage.assets import AssetRecord, AssetStorageService
 from src.backend_v2.storage.database import immediate_transaction

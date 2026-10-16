@@ -1,6 +1,7 @@
 """One writable font directory, with shared and per-user visibility."""
 
 from dataclasses import dataclass
+from typing import Any
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import os
 import shutil
@@ -70,6 +71,26 @@ def font_path(root: Path, relative: str, owner: str | None) -> Path:
     if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError('字体路径越界')
     return path
+
+
+def resolve_font_path(
+    connection: Any,
+    storage: Any,
+    font_id: str | None,
+) -> str:
+    from sqlalchemy import select
+    from src.backend_v2.storage.schema import fonts
+    from src.backend_v2.auth.ownership import effective_owner_id
+    row = connection.execute(
+        select(fonts).where(fonts.c.id == (font_id or DEFAULT_FONT_ID))
+    ).mappings().one_or_none()
+    if row is None or row["owner_user_id"] not in (None, effective_owner_id()):
+        raise LookupError("font not found")
+    prepare_font_directory(storage.data_root)
+    p = font_path(storage.data_root, row["relative_path"], row["owner_user_id"])
+    if not p.is_file():
+        raise LookupError(f"字体文件已移除：{p.name}")
+    return str(p)
 
 
 def _restore_legacy_font_inheritance(shared: Path) -> None:

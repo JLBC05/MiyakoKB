@@ -12,10 +12,8 @@ import socket
 import threading
 
 from src.backend_v2.api.app import ApiSettings, create_api_app
-from src.backend_v2.browser_extension.auth import (
-    BROWSER_EXTENSION_ENABLED_ENV,
-    BROWSER_EXTENSION_TOKEN_ENV,
-)
+BROWSER_EXTENSION_ENABLED_ENV = "SABER_BROWSER_EXTENSION_ENABLED"
+BROWSER_EXTENSION_TOKEN_ENV = "SABER_BROWSER_EXTENSION_TOKEN"
 from src.backend_v2.import_guard import loaded_forbidden_api_modules
 from src.backend_v2.logging_config import configure_backend_logging
 from src.backend_v2.paths import data_root_fingerprint, ensure_data_root, resolve_data_root

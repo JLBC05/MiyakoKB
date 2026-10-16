@@ -21,7 +21,6 @@ from src.backend_v2.storage.schema import (
     operations,
     pages,
     process_epochs,
-    render_requests,
     transient_requests,
 )
 
@@ -274,17 +273,6 @@ class ProcessEpochRepository:
                     .distinct()
                 ).scalars()
             }
-            api_epoch_ids.update(
-                str(value)
-                for value in connection.execute(
-                    select(render_requests.c.executor_epoch_id)
-                    .where(
-                        render_requests.c.status == "running",
-                        render_requests.c.executor_epoch_id.is_not(None),
-                    )
-                    .distinct()
-                ).scalars()
-            )
 
         results: list[ReconcileResult] = []
         for epoch_id in sorted(worker_epoch_ids):
@@ -532,44 +520,7 @@ class ProcessEpochRepository:
                     created_at=now,
                 )
             )
-        render_epoch_matches = (
-            render_requests.c.executor_epoch_id.is_(None)
-            if epoch_id is None
-            else render_requests.c.executor_epoch_id == epoch_id
-        )
-        render_page_ids = [
-            str(value)
-            for value in connection.execute(
-                select(render_requests.c.page_id).where(
-                    render_epoch_matches,
-                    render_requests.c.status == "running",
-                )
-            ).scalars()
-        ]
-        renders = connection.execute(
-            update(render_requests)
-            .where(
-                render_epoch_matches,
-                render_requests.c.status == "running",
-            )
-            .values(
-                status="pending",
-                executor_epoch_id=None,
-                attempt_id=None,
-                rendering_revision=None,
-                error_json=None,
-                updated_at=now,
-            )
-        ).rowcount
-        if render_page_ids:
-            connection.execute(
-                update(pages)
-                .where(
-                    pages.c.id.in_(render_page_ids),
-                    pages.c.render_status == "rendering",
-                )
-                .values(render_status="stale", updated_at=now)
-            )
+        renders = 0
         return failed, requeued, renders
 
     def close(self, registration: EpochRegistration) -> bool:
