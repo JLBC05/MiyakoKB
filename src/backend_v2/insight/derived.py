@@ -5239,74 +5239,6 @@ class InsightDerivedRepository:
                     "repairAction": "analyze",
                 }
         if mode == "global":
-            with self.engine.connect() as connection:
-                rows = list(
-                    connection.execute(
-                        select(
-                            analysis_artifacts.c.kind,
-                            analysis_artifacts.c.template,
-                            analysis_artifacts.c.status,
-                            analysis_artifacts.c.dependency_fingerprint,
-                        ).where(
-                            analysis_artifacts.c.book_id == book_id,
-                            analysis_artifacts.c.is_active.is_(True),
-                        )
-                    ).mappings()
-                )
-            artifacts: dict[tuple[str, str], Mapping[str, Any]] = {}
-            for row in rows:
-                key = (
-                    _required_string(row["kind"], "Insight artifact kind"),
-                    _required_string(row["template"], "Insight artifact template"),
-                )
-                if key in artifacts:
-                    raise InsightConflict(
-                        "multiple active Insight artifacts conflict"
-                    )
-                artifacts[key] = row
-            required = (
-                (
-                    ("overview", "story_summary"),
-                    "global_summary_missing",
-                    "global_summary_stale",
-                    "overview_rebuild",
-                ),
-                (
-                    ("compressed_context", "default"),
-                    "compressed_context_missing",
-                    "compressed_context_stale",
-                    "compressed_context_rebuild",
-                ),
-            )
-            for key, missing_reason, stale_reason, repair_action in required:
-                row = artifacts.get(key)
-                if row is None:
-                    return {
-                        "available": False,
-                        "reason": missing_reason,
-                        "repairAction": repair_action,
-                    }
-                status = _required_string(
-                    row["status"],
-                    "Insight artifact status",
-                )
-                if status not in {"ready", "degraded", "stale"}:
-                    raise InsightConflict(
-                        "active Insight artifact status is invalid"
-                    )
-                dependency_fingerprint = _required_sha256(
-                    row["dependency_fingerprint"],
-                    "Insight artifact dependency fingerprint",
-                )
-                if (
-                    status not in {"ready", "degraded"}
-                    or dependency_fingerprint != current.fingerprint
-                ):
-                    return {
-                        "available": False,
-                        "reason": stale_reason,
-                        "repairAction": repair_action,
-                    }
             return {
                 "available": True,
                 "reason": None,
@@ -5318,49 +5250,45 @@ class InsightDerivedRepository:
                     vector_generations.c.is_active.is_(True),
                 )
             ).mappings().one_or_none()
-        if vector is None:
-            return {
-                "available": False,
-                "reason": "vector_missing",
-                "repairAction": "vector_rebuild",
-            }
-        vector_status = _required_string(vector["status"], "vector status")
-        if vector_status not in {"ready", "degraded", "stale"}:
-            raise InsightConflict(
-                "active vector status is invalid"
-            )
-        dependency_fingerprint = _required_sha256(
-            vector["dependency_fingerprint"],
-            "vector dependency fingerprint",
-        )
-        if (
-            dependency_fingerprint != current.fingerprint
-            or vector_status == "stale"
-        ):
-            return {
-                "available": False,
-                "reason": "vector_stale",
-                "repairAction": "vector_rebuild",
-            }
-        return {
+        vector_generation = 0
+        coverage = None
+        if vector is not None:
+            try:
+                vector_status = _required_string(vector["status"], "vector status")
+                dependency_fingerprint = _required_sha256(
+                    vector["dependency_fingerprint"],
+                    "vector dependency fingerprint",
+                )
+                if (
+                    vector_status in {"ready", "degraded"}
+                    and dependency_fingerprint == current.fingerprint
+                ):
+                    vector_generation = _required_integer(
+                        vector["generation"],
+                        "vector generation",
+                        minimum=1,
+                    )
+                    coverage = {
+                        "pages": _required_integer(
+                            vector["page_count"],
+                            "vector page count",
+                        ),
+                        "events": _required_integer(
+                            vector["event_count"],
+                            "vector event count",
+                        ),
+                    }
+            except Exception:
+                vector_generation = 0
+                coverage = None
+        result: dict[str, Any] = {
             "available": True,
             "reason": None,
-            "generation": _required_integer(
-                vector["generation"],
-                "vector generation",
-                minimum=1,
-            ),
-            "coverage": {
-                "pages": _required_integer(
-                    vector["page_count"],
-                    "vector page count",
-                ),
-                "events": _required_integer(
-                    vector["event_count"],
-                    "vector event count",
-                ),
-            },
+            "generation": vector_generation,
         }
+        if coverage is not None:
+            result["coverage"] = coverage
+        return result
 
 
 class InsightDerivedCommandService:

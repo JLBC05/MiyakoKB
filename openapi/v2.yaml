@@ -9219,7 +9219,7 @@ components:
             - vector_rebuild
             - overview_rebuild
             - compressed_context_rebuild
-        generation: {type: integer, minimum: 1}
+        generation: {type: integer, minimum: 0}
         coverage:
           type: object
           additionalProperties: false
