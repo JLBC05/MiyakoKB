@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import { useInsightStore } from '@/stores/insightStore'
 import { getInsightGraph, type V2InsightGraphNode, type V2InsightGraphEdge } from '@/api/v2/insight'
 import UiButton from '@/components/ui/UiButton.vue'
 
+const route = useRoute()
 const insightStore = useInsightStore()
 
 const isLoading = ref(false)
@@ -167,7 +169,8 @@ const selectedEdgeDetail = computed(() => {
 
 // 初始化与构建力导向图数据
 async function loadGraphData() {
-  const bookId = insightStore.activeBookId
+  const queryBook = typeof route?.query?.book === 'string' ? route.query.book.trim() : ''
+  const bookId = insightStore.currentBookId || queryBook
   if (!bookId) {
     rawNodes.value = []
     rawEdges.value = []
@@ -182,6 +185,8 @@ async function loadGraphData() {
     const data = await getInsightGraph(bookId, { minWeight: 1 })
     rawNodes.value = data.nodes || []
     rawEdges.value = data.edges || []
+    await nextTick()
+    updateContainerSize()
     initSimulation()
   } catch (err: any) {
     console.error('加载关系图谱失败:', err)
@@ -442,16 +447,35 @@ function updateContainerSize() {
   }
 }
 
-watch(() => insightStore.activeBookId, () => {
-  loadGraphData()
-})
+watch(
+  () => [insightStore.currentBookId, route?.query?.book],
+  ([newStoreBook, newRouteBook]) => {
+    if (newStoreBook || newRouteBook) {
+      loadGraphData()
+    } else {
+      rawNodes.value = []
+      rawEdges.value = []
+      simNodes.value = []
+      simEdges.value = []
+    }
+  },
+  { immediate: true },
+)
 
 watch([selectedCategory, minWeight], () => {
   reheatSimulation(0.5)
 })
 
+let resizeObserver: ResizeObserver | null = null
+
 onMounted(() => {
   updateContainerSize()
+  if (svgContainerRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      updateContainerSize()
+    })
+    resizeObserver.observe(svgContainerRef.value)
+  }
   window.addEventListener('resize', updateContainerSize)
   window.addEventListener('mouseup', handleMouseUp)
   window.addEventListener('mousemove', handleMouseMove)
@@ -459,6 +483,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
   window.removeEventListener('resize', updateContainerSize)
   window.removeEventListener('mouseup', handleMouseUp)
   window.removeEventListener('mousemove', handleMouseMove)
