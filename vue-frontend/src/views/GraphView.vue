@@ -104,24 +104,6 @@ async function loadBook(bookId: string): Promise<void> {
 
     applyLoadedBook(book, chapters)
     applyAnalysisStatus(status)
-
-    const [notes, overview, timeline] = await Promise.allSettled([
-      insightApi.getNotes(bookId),
-      insightApi.getOverview(bookId),
-      insightApi.getTimeline(bookId),
-    ])
-
-    if (!isCurrentBookLoad(sequence, bookId)) return
-
-    if (notes.status === 'fulfilled') {
-      insightStore.setNotes(notes.value)
-    }
-    if (overview.status === 'fulfilled') {
-      insightStore.setOverview(overview.value)
-    }
-    if (timeline.status === 'fulfilled') {
-      insightStore.setTimeline(timeline.value)
-    }
   } catch (error) {
     if (!isCurrentBookLoad(sequence, bookId)) return
     const message = error instanceof Error ? error.message : '书籍信息加载失败'
