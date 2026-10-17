@@ -4361,6 +4361,83 @@ class InsightDerivedRepository:
                 })
             return results
 
+    def get_graph_data(
+        self,
+        *,
+        book_id: str,
+        category: str | None = None,
+        min_weight: int = 1,
+    ) -> dict[str, Any]:
+        """获取当前活跃 entity_alignment 产物中的实体关系图谱数据（含节点与页面共现边）。"""
+        with self.engine.connect() as connection:
+            self._assert_book_owned(connection, book_id)
+            row = connection.execute(
+                select(analysis_artifacts.c.payload_json)
+                .where(
+                    analysis_artifacts.c.book_id == book_id,
+                    analysis_artifacts.c.kind == "entity_alignment",
+                    analysis_artifacts.c.template == "default",
+                    analysis_artifacts.c.is_active.is_(True),
+                )
+            ).mappings().one_or_none()
+
+            if not row or not row["payload_json"]:
+                return {"nodes": [], "edges": []}
+
+            payload = _json_object(row["payload_json"], "entity_alignment payload")
+            canonical_entities = payload.get("canonical_entities", [])
+
+            nodes: list[dict[str, Any]] = []
+            entity_pages: dict[str, set[int]] = {}
+
+            for ent in canonical_entities:
+                cat = ent.get("category", "")
+                if category and cat != category:
+                    continue
+                ent_id = ent.get("entity_id", "")
+                if not ent_id:
+                    continue
+                pages = [
+                    int(p)
+                    for p in ent.get("pages", [])
+                    if isinstance(p, (int, float)) or (isinstance(p, str) and str(p).isdigit())
+                ]
+                entity_pages[ent_id] = set(pages)
+                nodes.append({
+                    "id": ent_id,
+                    "name": ent.get("canonical_name", ""),
+                    "category": cat,
+                    "aliases": ent.get("aliases", []),
+                    "frequency": ent.get("total_frequency", ent.get("frequency", len(pages))),
+                    "pages": sorted(pages),
+                })
+
+            edges: list[dict[str, Any]] = []
+            node_ids = [n["id"] for n in nodes]
+            n_len = len(node_ids)
+            for i in range(n_len):
+                id_a = node_ids[i]
+                pages_a = entity_pages[id_a]
+                if not pages_a:
+                    continue
+                for j in range(i + 1, n_len):
+                    id_b = node_ids[j]
+                    pages_b = entity_pages[id_b]
+                    if not pages_b:
+                        continue
+                    common = sorted(pages_a & pages_b)
+                    weight = len(common)
+                    if weight >= min_weight:
+                        edges.append({
+                            "id": f"{id_a}--{id_b}",
+                            "source": id_a,
+                            "target": id_b,
+                            "weight": weight,
+                            "common_pages": common,
+                        })
+
+            return {"nodes": nodes, "edges": edges}
+
     def publish_timeline(
         self,
         *,

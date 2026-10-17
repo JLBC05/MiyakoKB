@@ -261,6 +261,26 @@ def create_insight_blueprint(
         entities = derived.get_entities(book_id=book_id.strip(), category=category)
         return jsonify({"entities": entities})
 
+    @blueprint.get("/graph")
+    def get_graph() -> Response:
+        book_id = request.args.get("book_id") or request.args.get("bookId")
+        if not book_id or not book_id.strip():
+            raise ValueError("book_id is required")
+        category = request.args.get("category")
+        if category is not None:
+            category = category.strip() or None
+        min_weight_str = request.args.get("min_weight") or request.args.get("minWeight") or "1"
+        try:
+            min_weight = max(1, int(min_weight_str))
+        except (ValueError, TypeError):
+            min_weight = 1
+        graph_data = derived.get_graph_data(
+            book_id=book_id.strip(),
+            category=category,
+            min_weight=min_weight,
+        )
+        return jsonify(graph_data)
+
     @blueprint.post("/timeline")
     def rebuild_timeline():
         body = _json_body(allowed_keys={"bookId"})

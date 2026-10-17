@@ -234,3 +234,38 @@ export function listInsightEntities(
   })
 }
 
+export interface V2InsightGraphNode {
+  id: string
+  name: string
+  category: string
+  aliases: string[]
+  frequency: number
+  pages: number[]
+}
+
+export interface V2InsightGraphEdge {
+  id: string
+  source: string
+  target: string
+  weight: number
+  common_pages: number[]
+}
+
+export interface V2InsightGraphData {
+  nodes: V2InsightGraphNode[]
+  edges: V2InsightGraphEdge[]
+}
+
+export function getInsightGraph(
+  bookId: string,
+  options: { category?: string; minWeight?: number } = {}
+): Promise<V2InsightGraphData> {
+  return apiClient.get(`${ROOT}/graph`, {
+    params: {
+      book_id: bookId,
+      ...(options.category ? { category: options.category } : {}),
+      ...(options.minWeight ? { min_weight: options.minWeight } : {}),
+    },
+  })
+}
+
