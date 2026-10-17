@@ -59,6 +59,7 @@ from src.backend_v2.storage.schema import (
     books,
     chapters,
     credential_versions,
+    page_assets,
     pages,
     process_epochs,
     transient_requests,
@@ -1803,19 +1804,84 @@ def select_candidates(
 
 def citations_for(
     candidates: Sequence[Mapping[str, Any]],
+    engine: Engine | None = None,
 ) -> list[dict[str, Any]]:
     citations: list[dict[str, Any]] = []
     seen: set[str] = set()
+    page_ids: list[str] = []
     for raw in candidates:
         row = _candidate(raw)
         page_id = row["pageId"]
         if page_id is None or page_id in seen:
             continue
         seen.add(page_id)
+        page_ids.append(page_id)
+
+    page_metadata: dict[str, dict[str, Any]] = {}
+    if engine is not None and page_ids:
+        try:
+            with engine.connect() as conn:
+                source_assets = (
+                    select(page_assets.c.page_id, page_assets.c.asset_id)
+                    .where(
+                        page_assets.c.page_id.in_(page_ids),
+                        page_assets.c.role == "source",
+                    )
+                    .subquery()
+                )
+                query = (
+                    select(
+                        pages.c.id,
+                        pages.c.ordinal.label("page_ordinal"),
+                        chapters.c.ordinal.label("chapter_ordinal"),
+                        chapters.c.title.label("chapter_title"),
+                        source_assets.c.asset_id.label("source_asset_id"),
+                    )
+                    .join(chapters, chapters.c.id == pages.c.chapter_id)
+                    .outerjoin(source_assets, source_assets.c.page_id == pages.c.id)
+                    .where(pages.c.id.in_(page_ids))
+                )
+                for r in conn.execute(query).mappings():
+                    page_metadata[r["id"]] = dict(r)
+        except Exception as exc:
+            LOGGER.warning("Failed to enrich citation chapter/page metadata: %s", exc)
+
+    processed: set[str] = set()
+    for raw in candidates:
+        row = _candidate(raw)
+        page_id = row["pageId"]
+        if page_id is None or page_id in processed:
+            continue
+        processed.add(page_id)
+
+        meta = page_metadata.get(page_id, {})
+        page_ordinal = meta.get("page_ordinal")
+        page_num = page_ordinal if page_ordinal is not None else row["pageNumber"]
+        chapter_ordinal = (
+            meta.get("chapter_ordinal")
+            if meta.get("chapter_ordinal") is not None
+            else (row.get("chapterOrdinal") or row.get("chapter_ordinal"))
+        )
+        chapter_title = (
+            meta.get("chapter_title")
+            or row.get("chapterTitle")
+            or row.get("chapter_title")
+        )
+        source_asset_id = meta.get("source_asset_id")
+        source_url = f"/api/v2/assets/{source_asset_id}" if source_asset_id else None
+
         citations.append(
             {
                 "pageId": page_id,
-                "pageNumber": row["pageNumber"],
+                "page_id": page_id,
+                "pageNumber": page_num,
+                "page_number": page_num,
+                "chapterOrdinal": chapter_ordinal,
+                "chapter_ordinal": chapter_ordinal,
+                "chapterTitle": chapter_title,
+                "chapter_title": chapter_title,
+                "sourceUrl": source_url,
+                "source_url": source_url,
                 "excerpt": row["document"],
                 "score": row.get("rerankScore", row["hybridScore"]),
             }

@@ -2,7 +2,7 @@
 import { nextTick, ref, watch } from 'vue'
 import ProductScrollStack from '@/components/product/ProductScrollStack.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
-import type { QAMessage } from '@/types/insight'
+import type { QACitation, QAMessage } from '@/types/insight'
 import QAMessageItem from './QAMessageItem.vue'
 
 const props = withDefaults(defineProps<{
@@ -14,6 +14,7 @@ const props = withDefaults(defineProps<{
 })
 
 defineEmits<{
+  (event: 'previewCitation', citation: QACitation): void
   (event: 'saveNote', message: QAMessage): void
   (event: 'selectPage', pageNum: number): void
 }>()
@@ -62,6 +63,7 @@ watch(
       :key="message.id"
       :message="message"
       :render-markdown="props.renderMarkdown"
+      @preview-citation="$emit('previewCitation', $event)"
       @save-note="$emit('saveNote', $event)"
       @select-page="$emit('selectPage', $event)"
     />

@@ -29,46 +29,55 @@ describe('QAMessageItem', () => {
     expect(bubble.props('role')).toBe('assistant')
     expect(bubble.props('avatarIconName')).toBe('message')
     expect(bubble.props('avatarLabel')).toBe('智能助手')
-    expect(wrapper.get('.qa-message-item__mode-badge').text()).toBe('🎯 精确模式')
+    expect(wrapper.find('.qa-message-item__mode-badge').exists()).toBe(false)
 
     const citations = wrapper.getComponent(ProductChipList)
     expect(citations.props('ariaLabel')).toBe('引用页码')
     expect(citations.props('items')).toEqual([
       {
-        id: 5,
+        id: 0,
         label: '第5页',
-        ariaLabel: '查看第 5 页',
+        ariaLabel: '查看 第5页',
         interactive: true,
         tone: 'primary',
       },
     ])
 
-    citations.vm.$emit('select', 5)
+    citations.vm.$emit('select', 0)
 
     expect(wrapper.emitted('selectPage')?.[0]?.[0]).toBe(5)
+    expect(wrapper.emitted('previewCitation')?.[0]?.[0]).toEqual({ page: 5 })
   })
 
-  it('keeps save-note actions inside the product message bubble', async () => {
+  it('formats citations with chapter when chapterOrdinal is provided', () => {
     const wrapper = mount(QAMessageItem, {
       props: {
-        message: assistantMessage,
+        message: {
+          id: 'qa-msg-2',
+          role: 'assistant',
+          content: '线索在第5章第16页',
+          citations: [{ page: 16, chapterOrdinal: 5 }],
+        },
         renderMarkdown: content => `<p>${content}</p>`,
       },
     })
 
-    await wrapper.get('button[aria-label="保存为笔记"]').trigger('click')
-
-    expect(wrapper.emitted('saveNote')?.[0]?.[0]).toEqual(assistantMessage)
+    const citations = wrapper.getComponent(ProductChipList)
+    expect(citations.props('items')).toEqual([
+      {
+        id: 0,
+        label: '第5章：第16页',
+        ariaLabel: '查看 第5章：第16页',
+        interactive: true,
+        tone: 'primary',
+      },
+    ])
   })
 
-  it('does not offer failed requests as saveable answers', () => {
+  it('does not display save-note button', () => {
     const wrapper = mount(QAMessageItem, {
       props: {
-        message: {
-          id: 'qa-error-1',
-          role: 'assistant',
-          content: '抱歉，处理问题时出错: provider unavailable',
-        },
+        message: assistantMessage,
         renderMarkdown: content => `<p>${content}</p>`,
       },
     })

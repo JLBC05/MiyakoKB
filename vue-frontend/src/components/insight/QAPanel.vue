@@ -7,7 +7,7 @@ import {
   type V2Job,
 } from '@/api/v2/jobs'
 import { useInsightStore } from '@/stores/insightStore'
-import type { QAMessage, QAMode } from '@/types/insight'
+import type { QACitation, QAMessage, QAMode } from '@/types/insight'
 import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import { sanitizeHtml } from '@/utils/sanitizeHtml'
 import { showToast } from '@/utils/toast'
@@ -18,6 +18,7 @@ import UiButton from '@/components/ui/UiButton.vue'
 import QAComposer from './qa/QAComposer.vue'
 import QAMessageList from './qa/QAMessageList.vue'
 import QAOptionsBar from './qa/QAOptionsBar.vue'
+import CitationPreviewModal from './qa/CitationPreviewModal.vue'
 import QASaveNoteModal from './qa/QASaveNoteModal.vue'
 import { useQANoteModal } from './useQANoteModal'
 
@@ -170,7 +171,7 @@ async function sendQuestion(): Promise<void> {
         }),
       onContext: (contextData: {
         mode: QAMode
-        citations: Array<{ page: number }>
+        citations: QACitation[]
         resolvedEntities?: insightApi.ChatResult['resolvedEntities']
       }) => {
         if (!isCurrentChatRequest(requestId, bookId)) return
@@ -557,6 +558,19 @@ function askExampleQuestion(question: string): void {
   void sendQuestion()
 }
 
+const previewCitationData = ref<QACitation | null>(null)
+const showCitationModal = ref(false)
+
+function handlePreviewCitation(citation: QACitation): void {
+  previewCitationData.value = citation
+  showCitationModal.value = true
+}
+
+function handleCloseCitationModal(): void {
+  showCitationModal.value = false
+  previewCitationData.value = null
+}
+
 function handleSaveNote(message: QAMessage): void {
   openNoteModal(message)
 }
@@ -631,6 +645,7 @@ watch(
       :messages="qaHistory"
       :render-markdown="renderMarkdown"
       :scroll-request-id="messageScrollRequestId"
+      @preview-citation="handlePreviewCitation"
       @save-note="handleSaveNote"
       @select-page="selectPage"
     />
@@ -691,6 +706,12 @@ watch(
       v-model:note-comment="noteComment"
       @close="closeNoteModal"
       @save="saveNote"
+    />
+
+    <CitationPreviewModal
+      :visible="showCitationModal"
+      :citation="previewCitationData"
+      @close="handleCloseCitationModal"
     />
   </div>
 </template>

@@ -14,6 +14,7 @@ import type {
   NoteType,
   NoteUpdateInput,
   OverviewTemplateType,
+  QACitation,
   QAMatchedEntity,
   QAMode,
   QAResolvedEntities,
@@ -119,7 +120,7 @@ export type OverviewGenerationResult =
 export interface ChatResult {
   answer: string
   mode: QAMode
-  citations: Array<{ page: number }>
+  citations: QACitation[]
   resolvedEntities?: QAResolvedEntities
 }
 
@@ -127,7 +128,7 @@ interface ChatStreamOptions {
   onChunk?: (content: string) => void
   onContext?: (context: {
     mode: QAMode
-    citations: Array<{ page: number }>
+    citations: QACitation[]
     resolvedEntities?: QAResolvedEntities
   }) => void
   signal?: AbortSignal
@@ -159,27 +160,28 @@ function requireQaEventData(
   return value
 }
 
-function requireQaCitations(value: unknown): Array<{ page: number }> {
+function requireQaCitations(value: unknown): QACitation[] {
   if (!Array.isArray(value)) throw new Error('问答引用格式无效')
   return value.map(raw => {
-    const citation = requireQaEventData(
-      raw,
-      ['pageId', 'pageNumber', 'excerpt', 'score'],
-      'context'
-    )
-    if (
-      typeof citation.pageId !== 'string' ||
-      !citation.pageId ||
-      typeof citation.pageNumber !== 'number' ||
-      !Number.isInteger(citation.pageNumber) ||
-      citation.pageNumber < 1 ||
-      typeof citation.excerpt !== 'string' ||
-      typeof citation.score !== 'number' ||
-      !Number.isFinite(citation.score)
-    ) {
+    if (!isRecord(raw)) throw new Error('问答引用格式无效')
+    const pageId = typeof raw.pageId === 'string' ? raw.pageId : (typeof raw.page_id === 'string' ? raw.page_id : undefined)
+    const pageNumber = typeof raw.pageNumber === 'number' ? raw.pageNumber : (typeof raw.page_number === 'number' ? raw.page_number : 0)
+    const chapterOrdinal = typeof raw.chapterOrdinal === 'number' ? raw.chapterOrdinal : (typeof raw.chapter_ordinal === 'number' ? raw.chapter_ordinal : undefined)
+    const chapterTitle = typeof raw.chapterTitle === 'string' ? raw.chapterTitle : (typeof raw.chapter_title === 'string' ? raw.chapter_title : undefined)
+    const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl : (typeof raw.source_url === 'string' ? raw.source_url : undefined)
+    const excerpt = typeof raw.excerpt === 'string' ? raw.excerpt : undefined
+
+    if (pageNumber < 1) {
       throw new Error('问答引用字段无效')
     }
-    return { page: citation.pageNumber }
+    return {
+      page: pageNumber,
+      pageId,
+      chapterOrdinal,
+      chapterTitle,
+      sourceUrl,
+      excerpt,
+    }
   })
 }
 
@@ -877,7 +879,7 @@ export async function sendChat(
   }
   let answer = ''
   let mode: QAMode | null = null
-  let citations: Array<{ page: number }> = []
+  let citations: QACitation[] = []
   let resolvedEntities: QAResolvedEntities | undefined = undefined
   let streamError = ''
   let statusSeen = false

@@ -3,9 +3,7 @@ import { computed } from 'vue'
 import ProductChipList from '@/components/product/ProductChipList.vue'
 import type { ProductChipItem } from '@/components/product/ProductChipList.vue'
 import ProductMessageBubble from '@/components/product/ProductMessageBubble.vue'
-import UiButton from '@/components/ui/UiButton.vue'
-import UiIcon from '@/components/ui/UiIcon.vue'
-import type { QAMessage } from '@/types/insight'
+import type { QACitation, QAMessage } from '@/types/insight'
 
 const props = defineProps<{
   message: QAMessage
@@ -13,32 +11,38 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (event: 'saveNote', message: QAMessage): void
+  (event: 'previewCitation', citation: QACitation): void
   (event: 'selectPage', pageNum: number): void
 }>()
 
 const citationChips = computed<ProductChipItem[]>(() => {
   return (
-    props.message.citations?.map(citation => ({
-      id: citation.page,
-      label: `第${citation.page}页`,
-      ariaLabel: `查看第 ${citation.page} 页`,
-      interactive: true,
-      tone: 'primary',
-    })) ?? []
+    props.message.citations?.map((citation, index) => {
+      let label = `第${citation.page}页`
+      if (citation.chapterOrdinal !== undefined) {
+        label = `第${citation.chapterOrdinal}章：第${citation.page}页`
+      }
+      return {
+        id: index,
+        label,
+        ariaLabel: `查看 ${label}`,
+        interactive: true,
+        tone: 'primary',
+      }
+    }) ?? []
   )
 })
 
 const avatarLabel = computed(() => (props.message.role === 'user' ? '用户' : '智能助手'))
 const messageLabel = computed(() => (props.message.role === 'user' ? '用户问题' : '智能回答'))
-const modeLabel = computed(() => {
-  if (props.message.mode === 'precise') return '🎯 精确模式'
-  if (props.message.mode === 'global') return '🌐 全局模式'
-  return ''
-})
 
 function selectCitation(id: string | number): void {
-  if (typeof id === 'number') emit('selectPage', id)
+  const index = typeof id === 'number' ? id : parseInt(String(id), 10)
+  const citation = props.message.citations?.[index]
+  if (citation) {
+    emit('previewCitation', citation)
+    emit('selectPage', citation.page)
+  }
 }
 </script>
 
@@ -59,7 +63,6 @@ function selectCitation(id: string | number): void {
         {{ message.content }}
       </div>
       <template v-else>
-        <div v-if="modeLabel" class="qa-message-item__mode-badge">{{ modeLabel }}</div>
         <div class="qa-message-item__answer-text" v-html="renderMarkdown(message.content)"></div>
       </template>
     </template>
@@ -91,45 +94,12 @@ function selectCitation(id: string | number): void {
         </div>
       </div>
     </template>
-
-    <template
-      v-if="message.role === 'assistant' && message.mode && message.content && !message.isLoading"
-      #actions
-    >
-      <UiButton
-        variant="secondary"
-        size="xs"
-        :tone="message.saved ? 'success' : 'neutral'"
-        :disabled="message.saved"
-        :aria-label="message.saved ? '已保存' : '保存为笔记'"
-        @click="emit('saveNote', message)"
-      >
-        <template v-if="message.saved">
-          <UiIcon name="check" />
-          <span>已保存</span>
-        </template>
-        <template v-else>
-          <UiIcon name="file-text" />
-          <span>保存为笔记</span>
-        </template>
-      </UiButton>
-    </template>
   </ProductMessageBubble>
 </template>
 
 <style scoped>
 .qa-message-item__answer-text {
   line-height: 1.7;
-}
-
-.qa-message-item__mode-badge {
-  display: inline-block;
-  margin-bottom: 8px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  background: var(--color-surface-muted);
-  color: var(--color-text-supporting);
-  font-size: 11px;
 }
 
 .qa-message-item__citations {

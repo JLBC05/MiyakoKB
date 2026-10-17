@@ -38,13 +38,22 @@ export interface QAResolvedEntities {
   is_structured_query?: boolean
 }
 
+export interface QACitation {
+  page: number
+  pageId?: string
+  chapterOrdinal?: number
+  chapterTitle?: string
+  sourceUrl?: string
+  excerpt?: string
+}
+
 export interface QAMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
   isLoading?: boolean
   mode?: QAMode
-  citations?: Array<{ page: number }>
+  citations?: QACitation[]
   saved?: boolean
   resolvedEntities?: QAResolvedEntities
 }

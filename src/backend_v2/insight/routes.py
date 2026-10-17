@@ -425,7 +425,7 @@ def create_insight_blueprint(
                         ]
                     else:
                         candidates = candidates[: handle.options["topK"]]
-                citations = citations_for(candidates)
+                citations = citations_for(candidates, engine=engine)
                 try:
                     resolved_entities = resolve_entities_in_question(
                         book_id=book_id,
