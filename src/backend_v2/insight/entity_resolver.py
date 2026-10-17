@@ -149,6 +149,38 @@ def resolve_entities_in_question(
             elif target in entities_by_name:
                 cand_to_entity[alias_name] = entities_by_name[target]["entity_id"]
 
+    # 4. Dot-separated components for names with middle dot '·' (e.g. "斯科特·朝圣者" -> "斯科特")
+    dot_parts_map: dict[str, set[str]] = {}
+    for eid, ent in entities_by_id.items():
+        names_to_split: list[str] = []
+        cname = ent.get("canonical_name")
+        if isinstance(cname, str) and cname:
+            names_to_split.append(cname)
+        aliases = ent.get("aliases")
+        if isinstance(aliases, list):
+            names_to_split.extend(a for a in aliases if isinstance(a, str) and a)
+        for name in names_to_split:
+            if "·" in name:
+                parts = [p.strip() for p in name.split("·") if len(p.strip()) >= 2]
+                for p in parts:
+                    dot_parts_map.setdefault(p, set()).add(eid)
+
+    for part, eids in dot_parts_map.items():
+        if part not in cand_to_entity:
+            if len(eids) == 1:
+                cand_to_entity[part] = next(iter(eids))
+            else:
+                char_eids = [eid for eid in eids if entities_by_id[eid].get("category") == "characters"]
+                if len(char_eids) == 1:
+                    cand_to_entity[part] = char_eids[0]
+                elif char_eids:
+                    sorted_char = sorted(
+                        char_eids,
+                        key=lambda eid: entities_by_id[eid].get("frequency") or len(entities_by_id[eid].get("pages", [])),
+                        reverse=True,
+                    )
+                    cand_to_entity[part] = sorted_char[0]
+
     # Sort candidate names by descending string length (longest first)
     sorted_candidates = sorted(cand_to_entity.keys(), key=lambda s: (-len(s), s))
 
