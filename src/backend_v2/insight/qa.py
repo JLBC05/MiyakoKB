@@ -168,6 +168,7 @@ class QAHandle:
     question: str
     options: dict[str, Any]
     config: dict[str, Any]
+    book_id: str = ""
 
 
 def _validated_request_payload(
@@ -1643,6 +1644,7 @@ class InsightQACommandService:
             question=question,
             options=options,
             config=config,
+            book_id=book_id,
         )
 
     def materialize_api_config(

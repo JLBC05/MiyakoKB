@@ -428,11 +428,12 @@ def create_insight_blueprint(
                 citations = citations_for(candidates)
                 try:
                     resolved_entities = resolve_entities_in_question(
-                        book_id=handle.book_id,
+                        book_id=book_id,
                         question=handle.question,
                         engine=engine,
                     )
-                except Exception:
+                except Exception as exc:
+                    LOGGER.exception("Entity resolution failed: %s", exc)
                     resolved_entities = {"matched_entities": [], "is_structured_query": False}
 
                 yield _qa_sse(
