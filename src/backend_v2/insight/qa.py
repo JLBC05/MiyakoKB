@@ -1246,6 +1246,7 @@ class QAApiAlgorithms(Protocol):
         candidates: Sequence[Mapping[str, Any]],
         config: Mapping[str, Any],
         cancelled: threading.Event,
+        resolved_entities: Mapping[str, Any] | None = None,
     ) -> Iterator[str]: ...
 
 
@@ -1382,6 +1383,7 @@ class DefaultQAApiAlgorithms:
         candidates: Sequence[Mapping[str, Any]],
         config: Mapping[str, Any],
         cancelled: threading.Event,
+        resolved_entities: Mapping[str, Any] | None = None,
     ) -> Iterator[str]:
         from src.shared.ai_transport import UnifiedChatRequest
         from src.shared.openai_execution import (
@@ -1391,7 +1393,7 @@ class DefaultQAApiAlgorithms:
         from src.shared.openai_options import OpenAICompatibleOptions
 
         chat_config = frozen_chat_config(config)
-        context = _answer_context(candidates)
+        context = _answer_context(candidates, resolved_entities=resolved_entities)
         prompts = config.get("prompts")
         if not isinstance(prompts, Mapping):
             raise QAConflict("frozen Insight prompts must be an object")
@@ -1770,22 +1772,83 @@ def _lexical_score(document: str, keywords: Sequence[str]) -> float:
     return hits / len(keywords)
 
 
-def _answer_context(candidates: Sequence[Mapping[str, Any]]) -> str:
-    blocks = []
-    for index, row in enumerate(candidates, start=1):
-        location = (
-            f"page_id={row.get('pageId')}, 页码={row.get('pageNumber')}"
-            if row.get("pageId")
-            else str(row.get("id", "全局资料"))
-        )
-        parent = row.get("parentContext", [])
-        parent_text = (
-            f"\n父级摘要：{_json(parent)}"
-            if isinstance(parent, list) and parent
-            else ""
-        )
-        blocks.append(
-            f"[资料 {index} | {location}]\n"
-            f"{row.get('document', '')}{parent_text}"
-        )
-    return "\n\n".join(blocks)
+_CATEGORY_CN = {
+    "characters": "角色",
+    "abilities": "能力",
+    "items": "物品",
+    "locations": "地点",
+    "concepts": "概念",
+}
+
+
+def _format_pages_list(pages: Sequence[Any]) -> str:
+    if not pages:
+        return "无"
+    sorted_pages = sorted(
+        set(int(p) for p in pages if isinstance(p, (int, str)) and str(p).isdigit())
+    )
+    if not sorted_pages:
+        return "无"
+    # 若完全连续且数量 >= 3，显示为 1-46
+    if len(sorted_pages) >= 3 and sorted_pages[-1] - sorted_pages[0] + 1 == len(sorted_pages):
+        return f"{sorted_pages[0]}-{sorted_pages[-1]}"
+    if len(sorted_pages) <= 25:
+        return ", ".join(str(p) for p in sorted_pages)
+    return ", ".join(str(p) for p in sorted_pages[:25]) + f"... 等共 {len(sorted_pages)} 页"
+
+
+def _answer_context(
+    candidates: Sequence[Mapping[str, Any]],
+    resolved_entities: Mapping[str, Any] | None = None,
+) -> str:
+    sections = []
+
+    matched = []
+    if isinstance(resolved_entities, Mapping):
+        matched = resolved_entities.get("matched_entities", [])
+
+    if matched:
+        entity_lines = ["[实体知识库数据]"]
+        for ent in matched:
+            name = ent.get("canonical_name") or ent.get("entity_id", "")
+            cat = _CATEGORY_CN.get(str(ent.get("category", "")), ent.get("category", "实体"))
+            aliases = ent.get("aliases") or []
+            alias_str = "、".join(str(a) for a in aliases) if aliases else "无"
+            pages = ent.get("pages") or []
+            pages_str = _format_pages_list(pages)
+            freq = ent.get("frequency", len(pages))
+
+            if "-" in pages_str and "（共" not in pages_str:
+                pages_str = f"{pages_str}（共 {len(pages)} 页）"
+
+            entity_lines.append(
+                f"- 实体：{name}（{cat}）\n"
+                f"  别名：{alias_str}\n"
+                f"  出现页码：{pages_str}\n"
+                f"  出现频次：{freq}"
+            )
+        sections.append("\n".join(entity_lines))
+
+    if candidates:
+        blocks = []
+        for index, row in enumerate(candidates, start=1):
+            location = (
+                f"page_id={row.get('pageId')}, 页码={row.get('pageNumber')}"
+                if row.get("pageId")
+                else str(row.get("id", "全局资料"))
+            )
+            parent = row.get("parentContext", [])
+            parent_text = (
+                f"\n父级摘要：{_json(parent)}"
+                if isinstance(parent, list) and parent
+                else ""
+            )
+            blocks.append(
+                f"[资料 {index} | {location}]\n"
+                f"{row.get('document', '')}{parent_text}"
+            )
+        sections.append("[页面资料]\n" + "\n\n".join(blocks))
+    elif not matched:
+        sections.append("无相关漫画分析资料。")
+
+    return "\n\n".join(sections)

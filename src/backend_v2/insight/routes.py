@@ -36,6 +36,7 @@ from src.backend_v2.insight.derived import (
     InsightDerivedCommandService,
     InsightDerivedRepository,
 )
+from src.backend_v2.insight.entity_resolver import resolve_entities_in_question
 from src.backend_v2.insight.exports import (
     InsightExportCommandService,
     build_current_export,
@@ -425,14 +426,24 @@ def create_insight_blueprint(
                     else:
                         candidates = candidates[: handle.options["topK"]]
                 citations = citations_for(candidates)
+                try:
+                    resolved_entities = resolve_entities_in_question(
+                        book_id=handle.book_id,
+                        question=handle.question,
+                        engine=engine,
+                    )
+                except Exception:
+                    resolved_entities = {"matched_entities": [], "is_structured_query": False}
+
                 yield _qa_sse(
                     "context",
                     {
                         "mode": handle.options["mode"],
                         "citations": citations,
+                        "resolvedEntities": resolved_entities,
                     },
                 )
-                if not candidates:
+                if not candidates and not resolved_entities.get("matched_entities"):
                     yield _qa_sse(
                         "chunk",
                         {
@@ -454,6 +465,7 @@ def create_insight_blueprint(
                             (
                                 f"问题：{handle.question}",
                                 f"参考资料：{len(candidates)} 条",
+                                f"匹配实体：{len(resolved_entities.get('matched_entities', []))} 个",
                             ),
                         )
                         answer_emitted = False
@@ -463,6 +475,7 @@ def create_insight_blueprint(
                                 candidates=candidates,
                                 config=config,
                                 cancelled=cancelled,
+                                resolved_entities=resolved_entities,
                             ):
                                 if chunk:
                                     answer_emitted = True
