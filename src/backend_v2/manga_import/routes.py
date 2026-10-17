@@ -16,6 +16,8 @@ from src.backend_v2.content.page_style import resolve_new_page_style
 from src.backend_v2.timestamps import utcnow
 from src.backend_v2.auth.authorization import effective_owner_id
 from src.backend_v2.auth.constants import LOCAL_USER_ID
+from src.backend_v2.manga_import.local_preview import preview_local_paths
+from src.backend_v2.manga_import.local_confirm import import_single_local_book
 
 def get_venera_base_dir() -> Path:
     appdata = os.environ.get("APPDATA")
@@ -319,5 +321,48 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
             "failed": failed_count,
             "details": details,
         })
+
+    @blueprint.post("/local/preview")
+    def preview_local() -> Response:
+        payload = request.get_json(silent=True) or {}
+        paths = payload.get("paths") or []
+        enable_ai_vision = bool(payload.get("enable_ai_vision", False))
+        if not isinstance(paths, list) or not paths:
+            return jsonify({"error": "paths 必须是非空数组"}), 400
+
+        try:
+            result = preview_local_paths(paths=paths, enable_ai_vision=enable_ai_vision)
+            return jsonify(result), 200
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": f"扫描失败: {str(e)}"}), 500
+
+    @blueprint.post("/local/confirm")
+    def confirm_local() -> Response:
+        payload = request.get_json(silent=True) or {}
+        books_payload = payload.get("books") or []
+        if not isinstance(books_payload, list) or not books_payload:
+            return jsonify({"error": "books 必须是非空数组"}), 400
+
+        imported_books = []
+        for b_data in books_payload:
+            try:
+                res = import_single_local_book(
+                    b_data,
+                    data_root=data_root,
+                    engine=engine,
+                    importer=importer,
+                )
+                imported_books.append(res)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            except Exception as e:
+                return jsonify({"error": f"导入失败: {str(e)}"}), 500
+
+        return jsonify({
+            "status": "ok",
+            "imported_books": imported_books,
+        }), 200
 
     return blueprint

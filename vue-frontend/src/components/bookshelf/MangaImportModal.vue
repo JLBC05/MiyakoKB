@@ -7,7 +7,12 @@ import ProductActionRow from '@/components/product/ProductActionRow.vue'
 import {
   getVeneraLibrary,
   importVeneraComics,
+  previewLocalManga,
+  confirmLocalImport,
   type VeneraComic,
+  type LocalBookPreview,
+  type LocalChapterPreview,
+  type LocalBookConfirmPayload,
 } from '@/api/v2/mangaImport'
 import { showToast } from '@/utils/toast'
 
@@ -24,6 +29,14 @@ const comics = ref<VeneraComic[]>([])
 const selectedComicIds = ref<Set<string>>(new Set())
 const errorMessage = ref<string | null>(null)
 const importProgressText = ref<string | null>(null)
+
+// Local import state
+const localPathInput = ref('')
+const isScanningLocal = ref(false)
+const localBooks = ref<LocalBookPreview[]>([])
+const expandedBookIds = ref<Set<string>>(new Set())
+const aiVisionNeededCount = ref(0)
+const localScanError = ref<string | null>(null)
 
 async function loadVeneraComics() {
   isLoading.value = true
@@ -78,14 +91,118 @@ async function handleImport() {
       emit('imported')
       emit('close')
     } else {
-      const err = res.details.map(d => d.error).filter(Boolean).join('; ')
-      showToast(`导入失败: ${err || '未知错误'}`, 'error')
+      showToast('导入失败，请查看控制台日志', 'error')
     }
   } catch (err: unknown) {
-    showToast(err instanceof Error ? err.message : '导入请求失败', 'error')
+    showToast(err instanceof Error ? err.message : '导入失败', 'error')
   } finally {
     isImporting.value = false
     importProgressText.value = null
+  }
+}
+
+// Local scan & confirm
+async function handleScanLocal() {
+  const lines = localPathInput.value
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean)
+
+  if (lines.length === 0) {
+    showToast('请输入至少一个文件夹或压缩包路径', 'info')
+    return
+  }
+
+  isScanningLocal.value = true
+  localScanError.value = null
+  try {
+    const res = await previewLocalManga(lines, false)
+    localBooks.value = res.books || []
+    aiVisionNeededCount.value = res.ai_vision_needed_count || 0
+    expandedBookIds.value = new Set(
+      localBooks.value.filter(b => b.needs_manual_review).map(b => b.temp_id)
+    )
+    if (localBooks.value.length === 0) {
+      localScanError.value = '未扫描到可导入的漫画或章节，请检查路径中是否包含图片或 ZIP/CBZ'
+    }
+  } catch (err: unknown) {
+    localScanError.value = err instanceof Error ? err.message : '扫描失败'
+  } finally {
+    isScanningLocal.value = false
+  }
+}
+
+function toggleBookExpand(bookId: string) {
+  if (expandedBookIds.value.has(bookId)) {
+    expandedBookIds.value.delete(bookId)
+  } else {
+    expandedBookIds.value.add(bookId)
+  }
+}
+
+async function handleConfirmLocal() {
+  if (localBooks.value.length === 0) return
+
+  // Validate ordinals for each book
+  for (const book of localBooks.value) {
+    const seen = new Set<number>()
+    for (const ch of book.chapters) {
+      if (ch.ordinal === null || isNaN(Number(ch.ordinal)) || Number(ch.ordinal) < 1) {
+        showToast(`漫画《${book.title}》中章节“${ch.title}”缺少有效序号，请填写`, 'error')
+        expandedBookIds.value.add(book.temp_id)
+        return
+      }
+      const ord = Math.round(Number(ch.ordinal))
+      if (seen.has(ord)) {
+        showToast(`漫画《${book.title}》中存在重复序号 ${ord}，请先修正`, 'error')
+        expandedBookIds.value.add(book.temp_id)
+        return
+      }
+      seen.add(ord)
+    }
+  }
+
+  isImporting.value = true
+  importProgressText.value = `正在导入 ${localBooks.value.length} 部本地漫画，请稍候...`
+
+  try {
+    const payload: LocalBookConfirmPayload[] = localBooks.value.map(b => ({
+      title: b.title.trim() || '未命名漫画',
+      cover_source_path: b.cover_preview_path,
+      chapters: b.chapters.map(c => ({
+        title: c.title.trim(),
+        ordinal: Math.round(Number(c.ordinal)),
+        source_type: c.source_type,
+        source_path: c.source_path,
+      })),
+    }))
+
+    const res = await confirmLocalImport(payload)
+    if (res.imported_books && res.imported_books.length > 0) {
+      showToast(`成功导入 ${res.imported_books.length} 部漫画！`, 'success')
+      emit('imported')
+      emit('close')
+    } else {
+      showToast('导入失败，无有效漫画写入', 'error')
+    }
+  } catch (err: unknown) {
+    showToast(err instanceof Error ? err.message : '导入失败', 'error')
+  } finally {
+    isImporting.value = false
+    importProgressText.value = null
+  }
+}
+
+function getLayerBadge(layer: string): { label: string; class: string } {
+  switch (layer) {
+    case 'filename':
+      return { label: '文件名规则', class: 'badge-high' }
+    case 'metadata':
+      return { label: '元数据(ComicInfo)', class: 'badge-high' }
+    case 'ai_vision':
+      return { label: 'AI识别', class: 'badge-medium' }
+    default:
+      return { label: '待指定序号', class: 'badge-low' }
   }
 }
 
@@ -95,16 +212,11 @@ onMounted(() => {
 </script>
 
 <template>
-  <BaseModal
-    title="导入漫画"
-    size="lg"
-    @close="emit('close')"
-  >
+  <BaseModal title="导入漫画" width="820px" @close="emit('close')">
     <div class="manga-import-modal">
       <!-- Tabs Header -->
       <div class="manga-import-tabs">
         <button
-          type="button"
           class="manga-import-tab"
           :class="{ active: activeTab === 'venera' }"
           @click="activeTab = 'venera'"
@@ -113,7 +225,6 @@ onMounted(() => {
           <span>从 Venera 导入</span>
         </button>
         <button
-          type="button"
           class="manga-import-tab"
           :class="{ active: activeTab === 'local' }"
           @click="activeTab = 'local'"
@@ -127,24 +238,27 @@ onMounted(() => {
       <div v-if="activeTab === 'venera'" class="manga-import-content">
         <div v-if="isLoading" class="manga-import-status">
           <UiIcon name="loader" size="24" class="spinning" />
-          <span>正在扫描 Venera 漫画库...</span>
+          <span>正在读取 Venera 本地漫画库...</span>
         </div>
 
-        <div v-else-if="!veneraFound || errorMessage" class="manga-import-empty">
-          <UiIcon name="alert-circle" size="32" class="error-icon" />
-          <p>{{ errorMessage || '未检测到 Venera，请确认已安装并下载漫画' }}</p>
-          <UiButton size="sm" variant="secondary" @click="loadVeneraComics">
-            重新扫描
+        <div v-else-if="!veneraFound || errorMessage" class="manga-import-status">
+          <UiIcon name="alert-circle" size="28" class="error-icon" />
+          <p>{{ errorMessage || '未检测到 Venera 漫画库' }}</p>
+          <UiButton variant="secondary" size="sm" @click="loadVeneraComics">
+            重试检测
           </UiButton>
         </div>
 
         <div v-else-if="comics.length === 0" class="manga-import-empty">
-          <UiIcon name="inbox" size="32" />
-          <p>Venera 本地库暂无漫画</p>
+          <UiIcon name="book" size="32" />
+          <p>Venera 库中暂无已下载的漫画</p>
+          <UiButton variant="secondary" size="sm" @click="loadVeneraComics">
+            刷新列表
+          </UiButton>
         </div>
 
-        <div v-else class="venera-comic-list-wrapper">
-          <div class="venera-list-toolbar">
+        <div v-else class="venera-list-view">
+          <div class="venera-toolbar">
             <label class="select-all-label">
               <input
                 type="checkbox"
@@ -201,12 +315,122 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Tab 2: Local File Import (Placeholder) -->
-      <div v-else-if="activeTab === 'local'" class="manga-import-content local-placeholder">
-        <UiIcon name="archive" size="48" class="placeholder-icon" />
-        <h3>从本地文件导入</h3>
-        <p>支持 ZIP/CBZ/PDF/EPUB 或文件夹格式批量导入漫画。</p>
-        <div class="coming-soon-badge">即将支持</div>
+      <!-- Tab 2: Local File Import -->
+      <div v-else-if="activeTab === 'local'" class="manga-import-content local-content">
+        <!-- Input section -->
+        <div class="local-input-section">
+          <label class="input-label">
+            <span>输入本地文件夹路径或 ZIP/CBZ 文件路径（支持多行输入）：</span>
+            <span class="input-hint">支持每部漫画为一个总目录、或单个话次文件夹 / 压缩包</span>
+          </label>
+          <textarea
+            v-model="localPathInput"
+            class="local-path-textarea"
+            rows="3"
+            placeholder="例如：&#10;D:\Manga\咒术回战&#10;D:\Downloads\电锯人_Vol1.zip"
+            :disabled="isScanningLocal || isImporting"
+          ></textarea>
+          <div class="input-actions">
+            <UiButton
+              variant="secondary"
+              size="sm"
+              :disabled="isScanningLocal || isImporting || !localPathInput.trim()"
+              @click="handleScanLocal"
+            >
+              <UiIcon v-if="isScanningLocal" name="loader" size="14" class="spinning" />
+              <span>{{ isScanningLocal ? '正在扫描并分析章节...' : '扫描识别' }}</span>
+            </UiButton>
+          </div>
+        </div>
+
+        <!-- Scan error -->
+        <div v-if="localScanError" class="scan-error-alert">
+          <UiIcon name="alert-circle" size="16" />
+          <span>{{ localScanError }}</span>
+        </div>
+
+        <!-- Banner for ordinal or review needed -->
+        <div v-if="aiVisionNeededCount > 0" class="review-warning-banner">
+          <UiIcon name="alert-triangle" size="16" />
+          <span>检测到 {{ aiVisionNeededCount }} 个章节未能直接匹配序号，请在下方手动指定序号。</span>
+        </div>
+
+        <!-- Preview Result List -->
+        <div v-if="localBooks.length > 0" class="local-preview-list">
+          <div
+            v-for="book in localBooks"
+            :key="book.temp_id"
+            class="local-book-item"
+            :class="{ 'needs-review': book.needs_manual_review }"
+          >
+            <div class="book-item-header" @click="toggleBookExpand(book.temp_id)">
+              <div class="book-header-left">
+                <UiIcon :name="expandedBookIds.has(book.temp_id) ? 'chevron-down' : 'chevron-right'" size="16" />
+                <input
+                  v-model="book.title"
+                  class="book-title-input"
+                  placeholder="漫画标题"
+                  @click.stop
+                />
+              </div>
+              <div class="book-header-right">
+                <span class="badge chapter-total-badge">{{ book.chapters.length }} 话</span>
+                <span v-if="book.needs_manual_review" class="badge warning-badge">需核对顺序</span>
+              </div>
+            </div>
+
+            <!-- Chapters Tree -->
+            <div v-if="expandedBookIds.has(book.temp_id)" class="book-chapters-table">
+              <div class="chapter-row table-header">
+                <span class="col-ord">序号</span>
+                <span class="col-title">章节标题</span>
+                <span class="col-type">类型</span>
+                <span class="col-layer">识别来源</span>
+                <span class="col-pages">页数</span>
+              </div>
+              <div
+                v-for="ch in book.chapters"
+                :key="ch.temp_id"
+                class="chapter-row"
+                :class="{ 'row-warning': ch.needs_ordinal || ch.ordinal === null }"
+              >
+                <div class="col-ord">
+                  <input
+                    v-model.number="ch.ordinal"
+                    type="number"
+                    min="1"
+                    class="ordinal-input"
+                    :class="{ 'input-empty': ch.ordinal === null || ch.ordinal === undefined }"
+                    placeholder="序号"
+                  />
+                </div>
+                <div class="col-title">
+                  <input
+                    v-model="ch.title"
+                    class="ch-title-input"
+                    placeholder="章节标题"
+                  />
+                </div>
+                <div class="col-type">
+                  <span class="type-tag">{{ ch.source_type === 'archive' ? 'ZIP' : '文件夹' }}</span>
+                </div>
+                <div class="col-layer">
+                  <span :class="['layer-badge', getLayerBadge(ch.recognition_layer).class]">
+                    {{ getLayerBadge(ch.recognition_layer).label }}
+                  </span>
+                </div>
+                <div class="col-pages">
+                  <span>{{ ch.page_count }} 页</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="importProgressText" class="import-progress-banner">
+          <UiIcon name="loader" size="18" class="spinning" />
+          <span>{{ importProgressText }}</span>
+        </div>
       </div>
     </div>
 
@@ -216,8 +440,11 @@ onMounted(() => {
           <span v-if="activeTab === 'venera' && selectedComicIds.size > 0">
             已选择 <strong>{{ selectedComicIds.size }}</strong> 部漫画
           </span>
+          <span v-else-if="activeTab === 'local' && localBooks.length > 0">
+            共扫描到 <strong>{{ localBooks.length }}</strong> 部漫画，待导入
+          </span>
         </div>
-        <UiButton variant="secondary" :disabled="isImporting" @click="emit('close')">
+        <UiButton variant="secondary" :disabled="isImporting || isScanningLocal" @click="emit('close')">
           取消
         </UiButton>
         <UiButton
@@ -229,6 +456,15 @@ onMounted(() => {
           <UiIcon v-if="isImporting" name="loader" size="16" class="spinning" />
           <span>{{ isImporting ? '导入中...' : '开始导入' }}</span>
         </UiButton>
+        <UiButton
+          v-else-if="activeTab === 'local'"
+          variant="primary"
+          :disabled="localBooks.length === 0 || isImporting || isScanningLocal"
+          @click="handleConfirmLocal"
+        >
+          <UiIcon v-if="isImporting" name="loader" size="16" class="spinning" />
+          <span>{{ isImporting ? '导入中...' : `确认导入 (${localBooks.length} 部)` }}</span>
+        </UiButton>
       </ProductActionRow>
     </template>
   </BaseModal>
@@ -239,8 +475,8 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  min-height: 400px;
-  max-height: 70vh;
+  min-height: 440px;
+  max-height: 75vh;
 }
 
 .manga-import-tabs {
@@ -298,85 +534,87 @@ onMounted(() => {
   color: #ef4444;
 }
 
-.venera-comic-list-wrapper {
+.venera-list-view {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  overflow: hidden;
   gap: 12px;
-  overflow-y: auto;
-  max-height: 480px;
-  padding-right: 4px;
 }
 
-.venera-list-toolbar {
+.venera-toolbar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
   padding: 4px 8px;
-  background: var(--bg-surface, #f8fafc);
-  border-radius: 6px;
-  font-size: 13px;
 }
 
 .select-all-label {
   display: flex;
   align-items: center;
   gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
   user-select: none;
 }
 
 .venera-hint {
-  color: var(--text-muted, #94a3b8);
   font-size: 12px;
+  color: var(--text-muted, #64748b);
 }
 
 .venera-comic-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 12px;
+  overflow-y: auto;
+  padding: 4px;
+  max-height: 480px;
 }
 
 .venera-comic-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px;
+  position: relative;
   border: 1px solid var(--border-color, #e2e8f0);
   border-radius: 8px;
-  background: var(--bg-card, #ffffff);
+  padding: 10px;
+  background: var(--bg-surface, #ffffff);
   cursor: pointer;
-  position: relative;
   transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .venera-comic-card:hover {
   border-color: var(--miyako-primary, #6366f1);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 }
 
 .venera-comic-card.selected {
   border-color: var(--miyako-primary, #6366f1);
-  background: rgba(99, 102, 241, 0.04);
+  background: var(--miyako-primary-bg, rgba(99, 102, 241, 0.05));
 }
 
 .venera-comic-card.disabled {
   opacity: 0.6;
-  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .card-checkbox {
-  display: flex;
-  align-items: center;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
 }
 
 .card-cover-wrapper {
-  width: 48px;
-  height: 64px;
-  flex-shrink: 0;
+  width: 100%;
+  height: 120px;
   border-radius: 4px;
   overflow: hidden;
-  background: var(--bg-muted, #e2e8f0);
+  background: var(--bg-subtle, #f8fafc);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -387,15 +625,13 @@ onMounted(() => {
 }
 
 .card-info {
-  flex: 1;
-  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
 .card-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-color, #1e293b);
   overflow: hidden;
@@ -404,65 +640,35 @@ onMounted(() => {
 }
 
 .card-meta {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted, #64748b);
 }
 
 .card-tags {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
-  overflow: hidden;
 }
 
 .tag-badge {
   font-size: 10px;
   padding: 1px 4px;
   border-radius: 3px;
-  background: var(--bg-muted, #f1f5f9);
-  color: var(--text-muted, #64748b);
-  white-space: nowrap;
+  background: var(--bg-subtle, #f1f5f9);
+  color: var(--text-muted, #475569);
 }
 
 .import-progress-banner {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 16px;
+  padding: 8px 12px;
   border-radius: 6px;
-  background: rgba(99, 102, 241, 0.1);
+  background: var(--miyako-primary-bg, rgba(99, 102, 241, 0.1));
   color: var(--miyako-primary, #6366f1);
-  font-size: 14px;
-  font-weight: 500;
-  margin-top: 12px;
-}
-
-.local-placeholder {
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  padding: 48px 16px;
-  text-align: center;
-  color: var(--text-muted, #64748b);
-}
-
-.placeholder-icon {
-  color: var(--miyako-primary, #6366f1);
-  opacity: 0.8;
-}
-
-.coming-soon-badge {
-  display: inline-block;
-  padding: 4px 12px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 600;
-  background: var(--bg-muted, #f1f5f9);
-  color: var(--text-muted, #64748b);
-}
-
-.footer-left {
   font-size: 13px;
-  color: var(--text-muted, #64748b);
+  font-weight: 500;
+  margin-top: 8px;
 }
 
 .spinning {
@@ -472,5 +678,279 @@ onMounted(() => {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* Local Tab Styles */
+.local-content {
+  gap: 12px;
+  overflow-y: auto;
+  max-height: 520px;
+  padding-right: 4px;
+}
+
+.local-input-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-subtle, #f8fafc);
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+
+.input-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-color, #1e293b);
+}
+
+.input-hint {
+  font-size: 11px;
+  color: var(--text-muted, #64748b);
+}
+
+.local-path-textarea {
+  width: 100%;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  padding: 8px;
+  font-size: 12px;
+  font-family: monospace;
+  resize: vertical;
+  background: var(--bg-surface, #ffffff);
+  color: var(--text-color, #1e293b);
+}
+
+.local-path-textarea:focus {
+  outline: none;
+  border-color: var(--miyako-primary, #6366f1);
+}
+
+.input-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.scan-error-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  font-size: 12px;
+}
+
+.review-warning-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #d97706;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.local-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.local-book-item {
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 6px;
+  background: var(--bg-surface, #ffffff);
+  overflow: hidden;
+}
+
+.local-book-item.needs-review {
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.book-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--bg-subtle, #f8fafc);
+  cursor: pointer;
+  user-select: none;
+}
+
+.book-item-header:hover {
+  background: var(--bg-hover, #f1f5f9);
+}
+
+.book-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.book-title-input {
+  font-size: 14px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-color, #1e293b);
+  width: 280px;
+}
+
+.book-title-input:hover,
+.book-title-input:focus {
+  border-color: var(--border-color, #cbd5e1);
+  background: var(--bg-surface, #ffffff);
+  outline: none;
+}
+
+.book-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.chapter-total-badge {
+  background: var(--bg-hover, #e2e8f0);
+  color: var(--text-muted, #475569);
+}
+
+.warning-badge {
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
+  font-weight: 500;
+}
+
+.book-chapters-table {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-color, #e2e8f0);
+}
+
+.chapter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-color, #f1f5f9);
+  font-size: 12px;
+}
+
+.chapter-row.table-header {
+  background: var(--bg-subtle, #f8fafc);
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+  font-size: 11px;
+}
+
+.chapter-row.row-warning {
+  background: rgba(245, 158, 11, 0.05);
+}
+
+.col-ord {
+  width: 60px;
+}
+
+.ordinal-input {
+  width: 100%;
+  padding: 2px 4px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.ordinal-input.input-empty {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.col-title {
+  flex: 1;
+}
+
+.ch-title-input {
+  width: 100%;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--text-color, #1e293b);
+}
+
+.ch-title-input:hover,
+.ch-title-input:focus {
+  border-color: var(--border-color, #cbd5e1);
+  background: var(--bg-surface, #ffffff);
+  outline: none;
+}
+
+.col-type {
+  width: 64px;
+}
+
+.type-tag {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-subtle, #e2e8f0);
+  color: var(--text-muted, #475569);
+}
+
+.col-layer {
+  width: 120px;
+}
+
+.layer-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.badge-high {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.badge-medium {
+  background: rgba(245, 158, 11, 0.1);
+  color: #d97706;
+}
+
+.badge-low {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  font-weight: 500;
+}
+
+.col-pages {
+  width: 50px;
+  text-align: right;
+  color: var(--text-muted, #64748b);
+  font-size: 11px;
+}
+
+.footer-left {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-muted, #64748b);
 }
 </style>
