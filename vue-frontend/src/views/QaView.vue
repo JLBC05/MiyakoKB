@@ -121,6 +121,14 @@ function chooseAnotherBook(): void {
   void router.replace({ query: {} })
 }
 
+function handleBookSelect(bookId: string): void {
+  if (!bookId) {
+    chooseAnotherBook()
+    return
+  }
+  void router.replace({ query: { ...route.query, book: bookId } })
+}
+
 onMounted(() => {
   isQaViewMounted = true
   const bookId = routeBookId(route.query.book)
@@ -158,7 +166,10 @@ watch(
       <!-- 顶部次级栏：漫画选择与上下文概览 -->
       <section class="qa-header-bar">
         <div class="qa-header-bar__left">
-          <BookSelector />
+          <BookSelector
+            :model-value="insightStore.currentBookId ?? ''"
+            @select="handleBookSelect"
+          />
           <span v-if="currentBook" class="qa-header-bar__meta">
             共 {{ currentBook.totalPages }} 页 · 已分析 {{ insightStore.analyzedPageCount }} 页
           </span>

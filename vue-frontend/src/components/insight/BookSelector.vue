@@ -1,23 +1,37 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { getBooks } from '@/api/bookshelf'
 import type { BookData } from '@/types'
 import ProductBookSelector from '@/components/product/ProductBookSelector.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 
+const props = defineProps<{
+  modelValue?: string
+}>()
+
 const emit = defineEmits<{
+  (e: 'update:modelValue', bookId: string): void
   (e: 'select', bookId: string): void
 }>()
 
 const books = ref<BookData[]>([])
-const selectedBookId = ref('')
+const selectedBookId = ref(props.modelValue ?? '')
 const isLoading = ref(true)
 const error = ref<string | null>(null)
 let loadSequence = 0
 let isMounted = false
 
+watch(
+  () => props.modelValue,
+  val => {
+    selectedBookId.value = val ?? ''
+  },
+)
+
 function handleSelect(bookId: string): void {
+  selectedBookId.value = bookId
+  emit('update:modelValue', bookId)
   emit('select', bookId)
 }
 

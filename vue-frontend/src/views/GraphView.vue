@@ -153,6 +153,14 @@ function chooseAnotherBook(): void {
   void router.replace({ query: {} })
 }
 
+function handleBookSelect(bookId: string): void {
+  if (!bookId) {
+    chooseAnotherBook()
+    return
+  }
+  void router.replace({ query: { ...route.query, book: bookId } })
+}
+
 onMounted(() => {
   isGraphViewMounted = true
   const bookId = routeBookId(route.query.book)
@@ -190,7 +198,10 @@ watch(
       <!-- 顶部次级栏：漫画选择与子 Tab 切换 -->
       <section class="graph-header-bar">
         <div class="graph-header-bar__left">
-          <BookSelector />
+          <BookSelector
+            :model-value="insightStore.currentBookId ?? ''"
+            @select="handleBookSelect"
+          />
           <span v-if="currentBook" class="graph-header-bar__meta">
             共 {{ currentBook.totalPages }} 页 · 已分析 {{ insightStore.analyzedPageCount }} 页
           </span>

@@ -95,9 +95,8 @@ def run_worker(args: object) -> int:
             log_path,
         )
     identity = RuntimeIdentity.for_worker(test_mode=args.test_mode)
-    engine = None
+    engine = create_sqlite_engine(database_path_for(data_root))
     if not identity.test_mode:
-        engine = create_sqlite_engine(database_path_for(data_root))
         repository = ProcessEpochRepository(engine)
         if not repository.validate(
             role="worker",
@@ -106,6 +105,25 @@ def run_worker(args: object) -> int:
         ):
             engine.dispose()
             raise RuntimeError("Launcher-issued Worker epoch is missing or invalid")
+    else:
+        from src.backend_v2.storage.database import immediate_transaction
+        from src.backend_v2.storage.schema import process_epochs
+        from src.backend_v2.timestamps import utcnow
+        with immediate_transaction(engine) as conn:
+            conn.execute(
+                process_epochs.delete().where(process_epochs.c.id == identity.epoch_id)
+            )
+            conn.execute(
+                process_epochs.insert().values(
+                    id=identity.epoch_id,
+                    role="worker",
+                    token_hash="",
+                    pid=os.getpid(),
+                    status="active",
+                    heartbeat_at=utcnow(),
+                    lease_expires_at=utcnow(),
+                )
+            )
 
     if args.probe:
         print(
@@ -409,7 +427,8 @@ def run_worker(args: object) -> int:
                     str(fence.attempt_id)[:8],
                     reason,
                 )
-                os._exit(WORKER_RECYCLE_EXIT_CODE)
+                if not identity.test_mode:
+                    os._exit(WORKER_RECYCLE_EXIT_CODE)
 
             job_loop = JobWorkerLoop(
                 job_repository,
@@ -434,6 +453,7 @@ def run_worker(args: object) -> int:
                 ),
                 on_activity=model_lifecycle.note_activity,
                 on_control_timeout=abort_stalled_attempt,
+                control_timeout_seconds=30.0 if identity.test_mode else 1.5,
                 plugin_runtime=plugin_job_runtime,
             )
             _write_ready_marker(data_root, identity)

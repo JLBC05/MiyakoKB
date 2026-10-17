@@ -27,6 +27,7 @@ from src.backend_v2.insight.page_schema import (
     ALLOWED_IMPORTANCE,
     InvalidPageAnalysis,
     deserialize_page_analysis,
+    get_run_extra_entities,
     validate_persisted_page_analysis,
 )
 from src.backend_v2.insight.repository import (
@@ -830,14 +831,22 @@ def _persisted_page_analysis(
     source_checksum: str,
     run_id: str | None = None,
     connection: Connection | Engine | None = None,
+    extra_entities: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     try:
         parsed = _json_object(value, "analysis page payload")
-        if run_id is not None and connection is not None:
+        if extra_entities is not None:
+            payload = validate_persisted_page_analysis(
+                parsed, extra_entities=extra_entities
+            )
+        elif run_id is not None and connection is not None:
+            target = connection
+            if hasattr(target, "closed") and target.closed:
+                target = getattr(target, "engine", connection)
             payload = deserialize_page_analysis(
                 parsed,
                 run_id=run_id,
-                target=connection,
+                target=target,
             )
         else:
             payload = validate_persisted_page_analysis(parsed)
@@ -2150,6 +2159,7 @@ class InsightDerivedRepository:
         run_status = _required_string(run["status"], "analysis run status")
         if run_status != "staging":
             raise InsightConflict("analysis run is not staging")
+        extra_entities = get_run_extra_entities(run_id, self.engine)
         page_payloads: list[dict[str, Any]] = []
         seen_page_ids: set[str] = set()
         previous_ordinal = 0
@@ -2236,7 +2246,8 @@ class InsightDerivedRepository:
                         source_asset_id=source_asset_id,
                         source_checksum=source_checksum,
                         run_id=run_id,
-                        connection=connection,
+                        connection=self.engine,
+                        extra_entities=extra_entities,
                     ),
                 }
             )
@@ -3455,7 +3466,7 @@ class InsightDerivedRepository:
                             if v in id_replacements:
                                 existing_alias_map[k] = id_replacements[v]
 
-            # 2. 统计本章实体词频与出现页码
+            # 2. 统计本章实体词频与出现页码（自适应解包 frozen.pages 包装结构）
             raw_stats = {
                 "characters": defaultdict(lambda: {"count": 0, "pages": [], "types": []}),
                 "items": defaultdict(lambda: {"count": 0, "pages": [], "types": []}),
@@ -3463,8 +3474,19 @@ class InsightDerivedRepository:
                 "locations": defaultdict(lambda: {"count": 0, "pages": [], "types": []}),
                 "concepts": defaultdict(lambda: {"count": 0, "pages": [], "types": []}),
             }
+            normalized_pages: list[Mapping[str, Any]] = []
             for p in pages_analysis:
-                pn = p.get("page_number", 0)
+                if isinstance(p, Mapping) and "analysis" in p and isinstance(p["analysis"], Mapping):
+                    pn = p.get("pageNumber") or p["analysis"].get("page_number_snapshot") or p["analysis"].get("page_number")
+                    page_item = dict(p["analysis"])
+                    if "page_number" not in page_item and pn is not None:
+                        page_item["page_number"] = pn
+                    normalized_pages.append(page_item)
+                else:
+                    normalized_pages.append(p)
+
+            for p in normalized_pages:
+                pn = p.get("page_number") or p.get("page_number_snapshot", 0)
                 for cat in raw_stats.keys():
                     for it in p.get(cat, []):
                         if isinstance(it, Mapping):
@@ -5799,6 +5821,23 @@ class InsightDerivedWorkerService:
                 checkpoint=checkpoint,
                 publisher=publish,
             )
+            if kind in {"insight_build_timeline", "insight_stage_timeline"}:
+                try:
+                    align_res = self.repository.align_entities(
+                        book_id=frozen.book_id,
+                        chapter_id="",
+                        pages_analysis=frozen.pages,
+                        run_id=run_id,
+                    )
+                    log_result(
+                        "实体知识网络对齐完成",
+                        (
+                            f"实体总数：{align_res.get('entityCount', 0)}",
+                            f"版本：{align_res.get('revision', 1)}",
+                        ),
+                    )
+                except Exception as exc:
+                    LOGGER.warning("实体对齐自动生成异常，继续流水线: %s", exc)
             return {**checkpoint, "__already_published__": True}
         except AttemptFenced:
             raise

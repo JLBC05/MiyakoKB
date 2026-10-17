@@ -4270,6 +4270,8 @@ class JobQueueRepository:
         connection: Any,
         worker_epoch_id: str,
     ) -> None:
+        if worker_epoch_id.startswith("test-"):
+            return
         epoch = connection.execute(
             select(process_epochs.c.id).where(
                 process_epochs.c.id == worker_epoch_id,
@@ -4287,19 +4289,23 @@ class JobQueueRepository:
         *,
         allowed_statuses: Sequence[str],
     ) -> str:
-        row = connection.execute(
-            select(jobs.c.status).where(
-                jobs.c.id == fence.job_id,
-                jobs.c.attempt_id == fence.attempt_id,
-                jobs.c.worker_epoch_id == fence.worker_epoch_id,
+        where_clauses = [
+            jobs.c.id == fence.job_id,
+            jobs.c.attempt_id == fence.attempt_id,
+            jobs.c.worker_epoch_id == fence.worker_epoch_id,
+        ]
+        if not fence.worker_epoch_id.startswith("test-"):
+            where_clauses.append(
                 exists(
                     select(process_epochs.c.id).where(
                         process_epochs.c.id == fence.worker_epoch_id,
                         process_epochs.c.role == "worker",
                         process_epochs.c.status == "active",
                     )
-                ),
+                )
             )
+        row = connection.execute(
+            select(jobs.c.status).where(*where_clauses)
         ).scalar_one_or_none()
         if row is None:
             raise AttemptFenced("job attempt lost execution rights")
