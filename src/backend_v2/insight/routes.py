@@ -124,6 +124,10 @@ def create_insight_blueprint(
     def bootstrap() -> Response:
         return jsonify(repository.bootstrap())
 
+    @blueprint.get("/books/knowledge-status")
+    def books_knowledge_status() -> Response:
+        return jsonify(repository.get_books_knowledge_status())
+
     @blueprint.get("/books/<book_id>/chapters")
     def chapters(book_id: str) -> Response:
         return jsonify(repository.list_chapters(book_id))

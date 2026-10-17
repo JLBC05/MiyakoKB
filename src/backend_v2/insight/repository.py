@@ -2523,6 +2523,54 @@ class InsightRepository:
             )
         return {"items": items}
 
+    def get_books_knowledge_status(self) -> dict[str, Any]:
+        """返回所有书籍的知识库构建状态（已构建/未构建/部分构建及章节统计）。"""
+        stmt = (
+            select(
+                books.c.id.label("book_id"),
+                func.count(func.distinct(chapters.c.id)).label("total_chapters"),
+                func.count(
+                    func.distinct(
+                        case(
+                            (analysis_page_results.c.id.is_not(None), chapters.c.id),
+                            else_=None,
+                        )
+                    )
+                ).label("analyzed_chapters"),
+            )
+            .select_from(
+                books.outerjoin(chapters, chapters.c.book_id == books.c.id)
+                .outerjoin(pages, pages.c.chapter_id == chapters.c.id)
+                .outerjoin(
+                    analysis_page_results,
+                    analysis_page_results.c.page_id == pages.c.id,
+                )
+            )
+            .group_by(books.c.id)
+        )
+
+        items: dict[str, dict[str, Any]] = {}
+        with self.engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+            for row in rows:
+                book_id = str(row.book_id)
+                total = int(row.total_chapters or 0)
+                analyzed = int(row.analyzed_chapters or 0)
+                if total > 0 and analyzed >= total:
+                    status = "completed"
+                elif analyzed > 0:
+                    status = "partial"
+                else:
+                    status = "none"
+
+                items[book_id] = {
+                    "status": status,
+                    "totalChapters": total,
+                    "analyzedChapters": analyzed,
+                }
+
+        return {"items": items}
+
     def list_chapters(self, book_id: str) -> dict[str, Any]:
         page_rows = self._book_page_statement(book_id).subquery(
             "insight_chapter_page_rows"

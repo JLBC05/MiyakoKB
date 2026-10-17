@@ -15,9 +15,11 @@ const rawEdges = ref<V2InsightGraphEdge[]>([])
 
 // 筛选控制
 const selectedCategory = ref<string>('all')
-const minWeight = ref<number>(1)
+const minWeight = ref<number>(2) // 默认过滤掉偶然1次同现的微弱边，大幅提速且界面清爽
 const searchQuery = ref<string>('')
 const showLabels = ref<boolean>(true)
+const isSimplifiedMode = ref<boolean>(true) // 默认开启简洁核心视图（Top 核心节点）
+const maxSimplifiedNodes = 60
 
 // 画布视图状态 (缩放与平移)
 const transform = ref({ x: 0, y: 0, scale: 1 })
@@ -87,7 +89,7 @@ const categoryCounts = computed(() => {
 
 // 筛选后活跃的节点与边
 const activeNodes = computed(() => {
-  return simNodes.value.filter(n => {
+  let list = simNodes.value.filter(n => {
     if (selectedCategory.value !== 'all' && n.category !== selectedCategory.value) {
       return false
     }
@@ -99,7 +101,19 @@ const activeNodes = computed(() => {
     }
     return true
   })
+
+  // 简约模式：如果节点较多，优先保留频次最高的核心实体，防止视口杂乱与掉帧
+  if (isSimplifiedMode.value && list.length > maxSimplifiedNodes) {
+    list = [...list].sort((a, b) => b.frequency - a.frequency).slice(0, maxSimplifiedNodes)
+  }
+
+  return list
 })
+
+function toggleSimplifiedMode() {
+  isSimplifiedMode.value = !isSimplifiedMode.value
+  reheatSimulation(0.6)
+}
 
 const activeNodeIdSet = computed(() => new Set(activeNodes.value.map(n => n.id)))
 
@@ -245,11 +259,12 @@ function initSimulation() {
 
 // 模拟步进计算 (Force Layout Step)
 function stepSimulation() {
-  if (simulationAlpha < 0.005) {
+  if (simulationAlpha < 0.003) {
     if (animFrameId) {
       cancelAnimationFrame(animFrameId)
       animFrameId = null
     }
+    simulationAlpha = 0
     return
   }
 
@@ -260,8 +275,8 @@ function stepSimulation() {
   const centerX = width / 2
   const centerY = height / 2
 
-  const kRepulsion = 1200 * simulationAlpha
-  const kCenter = 0.03 * simulationAlpha
+  const kRepulsion = 1000 * simulationAlpha
+  const kCenter = 0.04 * simulationAlpha
 
   // 1. 中心重力
   for (const n of nodes) {
@@ -274,8 +289,9 @@ function stepSimulation() {
     n.vy += (centerY - n.y) * kCenter
   }
 
-  // 2. 节点两两排斥力 (Coulomb)
+  // 2. 节点两两排斥力 (带有距离上限截断，远距离直接跳过计算，大幅降低开销)
   const nLen = nodes.length
+  const maxDistSq = 320 * 320 // 超过 320px 斥力极其微弱，直接忽略
   for (let i = 0; i < nLen; i++) {
     const na = nodes[i]
     for (let j = i + 1; j < nLen; j++) {
@@ -283,13 +299,15 @@ function stepSimulation() {
       const dx = nb.x - na.x
       const dy = nb.y - na.y
       const distSq = dx * dx + dy * dy + 1
+      if (distSq > maxDistSq) continue
+
       const dist = Math.sqrt(distSq)
-      const minDist = na.radius + nb.radius + 12
+      const minDist = na.radius + nb.radius + 14
 
       // 碰撞与排斥
       let force = kRepulsion / distSq
       if (dist < minDist) {
-        force += (minDist - dist) * 0.5 * simulationAlpha
+        force += (minDist - dist) * 0.45 * simulationAlpha
       }
 
       const fx = (dx / dist) * force
@@ -315,8 +333,8 @@ function stepSimulation() {
     const dist = Math.sqrt(dx * dx + dy * dy) || 1
 
     // 理想边长根据共现权重调整：权重越高，拉得越近
-    const idealDist = Math.max(50, 160 - Math.min(e.weight, 20) * 4)
-    const springForce = (dist - idealDist) * 0.05 * simulationAlpha
+    const idealDist = Math.max(55, 150 - Math.min(e.weight, 15) * 4)
+    const springForce = (dist - idealDist) * 0.06 * simulationAlpha
 
     const fx = (dx / dist) * springForce
     const fy = (dy / dist) * springForce
@@ -332,7 +350,7 @@ function stepSimulation() {
   }
 
   // 4. 应用速度与衰减
-  const damping = 0.82
+  const damping = 0.78
   for (const n of nodes) {
     if (n.fx != null && n.fy != null) {
       n.vx = 0
@@ -345,12 +363,12 @@ function stepSimulation() {
     n.y += n.vy
   }
 
-  simulationAlpha *= 0.985
+  simulationAlpha *= 0.96 // 加快稳定收敛速度，百余帧内完成布局并静止
   animFrameId = requestAnimationFrame(stepSimulation)
 }
 
-function reheatSimulation(alpha = 1.0) {
-  simulationAlpha = alpha
+function reheatSimulation(alpha = 0.7) {
+  simulationAlpha = Math.max(simulationAlpha, alpha)
   if (!animFrameId) {
     animFrameId = requestAnimationFrame(stepSimulation)
   }
@@ -543,6 +561,17 @@ onUnmounted(() => {
           <button v-if="searchQuery" class="clear-btn" @click="searchQuery = ''">✕</button>
         </div>
 
+        <!-- 简洁模式切换 -->
+        <UiButton
+          variant="outline"
+          size="sm"
+          :class="{ 'btn-active': isSimplifiedMode }"
+          :title="isSimplifiedMode ? '当前为简洁核心视图（Top 60 核心实体），点击切换全量' : '当前为全景完整视图，点击切换核心'"
+          @click="toggleSimplifiedMode"
+        >
+          {{ isSimplifiedMode ? '⚡ 简洁核心' : '🌐 全景全量' }}
+        </UiButton>
+
         <!-- 开关标签 -->
         <UiButton
           variant="outline"
@@ -595,15 +624,7 @@ onUnmounted(() => {
           :width="viewportSize.width"
           :height="viewportSize.height"
         >
-          <defs>
-            <!-- 连线发光渐变滤镜 -->
-            <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="3" result="blur" />
-              <feComposite in="SourceGraphic" in2="blur" operator="over" />
-            </filter>
-          </defs>
-
-          <!-- 缩放与平移变换组 -->
+          <!-- 缩放与平移变换组 (已彻底移除昂贵的 SVG Filter 滤镜，保证 60FPS 极速渲染) -->
           <g :transform="`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`">
             <!-- 关系连线层 -->
             <g class="edges-layer">
@@ -993,69 +1014,60 @@ onUnmounted(() => {
   display: block;
 }
 
-/* 连线样式 */
+/* 连线样式 (纯净矢量绘制，零昂贵滤镜，极致丝滑) */
 .graph-edge {
   stroke: rgba(255, 255, 255, 0.16);
   stroke-linecap: round;
   cursor: pointer;
-  transition: stroke 0.2s, stroke-width 0.2s, opacity 0.2s;
+  transition: stroke 0.15s, stroke-width 0.15s, opacity 0.15s;
 }
 
 .graph-edge:hover {
   stroke: var(--color-primary, #8b5cf6);
-  stroke-width: 4px !important;
+  stroke-width: 3.5px !important;
 }
 
 .graph-edge.highlighted {
   stroke: #c084fc;
-  stroke-opacity: 0.9;
-  filter: url(#glow);
+  stroke-opacity: 0.95;
+  stroke-width: 3px !important;
 }
 
 .graph-edge.selected {
   stroke: #fbbf24;
-  stroke-width: 4.5px !important;
-  filter: url(#glow);
+  stroke-width: 4px !important;
 }
 
 .graph-edge.dimmed {
-  opacity: 0.08;
+  opacity: 0.05;
 }
 
-/* 节点样式 */
+/* 节点样式 (简约扁平现代设计) */
 .graph-node-group {
   cursor: pointer;
-  transition: opacity 0.2s, transform 0.15s ease-out;
+  transition: opacity 0.15s;
 }
 
 .graph-node-group.dimmed {
-  opacity: 0.12;
+  opacity: 0.1;
 }
 
 .node-glow-ring {
   fill: none;
-  stroke-width: 2.5px;
-  stroke-dasharray: 4 2;
-  animation: ring-rotate 8s linear infinite;
-}
-
-@keyframes ring-rotate {
-  from { stroke-dashoffset: 0; }
-  to { stroke-dashoffset: 40; }
+  stroke-width: 2px;
+  stroke-dasharray: 4 3;
 }
 
 .node-circle {
-  stroke: rgba(255, 255, 255, 0.9);
-  stroke-width: 2px;
-  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.4));
-  transition: r 0.2s, stroke-width 0.2s;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1.5px;
+  transition: stroke 0.15s, stroke-width 0.15s;
 }
 
 .graph-node-group:hover .node-circle,
 .graph-node-group.selected .node-circle {
   stroke: #fbbf24;
-  stroke-width: 3.5px;
-  filter: drop-shadow(0 0 10px rgba(251, 191, 36, 0.6));
+  stroke-width: 3px;
 }
 
 .node-icon-text {
@@ -1067,9 +1079,8 @@ onUnmounted(() => {
 
 .node-label {
   fill: var(--color-text, #f1f5f9);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.8);
   pointer-events: none;
   user-select: none;
 }
@@ -1084,12 +1095,12 @@ onUnmounted(() => {
   gap: 6px;
   padding: 4px 10px;
   border-radius: 9999px;
-  background: rgba(15, 12, 29, 0.75);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #94a3b8;
-  font-size: 11px;
+  background: rgba(15, 12, 29, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 11.5px;
+  color: var(--color-text-secondary, #94a3b8);
   pointer-events: none;
+  user-select: none;
 }
 
 .viewport-badge .dot {

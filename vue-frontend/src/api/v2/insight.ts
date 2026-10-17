@@ -269,3 +269,18 @@ export function getInsightGraph(
   })
 }
 
+export interface BookKnowledgeStatus {
+  status: 'completed' | 'partial' | 'none'
+  totalChapters: number
+  analyzedChapters: number
+}
+
+export interface BooksKnowledgeStatusResponse {
+  items: Record<string, BookKnowledgeStatus>
+}
+
+export function getBooksKnowledgeStatus(): Promise<BooksKnowledgeStatusResponse> {
+  return apiClient.get(`${ROOT}/books/knowledge-status`)
+}
+
+

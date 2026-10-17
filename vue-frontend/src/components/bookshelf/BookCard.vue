@@ -12,12 +12,18 @@ interface Props {
   tags?: TagData[]
   selectable?: boolean
   selected?: boolean
+  knowledgeStatus?: {
+    status: 'completed' | 'partial' | 'none'
+    totalChapters: number
+    analyzedChapters: number
+  }
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tags: () => [],
   selectable: false,
   selected: false,
+  knowledgeStatus: undefined,
 })
 
 const emit = defineEmits<{
@@ -84,7 +90,24 @@ function handleImageError() {
 
       <div class="book-card__info">
         <h3 class="book-card__title" :title="book.title">{{ book.title }}</h3>
-        <p class="book-card__chapter-count">{{ book.chapterCount ?? book.chapters?.length ?? 0 }} 章节</p>
+        <div class="book-card__meta-row">
+          <span class="book-card__chapter-count">{{ book.chapterCount ?? book.chapters?.length ?? 0 }} 章节</span>
+          <span
+            class="knowledge-badge"
+            :class="knowledgeStatus?.status || 'none'"
+            :title="knowledgeStatus?.status === 'completed' ? '知识库已构建完成' : knowledgeStatus?.status === 'partial' ? `已构建 ${knowledgeStatus.analyzedChapters} / ${knowledgeStatus.totalChapters} 话` : '尚未构建知识库'"
+          >
+            <template v-if="knowledgeStatus?.status === 'completed'">
+              ✓ 已构建知识库
+            </template>
+            <template v-else-if="knowledgeStatus?.status === 'partial'">
+              ⚡ 部分构建 ({{ knowledgeStatus.analyzedChapters }}/{{ knowledgeStatus.totalChapters }}话)
+            </template>
+            <template v-else>
+              ○ 未构建知识库
+            </template>
+          </span>
+        </div>
         <ProductChipList
           v-if="tagItems.length > 0"
           class="book-card__tags"
@@ -260,10 +283,47 @@ function handleImageError() {
   line-height: 1.3;
 }
 
+.book-card__meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 3px 0;
+  flex-wrap: wrap;
+}
+
 .book-card__chapter-count {
   font-size: 0.8rem;
   color: var(--color-text-supporting);
-  margin: 4px 0;
+  margin: 0;
+}
+
+.knowledge-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  line-height: 1.2;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+.knowledge-badge.completed {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.knowledge-badge.partial {
+  background: rgba(139, 92, 246, 0.15);
+  color: #a855f7;
+  border: 1px solid rgba(139, 92, 246, 0.35);
+}
+
+.knowledge-badge.none {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--color-text-secondary, #94a3b8);
+  border: 1px solid rgba(148, 163, 184, 0.2);
 }
 
 .book-card__tags {

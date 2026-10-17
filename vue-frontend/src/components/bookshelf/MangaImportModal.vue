@@ -24,11 +24,34 @@ const emit = defineEmits<{
 const activeTab = ref<'venera' | 'local'>('venera')
 const isLoading = ref(false)
 const isImporting = ref(false)
+const importPercent = ref(0)
+const importProgressText = ref<string | null>(null)
+const importSubText = ref<string | null>(null)
+let progressIntervalId: ReturnType<typeof setInterval> | null = null
 const veneraFound = ref(true)
 const comics = ref<VeneraComic[]>([])
 const selectedComicIds = ref<Set<string>>(new Set())
 const errorMessage = ref<string | null>(null)
-const importProgressText = ref<string | null>(null)
+
+function startSmoothProgress(start = 10, max = 92, speedMs = 120) {
+  importPercent.value = start
+  if (progressIntervalId) clearInterval(progressIntervalId)
+  progressIntervalId = setInterval(() => {
+    if (importPercent.value < max) {
+      const remaining = max - importPercent.value
+      const step = Math.max(0.2, remaining * 0.04)
+      importPercent.value = Math.min(max, importPercent.value + step)
+    }
+  }, speedMs)
+}
+
+function finishProgress() {
+  if (progressIntervalId) {
+    clearInterval(progressIntervalId)
+    progressIntervalId = null
+  }
+  importPercent.value = 100
+}
 
 // Local import state
 const localPathInput = ref('')
@@ -81,11 +104,35 @@ async function handleImport() {
   }
 
   isImporting.value = true
-  importProgressText.value = `正在导入 ${selectedComicIds.value.size} 部漫画，请稍候...`
+  const total = selectedComicIds.value.size
+  importProgressText.value = `正在准备导入 ${total} 部漫画...`
+  importSubText.value = '正在读取 Venera 数据库与章节目录'
+  startSmoothProgress(10, 92, 100)
+
+  const timer1 = setTimeout(() => {
+    if (isImporting.value) {
+      importProgressText.value = `正在发布封面与图片切片资产...`
+      importSubText.value = '解压并写入本地媒体库，请耐心等待'
+    }
+  }, 1200)
+
+  const timer2 = setTimeout(() => {
+    if (isImporting.value) {
+      importProgressText.value = `正在写入章节元数据与页码映射...`
+      importSubText.value = '图书数据库持久化中，即将完成'
+    }
+  }, 3500)
 
   try {
     const ids = Array.from(selectedComicIds.value)
     const res = await importVeneraComics(ids)
+    finishProgress()
+    clearTimeout(timer1)
+    clearTimeout(timer2)
+    importProgressText.value = `导入完成！`
+    importSubText.value = `成功导入 ${res.imported} 部漫画`
+
+    await new Promise(r => setTimeout(r, 600))
     if (res.imported > 0) {
       showToast(`成功导入 ${res.imported} 部漫画！`, 'success')
       emit('imported')
@@ -94,10 +141,18 @@ async function handleImport() {
       showToast('导入失败，请查看控制台日志', 'error')
     }
   } catch (err: unknown) {
+    clearTimeout(timer1)
+    clearTimeout(timer2)
+    finishProgress()
     showToast(err instanceof Error ? err.message : '导入失败', 'error')
   } finally {
     isImporting.value = false
     importProgressText.value = null
+    importSubText.value = null
+    if (progressIntervalId) {
+      clearInterval(progressIntervalId)
+      progressIntervalId = null
+    }
   }
 }
 
@@ -163,7 +218,24 @@ async function handleConfirmLocal() {
   }
 
   isImporting.value = true
-  importProgressText.value = `正在导入 ${localBooks.value.length} 部本地漫画，请稍候...`
+  const totalBooks = localBooks.value.length
+  importProgressText.value = `正在导入 ${totalBooks} 部本地漫画...`
+  importSubText.value = '正在读取文件流与扫描图片序列'
+  startSmoothProgress(10, 92, 110)
+
+  const timer1 = setTimeout(() => {
+    if (isImporting.value) {
+      importProgressText.value = `正在发布漫画封面与高清图片切片...`
+      importSubText.value = '解压并生成媒体资产切片，请稍候'
+    }
+  }, 1200)
+
+  const timer2 = setTimeout(() => {
+    if (isImporting.value) {
+      importProgressText.value = `正在建立章节目录并持久化存储...`
+      importSubText.value = '图书数据库正在写入'
+    }
+  }, 3200)
 
   try {
     const payload: LocalBookConfirmPayload[] = localBooks.value.map(b => ({
@@ -178,6 +250,13 @@ async function handleConfirmLocal() {
     }))
 
     const res = await confirmLocalImport(payload)
+    finishProgress()
+    clearTimeout(timer1)
+    clearTimeout(timer2)
+    importProgressText.value = `导入完成！`
+    importSubText.value = `已成功入库 ${res.imported_books.length} 部漫画`
+
+    await new Promise(r => setTimeout(r, 600))
     if (res.imported_books && res.imported_books.length > 0) {
       showToast(`成功导入 ${res.imported_books.length} 部漫画！`, 'success')
       emit('imported')
@@ -186,10 +265,18 @@ async function handleConfirmLocal() {
       showToast('导入失败，无有效漫画写入', 'error')
     }
   } catch (err: unknown) {
+    clearTimeout(timer1)
+    clearTimeout(timer2)
+    finishProgress()
     showToast(err instanceof Error ? err.message : '导入失败', 'error')
   } finally {
     isImporting.value = false
     importProgressText.value = null
+    importSubText.value = null
+    if (progressIntervalId) {
+      clearInterval(progressIntervalId)
+      progressIntervalId = null
+    }
   }
 }
 
@@ -309,9 +396,25 @@ onMounted(() => {
         </div>
 
         <!-- Import Progress / Message -->
-        <div v-if="importProgressText" class="import-progress-banner">
-          <UiIcon name="loader" size="18" class="spinning" />
-          <span>{{ importProgressText }}</span>
+        <div v-if="isImporting" class="import-progress-card">
+          <div class="progress-info-row">
+            <div class="progress-stage-wrap">
+              <UiIcon name="loader" size="16" class="spinning" />
+              <span class="progress-stage-text">{{ importProgressText || '正在导入漫画...' }}</span>
+            </div>
+            <span class="progress-percent-text">{{ Math.round(importPercent) }}%</span>
+          </div>
+          <div class="progress-bar-track">
+            <div
+              class="progress-bar-fill"
+              :style="{ width: `${Math.min(100, Math.max(0, importPercent))}%` }"
+            >
+              <div class="progress-bar-glare"></div>
+            </div>
+          </div>
+          <div v-if="importSubText" class="progress-sub-text">
+            {{ importSubText }}
+          </div>
         </div>
       </div>
 
@@ -427,9 +530,26 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-if="importProgressText" class="import-progress-banner">
-          <UiIcon name="loader" size="18" class="spinning" />
-          <span>{{ importProgressText }}</span>
+        <!-- Import Progress / Message -->
+        <div v-if="isImporting" class="import-progress-card">
+          <div class="progress-info-row">
+            <div class="progress-stage-wrap">
+              <UiIcon name="loader" size="16" class="spinning" />
+              <span class="progress-stage-text">{{ importProgressText || '正在导入本地漫画...' }}</span>
+            </div>
+            <span class="progress-percent-text">{{ Math.round(importPercent) }}%</span>
+          </div>
+          <div class="progress-bar-track">
+            <div
+              class="progress-bar-fill"
+              :style="{ width: `${Math.min(100, Math.max(0, importPercent))}%` }"
+            >
+              <div class="progress-bar-glare"></div>
+            </div>
+          </div>
+          <div v-if="importSubText" class="progress-sub-text">
+            {{ importSubText }}
+          </div>
         </div>
       </div>
     </div>
@@ -658,17 +778,82 @@ onMounted(() => {
   color: var(--text-muted, #475569);
 }
 
-.import-progress-banner {
+.import-progress-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  margin-top: 10px;
+}
+
+.progress-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.progress-stage-wrap {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  border-radius: 6px;
-  background: var(--miyako-primary-bg, rgba(99, 102, 241, 0.1));
-  color: var(--miyako-primary, #6366f1);
+  color: var(--color-primary, #8b5cf6);
   font-size: 13px;
-  font-weight: 500;
-  margin-top: 8px;
+  font-weight: 600;
+}
+
+.progress-percent-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-primary, #8b5cf6);
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-bar-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, #8b5cf6 0%, #a855f7 50%, #c084fc 100%);
+  transition: width 0.15s ease-out;
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-bar-glare {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.4) 50%,
+    transparent 100%
+  );
+  animation: progress-glare-move 1.5s infinite;
+}
+
+@keyframes progress-glare-move {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.progress-sub-text {
+  font-size: 11.5px;
+  color: var(--color-text-secondary, #94a3b8);
+  padding-left: 24px;
 }
 
 .spinning {

@@ -5,6 +5,8 @@ import { useBookshelfStore } from '@/stores/bookshelfStore'
 import { getV2ServerInfo } from '@/api/v2/system'
 import { createBooksExportJob, getBookDetail } from '@/api/bookshelf'
 import { startAnalysis } from '@/api/insight'
+import { getBooksKnowledgeStatus } from '@/api/v2/insight'
+import type { BookKnowledgeStatus } from '@/api/v2/insight'
 import BookCard from '@/components/bookshelf/BookCard.vue'
 import BookSearch from '@/components/bookshelf/BookSearch.vue'
 import BookModal from '@/components/bookshelf/BookModal.vue'
@@ -78,6 +80,17 @@ const selectedBatchTagNames = ref(new Set<string>())
 const batchBusy = ref(false)
 let detailRequestVersion = 0
 
+const knowledgeStatusMap = ref<Record<string, BookKnowledgeStatus>>({})
+
+async function refreshKnowledgeStatus() {
+  try {
+    const res = await getBooksKnowledgeStatus()
+    knowledgeStatusMap.value = res.items || {}
+  } catch (err) {
+    console.error('获取知识库构建状态失败:', err)
+  }
+}
+
 const filteredBooks = computed(() => bookshelfStore.books)
 const allTags = computed(() => bookshelfStore.tags)
 const isEmpty = computed(() => (
@@ -113,6 +126,7 @@ function handlePageShow(event: PageTransitionEvent) {
   if (event.persisted) {
     bookshelfStore.loadBooks()
     bookshelfStore.loadTags()
+    refreshKnowledgeStatus()
     if (showDetailModal.value && bookshelfStore.currentBook) {
       openBookDetail(bookshelfStore.currentBook.id)
     }
@@ -134,6 +148,7 @@ onMounted(async () => {
   const startupRequests: Promise<unknown>[] = [
     bookshelfStore.loadBooks(),
     bookshelfStore.loadTags(),
+    refreshKnowledgeStatus(),
   ]
   if (isLocalProfile.value) startupRequests.push(loadServerInfo())
   await Promise.all(startupRequests)
@@ -246,6 +261,11 @@ async function deleteSelectedBooks() {
   } finally {
     batchBusy.value = false
   }
+}
+
+async function handleImportedSuccess() {
+  await bookshelfStore.loadBooks()
+  await refreshKnowledgeStatus()
 }
 
 async function handleBuildKnowledge(bookId: string, title: string) {
@@ -478,6 +498,7 @@ async function applyBatchTags() {
             :tags="allTags"
             :selectable="bookshelfStore.batchMode"
             :selected="bookshelfStore.selectedBookIds.has(book.id)"
+            :knowledge-status="knowledgeStatusMap[book.id]"
             @click="openBookDetail(book.id)"
             @select="bookshelfStore.toggleBookSelection(book.id)"
             @build-knowledge="handleBuildKnowledge(book.id, book.title)"
@@ -520,7 +541,7 @@ async function applyBatchTags() {
     <MangaImportModal
       v-if="showImportModal"
       @close="showImportModal = false"
-      @imported="bookshelfStore.loadBooks()"
+      @imported="handleImportedSuccess"
     />
 
     <BookDetailModal
