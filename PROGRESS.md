@@ -47,6 +47,26 @@
      * 单元测试 `test_insight_slug_mode_written_to_analysis_runs_config_json` 100% 通过。
      * 第 1 话完整回测验证通过：`revision=1`, `entityCount=24`，产物 `slug_mode='pinyin'`，核心角色 ID 纯拼音化且 `_pinyin_` 残留数为 0。
 
+7. **漫画导入模块全面打通 (Venera 库 + 本地文件夹 / 压缩包)**:
+   - **Venera 导入链路**:
+     * 自动读取 `%APPDATA%\com.github.wgh136\venera\local.db`，支持批量检测与一键导入漫画及章节。
+     * API: `GET /api/v2/import/venera/library` 与 `POST /api/v2/import/venera`。
+   - **本地文件与多层级识别导入链路**:
+     * 支持本地文件夹、`.zip`、`.cbz` 多格式批量扫描识别。
+     * 四层识别机制：第 1 层文件名正则识别（话数、卷号、数字序号）、第 2 层 ComicInfo.xml 元数据解析、第 3 层 AI 首图视觉预留、第 4 层兜底标记。
+     * 格式与序号防错：拦截 `.cbr` 格式并提示用户转为 ZIP/CBZ；无法确定的 fallback 章节返回 `ordinal: null` 与 `needs_ordinal: true`，强制人工复核；提交时严格校验序号唯一性、正整数约束。
+     * 纯内存流处理：ZIP/CBZ 直接在内存流中解析入库，无需解压至临时磁盘；严格遵循 `AGENTS.md` 引用真实表对象完成 books/chapters/pages/page_assets 写入。
+     * API: `POST /api/v2/import/local/preview` 与 `POST /api/v2/import/local/confirm`。
+   - **前端交互组件 (`MangaImportModal.vue`)**:
+     * 提供双 Tab 切换（Venera 导入 / 本地文件导入）。
+     * 本地文件导入支持多行路径输入、实时目录树扫描预览、漫画标题与各话序号行内编辑、未识别序号红色高亮校验与错误拦截。
+     * 前端构建打通（`pnpm build` 8.37s 零报错），Git 提交推送到远端仓库。
+   - **数据库详细扩展校验**:
+     * 校验 1 (`chapters.ordinal` 连续性)：测试漫画 3 章 `[1, 2, 3]` 连续无冲突。
+     * 校验 2 (`pages.ordinal` 连续递增)：各章节页码均从 1 连续递增无跳号。
+     * 校验 3 (`page_assets` 角色对应)：`source` 与 `thumbnail_source` 记录数与 pages 数量 100% 一一对应。
+     * 校验 4 (`assets` 物理文件存在性)：全部 13 个 asset 文件在物理磁盘上均真实存在。
+
 ---
 
 ### 2.2 进行中 (In Progress)
