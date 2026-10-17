@@ -8,8 +8,7 @@ import MiyakoNavbar from '@/components/common/MiyakoNavbar.vue'
 import BookSelector from '@/components/insight/BookSelector.vue'
 import KnowledgeGraphPanel from '@/components/insight/KnowledgeGraphPanel.vue'
 import EntityBrowserPanel from '@/components/insight/EntityBrowserPanel.vue'
-import TimelinePanel from '@/components/insight/TimelinePanel.vue'
-import OverviewPanel from '@/components/insight/OverviewPanel.vue'
+import StorySynopsisPanel from '@/components/insight/StorySynopsisPanel.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import * as insightApi from '@/api/insight'
@@ -22,16 +21,19 @@ const router = useRouter()
 const insightStore = useInsightStore()
 const taskCenterStore = useTaskCenterStore()
 
-type GraphTabId = 'network' | 'entities' | 'timeline' | 'overview'
+type GraphTabId = 'network' | 'entities' | 'synopsis'
 
 const graphTabs: Array<{ id: GraphTabId; label: string; icon: string }> = [
   { id: 'network', label: '关系网络', icon: '🕸️' },
   { id: 'entities', label: '实体浏览', icon: '🏷️' },
-  { id: 'timeline', label: '故事时间线', icon: '📈' },
-  { id: 'overview', label: '全景概览', icon: '📊' },
+  { id: 'synopsis', label: '故事梗概', icon: '📖' },
 ]
 
 const activeTab = ref<GraphTabId>('network')
+
+function handleViewEntity(_entityId: string) {
+  activeTab.value = 'entities'
+}
 
 let bookLoadSequence = 0
 let isGraphViewMounted = false
@@ -257,12 +259,8 @@ watch(
             <EntityBrowserPanel />
           </div>
 
-          <div v-show="activeTab === 'timeline'" class="graph-panel-pane">
-            <TimelinePanel />
-          </div>
-
-          <div v-show="activeTab === 'overview'" class="graph-panel-pane">
-            <OverviewPanel />
+          <div v-show="activeTab === 'synopsis'" class="graph-panel-pane">
+            <StorySynopsisPanel @view-entity="handleViewEntity" />
           </div>
         </div>
       </section>

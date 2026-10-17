@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useInsightStore } from '@/stores/insightStore'
 import { listInsightEntities, type V2InsightEntity } from '@/api/v2/insight'
 import UiButton from '@/components/ui/UiButton.vue'
 
+const route = useRoute()
 const insightStore = useInsightStore()
 
 const entities = ref<V2InsightEntity[]>([])
@@ -72,7 +74,8 @@ const groupedEntities = computed(() => {
 })
 
 async function fetchEntities() {
-  const bookId = insightStore.currentBookId
+  const queryBook = typeof route?.query?.book === 'string' ? route.query.book.trim() : ''
+  const bookId = insightStore.currentBookId || queryBook
   if (!bookId) {
     entities.value = []
     return
@@ -103,9 +106,13 @@ function isExpanded(id: string): boolean {
   return expandedEntityIds.value.has(id)
 }
 
-watch(() => insightStore.currentBookId, () => {
-  fetchEntities()
-}, { immediate: true })
+watch(
+  () => [insightStore.currentBookId, route?.query?.book],
+  () => {
+    fetchEntities()
+  },
+  { immediate: true },
+)
 
 onMounted(() => {
   fetchEntities()
