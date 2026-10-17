@@ -16,7 +16,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--role",
         choices=("launcher", "api", "worker", "storage-migrator"),
-        default="api",
+        default="launcher",
         help="Process role.",
     )
     from src.version import APP_VERSION
@@ -42,6 +42,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Initialize the selected role, print a JSON smoke result, and exit.",
     )
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument(
+        "--legacy-launcher",
+        action="store_true",
+        help="Run legacy isolated launcher instead of unified daemon launcher.",
+    )
     parser.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
@@ -83,6 +88,20 @@ def dispatch(argv: Sequence[str] | None = None) -> int:
             logging.getLogger(f"saber.{args.role}").exception(message)
             user_log("error", message, level=logging.ERROR)
             return 1
+
+    if args.role == "launcher":
+        if getattr(args, "probe", False) or getattr(args, "legacy_launcher", False):
+            from src.backend_v2.launcher.entrypoint import run_launcher
+            return run_launcher(args)
+
+        from src.backend_v2.launcher.unified_launcher import run_unified_launcher
+        return run_unified_launcher(
+            host=args.host,
+            port=args.port,
+            data_dir=args.data_dir,
+            log_level=args.log_level,
+            open_browser=not args.no_browser,
+        )
 
     from src.backend_v2.launcher.entrypoint import run_launcher
 
