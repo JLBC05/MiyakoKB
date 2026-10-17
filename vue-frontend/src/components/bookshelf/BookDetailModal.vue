@@ -24,11 +24,9 @@ const emit = defineEmits<{
 }>()
 
 withDefaults(defineProps<{
-  characterStudioAllowed?: boolean
   insightAllowed?: boolean
   translationAllowed?: boolean
 }>(), {
-  characterStudioAllowed: true,
   insightAllowed: true,
   translationAllowed: true,
 })
@@ -316,15 +314,6 @@ function goToInsight() {
   }
 }
 
-function goToCharacterStudio() {
-  if (currentBook.value) {
-    router.push({
-      name: 'character-studio',
-      query: { book: currentBook.value.id },
-    })
-  }
-}
-
 async function handleChapterReorder(chapterIds: string[]): Promise<boolean> {
   if (!currentBook.value || isReordering.value) return false
   isReordering.value = true
@@ -514,7 +503,6 @@ async function quickAddTagToBook(tagName: string): Promise<boolean> {
     <div v-if="currentBook" class="book-detail-container">
       <BookDetailSummary
         :book="currentBook"
-        :character-studio-allowed="characterStudioAllowed"
         :chapter-count="chapters.length"
         :format-date="formatDate"
         :get-tag-color="getTagColor"
@@ -523,7 +511,6 @@ async function quickAddTagToBook(tagName: string): Promise<boolean> {
         @delete="deleteCurrentBook"
         @edit="editCurrentBook"
         @insight="goToInsight"
-        @character-studio="goToCharacterStudio"
         @remove-tag="removeTag"
       />
 

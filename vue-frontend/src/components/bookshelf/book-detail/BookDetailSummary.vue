@@ -11,10 +11,8 @@ const props = withDefaults(defineProps<{
   chapterCount: number
   formatDate: (date?: string) => string
   getTagColor: (tagName: string) => string
-  characterStudioAllowed?: boolean
   insightAllowed?: boolean
 }>(), {
-  characterStudioAllowed: true,
   insightAllowed: true,
 })
 
@@ -22,7 +20,6 @@ const emit = defineEmits<{
   (event: 'addTag'): void
   (event: 'edit'): void
   (event: 'delete'): void
-  (event: 'characterStudio'): void
   (event: 'insight'): void
   (event: 'removeTag', tagName: string): void
 }>()
@@ -101,14 +98,6 @@ function handleCoverError(): void {
         <UiButton v-if="insightAllowed !== false" size="sm" variant="primary" @click="emit('insight')">
           <span aria-hidden="true">●</span>
           漫画分析
-        </UiButton>
-        <UiButton
-          v-if="characterStudioAllowed !== false"
-          size="sm"
-          variant="secondary"
-          @click="emit('characterStudio')"
-        >
-          角色工坊
         </UiButton>
         <UiButton size="sm" variant="secondary" @click="emit('edit')">编辑书籍</UiButton>
         <UiButton size="sm" variant="danger" @click="emit('delete')">删除书籍</UiButton>

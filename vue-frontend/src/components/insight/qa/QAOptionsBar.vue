@@ -2,8 +2,6 @@
 import { computed } from 'vue'
 import ProductChipList from '@/components/product/ProductChipList.vue'
 import type { ProductChipItem } from '@/components/product/ProductChipList.vue'
-import ProductSegmentedTabs from '@/components/product/ProductSegmentedTabs.vue'
-import type { ProductSegmentedTab } from '@/components/product/ProductSegmentedTabs.vue'
 import UiCheckbox from '@/components/ui/UiCheckbox.vue'
 import UiField from '@/components/ui/UiField.vue'
 import UiNumberField from '@/components/ui/UiNumberField.vue'
@@ -33,19 +31,7 @@ const emit = defineEmits<{
   (event: 'update:useReranker', value: boolean): void
 }>()
 
-const qaModeTabs: ProductSegmentedTab[] = [
-  { id: 'precise', label: '精确模式', iconName: 'target' },
-  { id: 'global', label: '全局模式', iconName: 'globe' },
-]
-const qaModeGlyphs: Record<QAMode, string> = {
-  precise: '🎯',
-  global: '🌐',
-}
-
-function qaModeGlyph(tabId: string): string {
-  return tabId === 'precise' || tabId === 'global' ? qaModeGlyphs[tabId] : ''
-}
-const showPreciseModeOptions = computed(() => props.qaMode === 'precise')
+const showPreciseModeOptions = computed(() => true)
 const parentChildModel = computed({
   get: () => props.useParentChild,
   set: value => emit('update:useParentChild', value),
@@ -79,28 +65,10 @@ const globalExampleChips = computed<ProductChipItem[]>(() => {
 function askExample(id: string | number): void {
   if (typeof id === 'string') emit('askExample', id)
 }
-
-function updateQaMode(mode: string): void {
-  if (mode !== 'precise' && mode !== 'global') return
-  emit('update:qaMode', mode)
-}
 </script>
 
 <template>
   <div class="qa-options-bar">
-    <ProductSegmentedTabs
-      class="qa-options-bar__mode-tabs"
-      title="精确模式：使用RAG检索相关片段；全局模式：使用全文摘要"
-      aria-label="问答模式"
-      :tabs="qaModeTabs"
-      :active-tab="qaMode"
-      @update:active-tab="updateQaMode"
-    >
-      <template #tabIcon="{ tab }">{{ qaModeGlyph(tab.id) }}</template>
-    </ProductSegmentedTabs>
-
-    <span class="qa-options-bar__divider" aria-hidden="true">|</span>
-
     <div v-if="showPreciseModeOptions" class="qa-options-bar__precise-options">
       <UiCheckbox
         v-model="parentChildModel"
@@ -187,19 +155,6 @@ function updateQaMode(mode: string): void {
   margin-bottom: 10px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--color-border-muted);
-}
-
-.qa-options-bar__mode-tabs {
-  --product-segmented-tabs-active-background: var(--color-surface-brand);
-  --product-segmented-tabs-active-text: var(--color-text-inverse);
-  --product-segmented-tabs-active-shadow: none;
-  --product-segmented-tabs-background: var(--insight-surface-secondary);
-  --product-segmented-tabs-border: transparent;
-  --product-segmented-tabs-gap: 2px;
-  --product-segmented-tabs-padding: 2px;
-  --product-segmented-tabs-tab-padding: 6px 12px;
-
-  flex: 0 0 auto;
 }
 
 .qa-options-bar__divider {

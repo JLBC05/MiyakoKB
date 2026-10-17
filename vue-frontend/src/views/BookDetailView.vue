@@ -15,13 +15,16 @@ import ChapterFormContent from '@/components/bookshelf/book-detail/ChapterFormCo
 import BookDeleteConfirmContent from '@/components/bookshelf/book-detail/BookDeleteConfirmContent.vue'
 
 import { useBookshelfStore } from '@/stores/bookshelfStore'
+import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import { getBookDetail } from '@/api/bookshelf'
+import { getInsightChapters, startAnalysis } from '@/api/insight'
 import { showToast } from '@/utils/toast'
 import type { BookData, ChapterData } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
 const bookshelfStore = useBookshelfStore()
+const taskCenterStore = useTaskCenterStore()
 
 const bookId = computed(() => (route.params.bookId as string) || (route.query.book as string) || '')
 
@@ -29,6 +32,11 @@ const loadedBook = ref<BookData | null>(null)
 const chapters = ref<ChapterData[]>([])
 const isLoading = ref(true)
 const loadError = ref<string | null>(null)
+
+const selectedChapterIds = ref<Set<string>>(new Set())
+const analyzedChapterIds = ref<Set<string>>(new Set())
+const isBuildingSelected = ref(false)
+const analyzedChaptersCount = computed(() => analyzedChapterIds.value.size)
 
 let isMounted = false
 let bookLoadSeq = 0
@@ -64,6 +72,19 @@ async function loadBookData(targetId: string): Promise<void> {
     loadedBook.value = book
     chapters.value = (book.chapters as ChapterData[]) || []
     bookshelfStore.updateBook(targetId, book)
+
+    try {
+      const insightChapters = await getInsightChapters(targetId)
+      if (isMounted && currentSeq === bookLoadSeq) {
+        analyzedChapterIds.value = new Set(
+          insightChapters.filter(ch => ch.analyzed).map(ch => ch.id)
+        )
+      }
+    } catch {
+      if (isMounted && currentSeq === bookLoadSeq) {
+        analyzedChapterIds.value = new Set()
+      }
+    }
   } catch (err) {
     if (isMounted && currentSeq === bookLoadSeq) {
       loadError.value = err instanceof Error ? err.message : '加载书籍详情失败'
@@ -72,6 +93,39 @@ async function loadBookData(targetId: string): Promise<void> {
     if (isMounted && currentSeq === bookLoadSeq) {
       isLoading.value = false
     }
+  }
+}
+
+// 章节选择与知识库构建
+function handleSelectChapter(chapterId: string, selected: boolean): void {
+  const next = new Set(selectedChapterIds.value)
+  if (selected) {
+    next.add(chapterId)
+  } else {
+    next.delete(chapterId)
+  }
+  selectedChapterIds.value = next
+}
+
+function handleSelectAllChapters(chapterIds: string[]): void {
+  selectedChapterIds.value = new Set(chapterIds)
+}
+
+async function handleBuildSelectedChapters(): Promise<void> {
+  if (!bookId.value || selectedChapterIds.value.size === 0) return
+  isBuildingSelected.value = true
+  try {
+    const res = await startAnalysis(bookId.value, {
+      mode: 'chapters',
+      chapters: Array.from(selectedChapterIds.value),
+    })
+    taskCenterStore.trackJob(res.jobId)
+    taskCenterStore.open()
+    showToast('已提交章节知识库构建任务', 'success')
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '提交构建任务失败', 'error')
+  } finally {
+    isBuildingSelected.value = false
   }
 }
 
@@ -97,15 +151,6 @@ function goToReader(chapterId?: string): void {
     })
   } else {
     showToast('暂无可用章节进行阅读', 'warning')
-  }
-}
-
-function goToCharacterStudio(): void {
-  if (bookId.value) {
-    void router.push({
-      name: 'character-studio',
-      query: { book: bookId.value },
-    })
   }
 }
 
@@ -181,6 +226,7 @@ onMounted(() => {
 })
 
 watch(bookId, newId => {
+  selectedChapterIds.value = new Set()
   if (newId && isMounted) {
     void loadBookData(newId)
   }
@@ -233,6 +279,7 @@ watch(bookId, newId => {
               <div class="book-header-card__meta-badges">
                 <span class="meta-badge">总页数: <strong>{{ loadedBook.totalPages ?? 0 }}</strong></span>
                 <span class="meta-badge">章节数: <strong>{{ chapters.length }}</strong></span>
+                <span class="meta-badge meta-badge--success">已构建知识库: <strong>{{ analyzedChaptersCount }} / {{ chapters.length }} 章节</strong></span>
               </div>
             </div>
 
@@ -248,7 +295,7 @@ watch(bookId, newId => {
                 class="action-btn--primary"
                 @click="goToGraph"
               >
-                <UiIcon name="tag" size="18" />
+                <UiIcon name="tags" size="18" />
                 <span>进入知识图谱</span>
               </UiButton>
 
@@ -259,7 +306,7 @@ watch(bookId, newId => {
                 class="action-btn--success"
                 @click="goToQa"
               >
-                <UiIcon name="message-square" size="18" />
+                <UiIcon name="message" size="18" />
                 <span>知识库问答</span>
               </UiButton>
 
@@ -270,15 +317,6 @@ watch(bookId, newId => {
               >
                 <UiIcon name="book-open" size="18" />
                 <span>立即阅读</span>
-              </UiButton>
-
-              <UiButton
-                variant="secondary"
-                size="md"
-                @click="goToCharacterStudio"
-              >
-                <UiIcon name="user" size="18" />
-                <span>角色工坊</span>
               </UiButton>
 
               <UiButton
@@ -298,17 +336,18 @@ watch(bookId, newId => {
           <div class="chapters-card">
             <div class="chapters-card__header">
               <h2 class="chapters-card__title">章节目录 ({{ chapters.length }})</h2>
-              <UiButton size="sm" variant="secondary" @click="openCreateChapterModal">
-                <UiIcon name="plus" size="14" />
-                <span>新建章节</span>
-              </UiButton>
             </div>
 
             <ChapterList
               :chapters="chapters"
               :drag-over-chapter-index="dragOverChapterIndex"
               :dragged-chapter-index="draggedChapterIndex"
-              :translation-allowed="false"
+              :selected-chapter-ids="selectedChapterIds"
+              :analyzed-chapter-ids="analyzedChapterIds"
+              :building-pending="isBuildingSelected"
+              @select="handleSelectChapter"
+              @select-all="handleSelectAllChapters"
+              @build-knowledge-selected="handleBuildSelectedChapters"
               @create="openCreateChapterModal"
               @delete="deleteChapter"
               @edit="openEditChapterModal"
@@ -344,12 +383,16 @@ watch(bookId, newId => {
       :close-on-overlay="true"
       :close-on-esc="true"
     >
-      <BookDeleteConfirmContent
-        :is-deleting="isDeleting"
-        :message="deleteTarget === 'book' ? `确定永久删除《${loadedBook?.title}》吗？` : '确定删除该章节吗？'"
-        @cancel="showDeleteConfirm = false"
-        @confirm="handleConfirmDelete"
-      />
+      <BookDeleteConfirmContent :target="deleteTarget" />
+      <template #footer>
+        <ProductActionRow
+          aria-label="删除操作"
+          variant="dialog"
+        >
+          <UiButton type="button" variant="secondary" @click="showDeleteConfirm = false">取消</UiButton>
+          <UiButton type="button" variant="danger" :loading="isDeleting" @click="handleConfirmDelete">删除</UiButton>
+        </ProductActionRow>
+      </template>
     </BaseModal>
   </AppShell>
 </template>
@@ -451,6 +494,12 @@ watch(bookId, newId => {
   border-radius: 6px;
   background-color: var(--color-surface-secondary);
   color: var(--color-text-secondary);
+}
+
+.meta-badge--success {
+  background-color: var(--color-success-alpha-15, rgba(16, 185, 129, 0.15));
+  color: var(--color-success, #10b981);
+  border: 1px solid var(--color-success-alpha-30, rgba(16, 185, 129, 0.3));
 }
 
 .book-header-card__tags {

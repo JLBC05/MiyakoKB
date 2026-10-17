@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import UiButton from '@/components/ui/UiButton.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 import ProductScrollStack from '@/components/product/ProductScrollStack.vue'
 import ProductSectionHeader from '@/components/product/ProductSectionHeader.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
@@ -12,14 +13,12 @@ const props = withDefaults(defineProps<{
   draggedChapterIndex: number | null
   dragOverChapterIndex: number | null
   selectedChapterIds?: Set<string>
-  downloadPending?: boolean
-  translationPending?: boolean
-  translationAllowed?: boolean
+  buildingPending?: boolean
+  analyzedChapterIds?: Set<string>
 }>(), {
   selectedChapterIds: () => new Set<string>(),
-  downloadPending: false,
-  translationPending: false,
-  translationAllowed: true,
+  buildingPending: false,
+  analyzedChapterIds: () => new Set<string>(),
 })
 
 const emit = defineEmits<{
@@ -29,20 +28,17 @@ const emit = defineEmits<{
   (event: 'dragLeave'): void
   (event: 'drop', dragEvent: DragEvent, index: number): void
   (event: 'dragEnd'): void
-  (event: 'translate', chapterId: string): void
   (event: 'read', chapterId: string): void
   (event: 'edit', chapterId: string): void
   (event: 'delete', chapterId: string): void
   (event: 'select', chapterId: string, selected: boolean): void
   (event: 'selectAll', chapterIds: string[]): void
-  (event: 'downloadSelected'): void
-  (event: 'translateSelected'): void
+  (event: 'buildKnowledgeSelected'): void
 }>()
 
 const selectableChapterIds = computed(() => props.chapters
   .filter(chapter => (chapter.imageCount ?? 0) > 0)
   .map(chapter => chapter.id))
-const actionPending = computed(() => props.downloadPending || props.translationPending)
 const allSelected = computed(() => (
   selectableChapterIds.value.length > 0
   && selectableChapterIds.value.every(id => props.selectedChapterIds.has(id))
@@ -61,7 +57,7 @@ function toggleAll() {
           v-if="chapters.length"
           size="sm"
           variant="secondary"
-          :disabled="selectableChapterIds.length === 0 || actionPending"
+          :disabled="selectableChapterIds.length === 0 || buildingPending"
           @click="toggleAll"
         >
           {{ allSelected ? '清空选择' : '全选有内容章节' }}
@@ -69,24 +65,15 @@ function toggleAll() {
         <UiButton
           v-if="chapters.length"
           size="sm"
-          variant="secondary"
-          :disabled="selectedChapterIds.size === 0 || actionPending"
-          :loading="downloadPending"
-          @click="$emit('downloadSelected')"
-        >
-          下载选中章节（{{ selectedChapterIds.size }}）
-        </UiButton>
-        <UiButton
-          v-if="chapters.length && translationAllowed"
-          size="sm"
           variant="primary"
-          :disabled="selectedChapterIds.size === 0 || actionPending"
-          :loading="translationPending"
-          @click="$emit('translateSelected')"
+          :disabled="selectedChapterIds.size === 0 || buildingPending"
+          :loading="buildingPending"
+          @click="$emit('buildKnowledgeSelected')"
         >
-          翻译选中章节（{{ selectedChapterIds.size }}）
+          <UiIcon name="sparkles" size="14" />
+          <span>构建选中章节知识库（{{ selectedChapterIds.size }}）</span>
         </UiButton>
-        <UiButton size="sm" variant="primary" @click="$emit('create')">
+        <UiButton size="sm" variant="secondary" @click="$emit('create')">
           <span aria-hidden="true">+</span>
           <span>新建章节</span>
         </UiButton>
@@ -108,8 +95,8 @@ function toggleAll() {
         :is-dragging="draggedChapterIndex === index"
         :is-drag-over="dragOverChapterIndex === index && draggedChapterIndex !== index"
         selectable
-        :translation-allowed="translationAllowed"
         :selected="selectedChapterIds.has(chapter.id)"
+        :analyzed="analyzedChapterIds.has(chapter.id)"
         @delete="$emit('delete', $event)"
         @drag-end="$emit('dragEnd')"
         @drag-leave="$emit('dragLeave')"
@@ -118,7 +105,6 @@ function toggleAll() {
         @drop="(event, rowIndex) => $emit('drop', event, rowIndex)"
         @edit="$emit('edit', $event)"
         @read="$emit('read', $event)"
-        @translate="$emit('translate', $event)"
         @select="(chapterId, selected) => $emit('select', chapterId, selected)"
       />
     </ProductScrollStack>

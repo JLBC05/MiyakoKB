@@ -15,11 +15,11 @@ const props = withDefaults(defineProps<{
   isDragOver: boolean
   selectable?: boolean
   selected?: boolean
-  translationAllowed?: boolean
+  analyzed?: boolean
 }>(), {
   selectable: false,
   selected: false,
-  translationAllowed: true,
+  analyzed: false,
 })
 
 defineEmits<{
@@ -28,7 +28,6 @@ defineEmits<{
   (event: 'dragLeave'): void
   (event: 'drop', dragEvent: DragEvent, index: number): void
   (event: 'dragEnd'): void
-  (event: 'translate', chapterId: string): void
   (event: 'read', chapterId: string): void
   (event: 'edit', chapterId: string): void
   (event: 'delete', chapterId: string): void
@@ -69,6 +68,7 @@ const canSelect = computed(() => imageCount.value > 0)
       <div class="chapter-row__info">
         <span class="chapter-row__order">#{{ index + 1 }}</span>
         <span class="chapter-row__title">{{ chapter.title }}</span>
+        <span v-if="analyzed" class="chapter-row__badge-analyzed">✓ 知识库已构建</span>
         <span class="chapter-row__meta">{{ imageCount }} 张图片</span>
         <TaskStatusBadge
           :chapter-id="chapter.id"
@@ -80,14 +80,6 @@ const canSelect = computed(() => imageCount.value > 0)
         :aria-label="`${chapter.title} 章节操作`"
         justify="end"
       >
-        <UiButton
-          v-if="translationAllowed"
-          variant="primary"
-          size="xs"
-          @click="$emit('translate', chapter.id)"
-        >
-          进入翻译
-        </UiButton>
         <UiButton
           variant="primary"
           tone="success"
@@ -174,6 +166,18 @@ const canSelect = computed(() => imageCount.value > 0)
   white-space: normal;
 }
 
+.chapter-row__badge-analyzed {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background-color: var(--color-success-alpha-15, rgba(16, 185, 129, 0.15));
+  color: var(--color-success, #10b981);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .chapter-row__meta {
   flex: 0 0 auto;
   color: var(--color-text-supporting);
@@ -207,14 +211,5 @@ const canSelect = computed(() => imageCount.value > 0)
 
 .chapter-row__delete-action:hover {
   color: var(--color-status-error);
-}
-
-@media (--breakpoint-sm-down) {
-  .chapter-row__actions {
-    display: grid;
-    flex-basis: 100%;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-  }
 }
 </style>

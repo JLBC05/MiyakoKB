@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/authStore'
+import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import ProductThemeToggle from '@/components/product/ProductThemeToggle.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 
@@ -11,7 +11,7 @@ defineProps<{
 
 const route = useRoute()
 const router = useRouter()
-const auth = useAuthStore()
+const taskCenter = useTaskCenterStore()
 
 const currentPath = computed(() => route.path)
 
@@ -77,18 +77,33 @@ function handleNavClick(item: NavItem) {
         </button>
       </nav>
 
-      <!-- 右侧：操作区（主题切换、账户入口） -->
+      <!-- 右侧：操作区（任务中心、主题切换） -->
       <div class="miyako-navbar__right">
+        <button
+          type="button"
+          class="miyako-navbar__task-btn"
+          title="打开任务中心"
+          :aria-label="`打开任务中心，${taskCenter.activeCount} 个当前任务`"
+          @click="taskCenter.open()"
+        >
+          <span
+            class="miyako-navbar__task-signal"
+            :class="{
+              'miyako-navbar__task-signal--active': taskCenter.currentJobs.some(job => job.status === 'running'),
+              'miyako-navbar__task-signal--paused': !taskCenter.currentJobs.some(job => job.status === 'running') && taskCenter.currentJobs.some(job => job.status === 'paused'),
+            }"
+          />
+          <span class="miyako-navbar__task-icon" aria-hidden="true">📋</span>
+          <span class="miyako-navbar__task-label">任务中心</span>
+          <span
+            v-if="taskCenter.activeCount + taskCenter.queuedCount > 0"
+            class="miyako-navbar__task-badge"
+          >
+            {{ taskCenter.activeCount + taskCenter.queuedCount }}
+          </span>
+        </button>
+
         <ProductThemeToggle class="miyako-navbar__theme-toggle" />
-        <div v-if="auth.user" class="miyako-navbar__user">
-          <RouterLink to="/account" class="miyako-navbar__user-link" title="用户中心">
-            <span class="miyako-navbar__user-avatar">{{ auth.user.username.slice(0, 1).toUpperCase() }}</span>
-            <span class="miyako-navbar__user-name">{{ auth.user.username }}</span>
-          </RouterLink>
-        </div>
-        <div v-else-if="auth.authenticated === false" class="miyako-navbar__auth-links">
-          <RouterLink to="/login" class="miyako-navbar__login-link">登录</RouterLink>
-        </div>
       </div>
     </div>
   </header>
@@ -221,51 +236,67 @@ function handleNavClick(item: NavItem) {
   align-items: center;
 }
 
-.miyako-navbar__user-link {
+.miyako-navbar__task-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  text-decoration: none;
-  color: var(--color-text-primary);
-  font-size: 0.88rem;
-  font-weight: 500;
-  padding: 4px 8px;
-  border-radius: 6px;
-  transition: background-color 0.15s;
-}
-
-.miyako-navbar__user-link:hover {
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
   background-color: var(--color-surface-secondary);
+  color: var(--color-text-primary);
+  font-size: 0.84rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-.miyako-navbar__user-avatar {
-  display: flex;
+.miyako-navbar__task-btn:hover {
+  background-color: var(--color-surface-hover);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.miyako-navbar__task-icon {
+  font-size: 1rem;
+}
+
+.miyako-navbar__task-signal {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--color-text-muted);
+}
+
+.miyako-navbar__task-signal--active {
+  background-color: var(--color-success);
+  box-shadow: 0 0 6px var(--color-success);
+  animation: pulse-signal 1.5s infinite;
+}
+
+.miyako-navbar__task-signal--paused {
+  background-color: var(--color-warning);
+}
+
+@keyframes pulse-signal {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.miyako-navbar__task-badge {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
   background-color: var(--color-primary);
   color: #FFFFFF;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   font-weight: 700;
-}
-
-.miyako-navbar__user-name {
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.miyako-navbar__login-link {
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--color-primary);
-  text-decoration: none;
-  padding: 6px 12px;
-  border-radius: 6px;
-  background-color: var(--color-surface-secondary);
 }
 
 .miyako-navbar__login-link:hover {

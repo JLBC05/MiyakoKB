@@ -10,5 +10,4 @@ export const APP_ROUTE_PATHS = {
   qa: '/qa',
   settings: '/settings',
   reader: '/reader',
-  characterStudio: '/insight/character-studio',
 } as const

@@ -82,16 +82,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '系统设置' }
   },
   {
-    path: APP_ROUTE_PATHS.characterStudio,
-    name: 'character-studio',
-    component: () => import('@/views/CharacterStudioView.vue'),
-    meta: { title: '角色工坊', publicFeature: 'characterStudio' },
-    props: (route) => ({
-      bookId: route.query.book as string | undefined,
-      docId: route.query.doc as string | undefined,
-    })
-  },
-  {
     path: '/:pathMatch(.*)*',
     redirect: { name: 'bookshelf' }
   }

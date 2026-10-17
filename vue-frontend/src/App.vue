@@ -7,14 +7,12 @@ import ProductConfirmProvider from '@/components/product/ProductConfirmProvider.
 import ProductEmptyState from '@/components/product/ProductEmptyState.vue'
 import ProductTextInputProvider from '@/components/product/ProductTextInputProvider.vue'
 import TaskCenterDrawer from '@/components/task-center/TaskCenterDrawer.vue'
-import TaskCenterLauncher from '@/components/task-center/TaskCenterLauncher.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiSpinner from '@/components/ui/UiSpinner.vue'
 import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import { useRuntimeStore } from '@/stores/runtimeStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useCustomAiProfileStore } from '@/stores/customAiProfileStore'
-import AccountDock from '@/components/common/AccountDock.vue'
 
 const settingsStore = useSettingsStore()
 const taskCenterStore = useTaskCenterStore()
@@ -169,11 +167,7 @@ onBeforeUnmount(() => {
     </ProductEmptyState>
   </main>
   <RouterView v-else />
-  <TaskCenterLauncher v-if="applicationReady && !readerImmersiveMode" />
   <TaskCenterDrawer v-if="applicationReady && !readerImmersiveMode" />
-  <AccountDock
-    v-if="runtimeStore.capabilities?.requiresAuth && applicationReady && !readerImmersiveMode"
-  />
   <ProductConfirmProvider />
   <ProductTextInputProvider />
   <ToastNotification />

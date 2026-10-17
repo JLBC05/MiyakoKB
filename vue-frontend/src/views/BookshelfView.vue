@@ -11,7 +11,6 @@ import BookModal from '@/components/bookshelf/BookModal.vue'
 import MangaImportModal from '@/components/bookshelf/MangaImportModal.vue'
 import MiyakoNavbar from '@/components/common/MiyakoNavbar.vue'
 import BookDetailModal from '@/components/bookshelf/BookDetailModal.vue'
-import TagManageModal from '@/components/bookshelf/TagManageModal.vue'
 import PublicTrialNotice from '@/components/common/PublicTrialNotice.vue'
 import ProductActionRow from '@/components/product/ProductActionRow.vue'
 import ProductCardGrid from '@/components/product/ProductCardGrid.vue'
@@ -62,11 +61,9 @@ const showPublicTrialNotice = computed(
   () => isPublicProfile.value && !publicTrialNoticeDismissed.value,
 )
 const canUseInsight = computed(() => publicAccess.featureAllowed('insight'))
-const canUseCharacterStudio = computed(() => publicAccess.featureAllowed('characterStudio'))
 const disabledFeatureMessage = computed(() => {
   const key = route.query.disabledFeature
   if (key === 'insight') return '管理员已关闭漫画分析功能。'
-  if (key === 'characterStudio') return '管理员已关闭角色工坊。'
   return ''
 })
 
@@ -349,14 +346,6 @@ async function applyBatchTags() {
             <UiIcon name="download" size="16" />
             <span>导入漫画</span>
           </UiButton>
-          <UiButton variant="secondary" @click="openCreateBookModal">
-            <UiIcon name="plus" size="16" />
-            <span>新建书籍</span>
-          </UiButton>
-          <UiButton variant="secondary" @click="openTagManageModal">
-            <UiIcon name="tags" size="16" />
-            <span>管理标签</span>
-          </UiButton>
           <UiButton
             :variant="bookshelfStore.batchMode ? 'primary' : 'secondary'"
             @click="bookshelfStore.batchMode ? bookshelfStore.exitBatchMode() : bookshelfStore.enterBatchMode()"
@@ -499,13 +488,13 @@ async function applyBatchTags() {
           v-else-if="isEmpty"
           class="bookshelf-main__empty-state"
           title="书架空空如也"
-          description="点击&quot;新建书籍&quot;开始你的翻译之旅"
+          description="点击&quot;导入漫画&quot;开始构建你的漫画知识库"
         >
           <template #icon>📚</template>
           <template #actions>
-            <UiButton variant="primary" @click="openCreateBookModal">
-              <UiIcon name="plus" size="16" />
-              <span>新建第一本书</span>
+            <UiButton variant="primary" @click="showImportModal = true">
+              <UiIcon name="download" size="16" />
+              <span>导入第一本漫画</span>
             </UiButton>
           </template>
         </ProductEmptyState>
@@ -536,15 +525,9 @@ async function applyBatchTags() {
 
     <BookDetailModal
       v-if="showDetailModal"
-      :character-studio-allowed="canUseCharacterStudio"
       :insight-allowed="canUseInsight"
       @close="closeBookDetail"
       @edit="openEditBookModal"
-    />
-
-    <TagManageModal
-      v-if="showTagManageModal"
-      @close="showTagManageModal = false"
     />
 
     <BaseModal
