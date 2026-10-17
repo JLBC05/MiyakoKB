@@ -1456,14 +1456,15 @@ function requireInsightAppPayload(value: unknown): InsightAppPayload {
     throw new Error('后端 Insight 分析设置格式无效')
   }
   const batch = payload.analysis.batch
+  const batchKeys = [
+    'pagesPerBatch',
+    'contextBatchCount',
+    'architecturePreset',
+    'customLayers',
+  ]
   if (
     !isRecord(batch) ||
-    !hasExactKeys(batch, [
-      'pagesPerBatch',
-      'contextBatchCount',
-      'architecturePreset',
-      'customLayers',
-    ])
+    !batchKeys.every(k => Object.prototype.hasOwnProperty.call(batch, k))
   ) {
     throw new Error('后端 Insight 批量设置格式无效')
   }
@@ -1564,6 +1565,9 @@ export async function getGlobalConfig(): Promise<InsightSettingsSnapshot> {
           units: layer.unitsPerGroup,
           align: layer.alignToChapter,
         })),
+        slugMode: (batch as any).slugMode,
+        knowledgeMode: (batch as any).knowledgeMode,
+        extraEntities: (batch as any).extraEntities,
       },
       prompts: readInsightFactoryPrompts(prompts),
     },
@@ -1648,6 +1652,9 @@ function serializeInsightApp(config: InsightSettingsSnapshot['config']): Insight
           unitsPerGroup: layer.units,
           alignToChapter: layer.align,
         })),
+        ...(config.batch.slugMode ? { slugMode: config.batch.slugMode } : {}),
+        ...(typeof config.batch.knowledgeMode === 'boolean' ? { knowledgeMode: config.batch.knowledgeMode } : {}),
+        ...(Array.isArray(config.batch.extraEntities) ? { extraEntities: config.batch.extraEntities } : {}),
       },
     },
     vlm: { provider: requireActiveProvider(INSIGHT_PROVIDER_DOMAINS.vlm, config.vlm.provider) },
@@ -1664,7 +1671,9 @@ function serializeInsightApp(config: InsightSettingsSnapshot['config']): Insight
 export async function saveGlobalConfig(
   snapshot: InsightSettingsSnapshot,
   baseline: InsightSettingsSnapshot,
+  options?: { force?: boolean },
 ): Promise<InsightSettingsSnapshot> {
+  const forceWrite = options?.force === true
   const [document, currentPrompts] = await Promise.all([
     getV2Settings(INSIGHT_DOMAINS),
     listV2Prompts(),
@@ -1718,14 +1727,16 @@ export async function saveGlobalConfig(
         ? baseline.config[kind] : baseline.providerDrafts[kind][provider]
       const previousPayload = previous && serialize(previous as unknown as TDraft, `${domain}.${provider}`)
       // Compare with the loaded form, so an untouched cache cannot overwrite another page.
-      if (previous && sameSettingValue(payload, previousPayload)
+      // When forceWrite is true (manual save button), skip the "no change" guard so newly-entered
+      // API keys are always written even if the baseline snapshot looks identical.
+      if (!forceWrite && previous && sameSettingValue(payload, previousPayload)
         && draft.apiKey.trim() === previous.apiKey.trim()) continue
       const current = currentProviderDrafts[kind][provider]
       const currentPayload = current && serialize(current as unknown as TDraft, `${domain}.${provider}`)
       const currentKey = current?.apiKey ?? ''
-      if (existingRow && sameSettingValue(payload, currentPayload)
+      if (!forceWrite && existingRow && sameSettingValue(payload, currentPayload)
         && draft.apiKey.trim() === currentKey) continue
-      if (existingRow && (!previous
+      if (!forceWrite && existingRow && (!previous
         || !sameSettingValue(previousPayload, currentPayload)
         || previous.apiKey.trim() !== currentKey)) throw new Error(conflictMessage)
       appendProviderSettingChange(providerSettings, credentialEdits, {

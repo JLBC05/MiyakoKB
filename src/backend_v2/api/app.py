@@ -488,6 +488,10 @@ def create_api_app(settings: ApiSettings) -> Flask:
     app.register_blueprint(
         create_transfer_blueprint(data_root=settings.data_root, engine=engine)
     )
+    from src.backend_v2.manga_import.routes import create_manga_import_blueprint
+    app.register_blueprint(
+        create_manga_import_blueprint(data_root=settings.data_root, engine=engine)
+    )
     if settings.profile.allow_web_import:
         app.register_blueprint(
             create_web_import_blueprint(

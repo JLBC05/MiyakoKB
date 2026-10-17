@@ -81,22 +81,22 @@ function showMessage(text: string, type: 'success' | 'error'): void {
 
 const { isSaving, persistChanges } = useSettingsAutoSave({
   source: () => {
-    const base = insightStore.getConfigForApi()
-    // 注入当前知识库扩展参数
-    if (!base.batch) base.batch = {} as any
-    base.batch.knowledgeMode = knowledgeMode.value
-    base.batch.slugMode = slugMode.value
-    base.batch.extraEntities = extraEntities.value
+    const base = insightStore.getConfigForApi() as any
+    // 注入当前知识库扩展参数，兼顾 base.config.batch 与 base.analysis?.batch / base.batch
+    const targetBatch = base.config?.batch ?? base.analysis?.batch ?? base.batch ?? (base.batch = {})
+    targetBatch.knowledgeMode = knowledgeMode.value
+    targetBatch.slugMode = slugMode.value
+    targetBatch.extraEntities = extraEntities.value
     return base
   },
   ready: () => backendConfigReady.value,
   save: async () => {
     if (!savedConfig) throw new Error('请先加载后端设置')
-    const current = insightStore.getConfigForApi()
-    if (!current.batch) current.batch = {} as any
-    current.batch.knowledgeMode = knowledgeMode.value
-    current.batch.slugMode = slugMode.value
-    current.batch.extraEntities = extraEntities.value
+    const current = insightStore.getConfigForApi() as any
+    const targetBatch = current.config?.batch ?? current.analysis?.batch ?? current.batch ?? (current.batch = {})
+    targetBatch.knowledgeMode = knowledgeMode.value
+    targetBatch.slugMode = slugMode.value
+    targetBatch.extraEntities = extraEntities.value
 
     savedConfig = await insightApi.saveGlobalConfig(current, savedConfig)
     showMessage('设置已自动保存并同步到后端', 'success')
@@ -108,20 +108,25 @@ onMounted(async () => {
   isMounted = true
   isLoadingConfig.value = true
   try {
-    const remote = await insightApi.getGlobalConfig()
+    const remote = await insightApi.getGlobalConfig() as any
     if (!isMounted) return
     savedConfig = remote
-    insightStore.loadConfigFromApi(remote)
+    if (typeof insightStore.setConfigFromApi === 'function') {
+      insightStore.setConfigFromApi(remote)
+    } else if (typeof (insightStore as any).loadConfigFromApi === 'function') {
+      (insightStore as any).loadConfigFromApi(remote)
+    }
 
-    // 读取后端扩展参数
-    if (remote.batch?.slugMode) {
-      slugMode.value = remote.batch.slugMode === 'romanized' ? 'romanized' : 'pinyin'
+    // 读取后端扩展参数，支持 remote.config.batch、remote.analysis?.batch 或 remote.batch
+    const batchConfig = remote.config?.batch ?? remote.analysis?.batch ?? remote.batch
+    if (batchConfig?.slugMode) {
+      slugMode.value = batchConfig.slugMode === 'romanized' ? 'romanized' : 'pinyin'
     }
-    if (typeof remote.batch?.knowledgeMode === 'boolean') {
-      knowledgeMode.value = remote.batch.knowledgeMode
+    if (typeof batchConfig?.knowledgeMode === 'boolean') {
+      knowledgeMode.value = batchConfig.knowledgeMode
     }
-    if (Array.isArray(remote.batch?.extraEntities)) {
-      extraEntities.value = remote.batch.extraEntities
+    if (Array.isArray(batchConfig?.extraEntities)) {
+      extraEntities.value = batchConfig.extraEntities
     }
 
     backendConfigReady.value = true
@@ -152,8 +157,15 @@ function toggleEntityCategory(key: string): void {
 }
 
 async function handleManualSave(): Promise<void> {
+  // 手动保存时强制提交：跳过 sameSettingValue 比较，确保新填的 API Key 一定写入后端
   try {
-    await persistChanges()
+    if (!savedConfig) throw new Error('请先加载后端设置')
+    const current = insightStore.getConfigForApi() as any
+    const targetBatch = current.config?.batch ?? current.analysis?.batch ?? current.batch ?? (current.batch = {})
+    targetBatch.knowledgeMode = knowledgeMode.value
+    targetBatch.slugMode = slugMode.value
+    targetBatch.extraEntities = extraEntities.value
+    savedConfig = await insightApi.saveGlobalConfig(current, savedConfig, { force: true })
     showMessage('设置保存成功', 'success')
   } catch (err) {
     showMessage('保存失败: ' + (err instanceof Error ? err.message : '网络错误'), 'error')
@@ -222,22 +234,34 @@ async function handleManualSave(): Promise<void> {
           <div v-else class="settings-panel-card">
             <!-- 1. VLM 视觉模型 -->
             <div v-show="activeTab === 'vlm'" class="settings-tab-pane">
-              <VlmSettingsTab />
+              <VlmSettingsTab
+                @update:config="insightStore.updateVlmConfig($event)"
+                @show-message="showMessage"
+              />
             </div>
 
             <!-- 2. Chat 对话 / 语义裁决 -->
             <div v-show="activeTab === 'llm'" class="settings-tab-pane">
-              <LlmSettingsTab />
+              <LlmSettingsTab
+                @update:config="insightStore.updateLlmConfig($event)"
+                @show-message="showMessage"
+              />
             </div>
 
             <!-- 3. Embedding 向量模型 -->
             <div v-show="activeTab === 'embedding'" class="settings-tab-pane">
-              <EmbeddingSettingsTab />
+              <EmbeddingSettingsTab
+                @update:config="insightStore.updateEmbeddingConfig($event)"
+                @show-message="showMessage"
+              />
             </div>
 
             <!-- 4. Reranker 重排序 -->
             <div v-show="activeTab === 'reranker'" class="settings-tab-pane">
-              <RerankerSettingsTab />
+              <RerankerSettingsTab
+                @update:config="insightStore.updateRerankerConfig($event)"
+                @show-message="showMessage"
+              />
             </div>
 
             <!-- 5. 知识库专属分析参数 -->
@@ -297,14 +321,19 @@ async function handleManualSave(): Promise<void> {
                 <!-- 分批分析参数 -->
                 <div class="settings-group">
                   <h4 class="settings-subheading">分层架构与批次设定</h4>
-                  <BatchSettingsTab />
+                  <BatchSettingsTab
+                    @update:config="insightStore.updateBatchConfig($event)"
+                  />
                 </div>
               </div>
             </div>
 
             <!-- 6. 提示词配置 -->
             <div v-show="activeTab === 'prompts'" class="settings-tab-pane">
-              <PromptsSettingsTab />
+              <PromptsSettingsTab
+                @update:prompts="insightStore.updatePrompts($event)"
+                @show-message="showMessage"
+              />
             </div>
           </div>
         </section>

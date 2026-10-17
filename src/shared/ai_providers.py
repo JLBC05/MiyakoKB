@@ -336,6 +336,15 @@ def resolve_provider_base_url(
     return resolve_provider_base_url_for_capability(provider, CHAT_CAPABILITY, custom_base_url)
 
 
+def _clean_custom_base_url(url: str) -> str:
+    url = url.strip().rstrip("/")
+    # 如果用户误填了 /models, /chat/completions 等后缀，自动修正到 OpenAI base URL 规范 (/v1)
+    for suffix in ("/models", "/chat/completions", "/embeddings", "/rerank"):
+        if url.endswith(suffix):
+            url = url[:-len(suffix)].rstrip("/")
+    return url
+
+
 def resolve_provider_base_url_for_capability(
     provider: Optional[str],
     capability: str,
@@ -343,7 +352,7 @@ def resolve_provider_base_url_for_capability(
 ) -> Optional[str]:
     manifest = get_provider_manifest(provider)
     if custom_base_url and custom_base_url.strip():
-        return custom_base_url.strip()
+        return _clean_custom_base_url(custom_base_url)
     if manifest.id == "custom":
         return None
     return manifest.capability_base_urls.get(capability) or manifest.default_base_url

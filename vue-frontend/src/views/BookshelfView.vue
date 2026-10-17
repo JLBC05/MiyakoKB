@@ -8,6 +8,7 @@ import { startAnalysis } from '@/api/insight'
 import BookCard from '@/components/bookshelf/BookCard.vue'
 import BookSearch from '@/components/bookshelf/BookSearch.vue'
 import BookModal from '@/components/bookshelf/BookModal.vue'
+import MangaImportModal from '@/components/bookshelf/MangaImportModal.vue'
 import MiyakoNavbar from '@/components/common/MiyakoNavbar.vue'
 import BookDetailModal from '@/components/bookshelf/BookDetailModal.vue'
 import TagManageModal from '@/components/bookshelf/TagManageModal.vue'
@@ -70,6 +71,7 @@ const disabledFeatureMessage = computed(() => {
 })
 
 const showBookModal = ref(false)
+const showImportModal = ref(false)
 const showDetailModal = ref(false)
 const showTagManageModal = ref(false)
 const editingBookId = ref<string | null>(null)
@@ -343,7 +345,11 @@ async function applyBatchTags() {
           aria-label="书架主要操作"
           justify="end"
         >
-          <UiButton variant="primary" @click="openCreateBookModal">
+          <UiButton variant="primary" @click="showImportModal = true">
+            <UiIcon name="download" size="16" />
+            <span>导入漫画</span>
+          </UiButton>
+          <UiButton variant="secondary" @click="openCreateBookModal">
             <UiIcon name="plus" size="16" />
             <span>新建书籍</span>
           </UiButton>
@@ -520,6 +526,12 @@ async function applyBatchTags() {
       :book-id="editingBookId"
       @close="showBookModal = false"
       @saved="showBookModal = false"
+    />
+
+    <MangaImportModal
+      v-if="showImportModal"
+      @close="showImportModal = false"
+      @imported="bookshelfStore.loadBooks()"
     />
 
     <BookDetailModal

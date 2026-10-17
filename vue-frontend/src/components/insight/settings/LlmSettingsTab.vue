@@ -23,6 +23,7 @@ const emit = defineEmits<{
 
 const insightStore = useInsightStore()
 
+const useSameAsVlm = ref(insightStore.config.llm.useSameAsVlm ?? false)
 const provider = ref(insightStore.config.llm.provider)
 const apiKey = ref(insightStore.config.llm.apiKey)
 const model = ref(insightStore.config.llm.model)
@@ -52,15 +53,16 @@ const {
 })
 
 const { isTesting, testConnection } = useInsightConnectionTest({
-  sources: [provider, apiKey, model, baseUrl],
+  sources: [useSameAsVlm, provider, apiKey, model, baseUrl],
   snapshot: () => ({
+    useSameAsVlm: useSameAsVlm.value,
     provider: provider.value,
     apiKey: apiKey.value,
     model: model.value,
     baseUrl: provider.value === 'custom' ? baseUrl.value : '',
   }),
   request: snapshot => insightApi.testLlmConnection({
-    use_same_as_vlm: false,
+    use_same_as_vlm: snapshot.useSameAsVlm as boolean,
     provider: snapshot.provider,
     api_key: snapshot.apiKey,
     model: snapshot.model,
@@ -78,7 +80,7 @@ function onProviderChange(): void {
 
 function buildDraftConfig(): StoreLlmConfig {
   return {
-    useSameAsVlm: insightStore.config.llm.useSameAsVlm,
+    useSameAsVlm: useSameAsVlm.value,
     provider: provider.value,
     apiKey: apiKey.value,
     model: model.value,
@@ -100,6 +102,7 @@ function buildDraftConfig(): StoreLlmConfig {
 }
 
 function applyDraftConfig(config: StoreLlmConfig): void {
+  useSameAsVlm.value = config.useSameAsVlm ?? false
   provider.value = config.provider
   apiKey.value = config.apiKey
   model.value = config.model
@@ -114,6 +117,7 @@ function applyDraftConfig(config: StoreLlmConfig): void {
 
 useInsightSettingsDraft<StoreLlmConfig>({
   sources: [
+    useSameAsVlm,
     provider,
     apiKey,
     model,
@@ -136,67 +140,85 @@ useInsightSettingsDraft<StoreLlmConfig>({
     class="llm-settings-tab"
     description="LLM（对话模型）用于生成故事概要、智能问答等文本生成任务。"
   >
-    <InsightModelProviderSection
-      v-model:provider="provider"
-      v-model:api-key="apiKey"
-      v-model:model="model"
-      v-model:base-url="baseUrl"
-      :provider-options="LLM_PROVIDER_OPTIONS"
-      custom-profile-kind="chatVision"
-      :show-api-key="providerRequiresApiKey(provider)"
-      credential-id="insight-llm-api-key"
-      provider-input-id="insight-llm-provider"
-      model-input-id="insight-llm-model"
-      base-url-input-id="insight-llm-base-url"
-      model-placeholder="例如: gpt-4o-mini"
-      fetch-variant="primary"
-      :fetching-models="isFetchingModels"
-      :model-options="modelOptions"
-      :model-count="modelCount"
-      :show-base-url="showBaseUrl"
-      test-placement="panel-end"
-      :testing="isTesting"
-      @provider-change="onProviderChange"
-      @model-change="selectModel"
-      @fetch="fetchModels"
-      @test="testConnection"
-    />
-
-    <UiFormGrid class="llm-settings-tab__execution-grid">
-      <UiField variant="settings" label="RPM 限制" control-id="insight-llm-rpm-limit">
-        <UiNumberField v-model="rpmLimit" input-id="insight-llm-rpm-limit" :min="0" />
+    <!-- 与 VLM 复用开关 -->
+    <div class="llm-vlm-sync-card">
+      <UiField variant="settings" control="checkbox">
+        <UiCheckbox v-model="useSameAsVlm" label="与视觉模型 (VLM) 相同" />
       </UiField>
-      <UiField variant="settings" label="传输重试" control-id="insight-llm-transport-retries">
-        <UiNumberField
-          v-model="transportRetries"
-          input-id="insight-llm-transport-retries"
-          :min="0"
-        />
+      <p class="llm-vlm-sync-card__tip">
+        如未单独配置 LLM，建议勾选此项直接复用 VLM 的模型选型、Base URL 及 API Key，无需另外填写。
+      </p>
+    </div>
+
+    <!-- useSameAsVlm=true 时显示提示卡片 -->
+    <div v-if="useSameAsVlm" class="llm-vlm-synced-notice">
+      ✅ LLM 将自动复用 VLM 的配置（模型、Base URL、API Key），无需单独设置。
+    </div>
+
+    <!-- useSameAsVlm=false 时显示独立配置项 -->
+    <template v-else>
+      <InsightModelProviderSection
+        v-model:provider="provider"
+        v-model:api-key="apiKey"
+        v-model:model="model"
+        v-model:base-url="baseUrl"
+        :provider-options="LLM_PROVIDER_OPTIONS"
+        custom-profile-kind="chatVision"
+        :show-api-key="providerRequiresApiKey(provider)"
+        credential-id="insight-llm-api-key"
+        provider-input-id="insight-llm-provider"
+        model-input-id="insight-llm-model"
+        base-url-input-id="insight-llm-base-url"
+        model-placeholder="例如: gpt-4o-mini"
+        fetch-variant="primary"
+        :fetching-models="isFetchingModels"
+        :model-options="modelOptions"
+        :model-count="modelCount"
+        :show-base-url="showBaseUrl"
+        test-placement="panel-end"
+        :testing="isTesting"
+        @provider-change="onProviderChange"
+        @model-change="selectModel"
+        @fetch="fetchModels"
+        @test="testConnection"
+      />
+
+      <UiFormGrid class="llm-settings-tab__execution-grid">
+        <UiField variant="settings" label="RPM 限制" control-id="insight-llm-rpm-limit">
+          <UiNumberField v-model="rpmLimit" input-id="insight-llm-rpm-limit" :min="0" />
+        </UiField>
+        <UiField variant="settings" label="传输重试" control-id="insight-llm-transport-retries">
+          <UiNumberField
+            v-model="transportRetries"
+            input-id="insight-llm-transport-retries"
+            :min="0"
+          />
+        </UiField>
+        <UiField variant="settings" label="业务重试" control-id="insight-llm-business-retries">
+          <UiNumberField
+            v-model="businessRetries"
+            input-id="insight-llm-business-retries"
+            :min="0"
+          />
+        </UiField>
+      </UiFormGrid>
+
+      <UiField
+        variant="settings"
+        control="checkbox"
+        hint="对 OpenAI 兼容 API 启用 response_format: json_object"
+      >
+        <UiCheckbox v-model="forceJsonOutput" label="强制 JSON 输出" />
       </UiField>
-      <UiField variant="settings" label="业务重试" control-id="insight-llm-business-retries">
-        <UiNumberField
-          v-model="businessRetries"
-          input-id="insight-llm-business-retries"
-          :min="0"
-        />
+
+      <UiField variant="settings" control="checkbox">
+        <UiCheckbox v-model="useStream" label="使用流式请求" />
       </UiField>
-    </UiFormGrid>
 
-    <UiField
-      variant="settings"
-      control="checkbox"
-      hint="对 OpenAI 兼容 API 启用 response_format: json_object"
-    >
-      <UiCheckbox v-model="forceJsonOutput" label="强制 JSON 输出" />
-    </UiField>
-
-    <UiField variant="settings" control="checkbox">
-      <UiCheckbox v-model="useStream" label="使用流式请求" />
-    </UiField>
-
-    <UiField variant="settings">
-      <OpenAIExtraBodyEditor v-model="extraBody" />
-    </UiField>
+      <UiField variant="settings">
+        <OpenAIExtraBodyEditor v-model="extraBody" />
+      </UiField>
+    </template>
   </InsightSettingsPanel>
 </template>
 
@@ -215,5 +237,30 @@ useInsightSettingsDraft<StoreLlmConfig>({
   .llm-settings-tab__execution-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.llm-vlm-sync-card {
+  padding: 12px 16px;
+  background: var(--color-surface-secondary, #f5f5f5);
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #e0e0e0);
+  margin-bottom: 8px;
+}
+
+.llm-vlm-sync-card__tip {
+  margin: 6px 0 0 0;
+  font-size: 0.82em;
+  color: var(--color-text-secondary, #666);
+  line-height: 1.5;
+}
+
+.llm-vlm-synced-notice {
+  padding: 12px 16px;
+  background: var(--color-success-subtle, #ecfdf5);
+  border: 1px solid var(--color-success-border, #a7f3d0);
+  border-radius: 8px;
+  color: var(--color-success-text, #065f46);
+  font-size: 0.88em;
+  line-height: 1.5;
 }
 </style>

@@ -997,6 +997,12 @@ class AsyncOpenAICompatibleTransport:
 
                 if response.status_code != 200:
                     error_text = response.text[:500] if response.text else "无响应内容"
+                    logger.warning(
+                        "AI API 错误: status=%s, url=%s, body=%s",
+                        response.status_code,
+                        url,
+                        error_text,
+                    )
                     raise ValueError(f"API 错误 {response.status_code}: {error_text}")
 
                 payload = response.json()
