@@ -168,6 +168,18 @@ async function sendQuestion(): Promise<void> {
           messageId: loadingMessageId,
           content,
         }),
+      onContext: (contextData: {
+        mode: QAMode
+        citations: Array<{ page: number }>
+        resolvedEntities?: insightApi.ChatResult['resolvedEntities']
+      }) => {
+        if (!isCurrentChatRequest(requestId, bookId)) return
+        insightStore.updateQAMessage(loadingMessageId, {
+          mode: contextData.mode,
+          citations: contextData.citations,
+          resolvedEntities: contextData.resolvedEntities,
+        })
+      },
     }
     const chatOptions: insightApi.SendChatOptions =
       qaMode.value === 'global'
@@ -194,6 +206,7 @@ async function sendQuestion(): Promise<void> {
       content: response.answer,
       mode: response.mode,
       citations: response.citations,
+      resolvedEntities: response.resolvedEntities,
     })
   } catch (error) {
     if (!isCurrentChatRequest(requestId, bookId)) return

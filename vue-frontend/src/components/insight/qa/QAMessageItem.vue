@@ -65,17 +65,31 @@ function selectCitation(id: string | number): void {
     </template>
 
     <template
-      v-if="message.role === 'assistant' && citationChips.length > 0 && !message.isLoading"
+      v-if="message.role === 'assistant' && (citationChips.length > 0 || message.resolvedEntities?.matched_entities?.length) && !message.isLoading"
       #footer
     >
-      <ProductChipList
-        class="qa-message-item__citations"
-        aria-label="引用页码"
-        label="引用:"
-        label-icon-name="book-open"
-        :items="citationChips"
-        @select="selectCitation"
-      />
+      <div class="qa-message-item__footer-stack">
+        <ProductChipList
+          v-if="citationChips.length > 0"
+          class="qa-message-item__citations"
+          aria-label="引用页码"
+          label="引用:"
+          label-icon-name="book-open"
+          :items="citationChips"
+          @select="selectCitation"
+        />
+
+        <div
+          v-if="message.resolvedEntities?.matched_entities?.length"
+          class="qa-resolved-entities"
+        >
+          <span class="qa-entities-icon">🏷️</span>
+          <span class="qa-entities-label">基于实体知识库：</span>
+          <span class="qa-entities-list">
+            {{ message.resolvedEntities.matched_entities.map(e => e.canonical_name).join('、') }}
+          </span>
+        </div>
+      </div>
     </template>
 
     <template
@@ -120,6 +134,42 @@ function selectCitation(id: string | number): void {
 
 .qa-message-item__citations {
   margin: 0;
+}
+
+.qa-message-item__footer-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.qa-resolved-entities {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-primary, #9977CC) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-primary, #9977CC) 25%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-text-secondary, #6E5D85);
+  align-self: flex-start;
+}
+
+.qa-entities-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.qa-entities-label {
+  font-weight: 500;
+  color: var(--color-primary, #9977CC);
+}
+
+.qa-entities-list {
+  color: var(--color-text-primary, #231934);
+  font-weight: 500;
 }
 
 .qa-message-item__loading {

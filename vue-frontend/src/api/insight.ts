@@ -14,7 +14,9 @@ import type {
   NoteType,
   NoteUpdateInput,
   OverviewTemplateType,
+  QAMatchedEntity,
   QAMode,
+  QAResolvedEntities,
   TimelineData,
 } from '@/types/insight'
 import {
@@ -118,10 +120,16 @@ export interface ChatResult {
   answer: string
   mode: QAMode
   citations: Array<{ page: number }>
+  resolvedEntities?: QAResolvedEntities
 }
 
 interface ChatStreamOptions {
   onChunk?: (content: string) => void
+  onContext?: (context: {
+    mode: QAMode
+    citations: Array<{ page: number }>
+    resolvedEntities?: QAResolvedEntities
+  }) => void
   signal?: AbortSignal
 }
 
@@ -870,6 +878,7 @@ export async function sendChat(
   let answer = ''
   let mode: QAMode | null = null
   let citations: Array<{ page: number }> = []
+  let resolvedEntities: QAResolvedEntities | undefined = undefined
   let streamError = ''
   let statusSeen = false
   let contextSeen = false
@@ -898,13 +907,33 @@ export async function sendChat(
         answer += data.text
         options.onChunk?.(answer)
       } else if (message.event === 'context') {
-        const data = requireQaEventData(message.data, ['mode', 'citations'], 'context')
+        if (!isRecord(message.data) || !('mode' in message.data) || !('citations' in message.data)) {
+          throw new Error('问答 context 事件字段无效')
+        }
+        const data = message.data
         if (!statusSeen || contextSeen || (data.mode !== 'exact' && data.mode !== 'global')) {
           throw new Error('问答 context 事件字段无效')
         }
         mode = data.mode === 'exact' ? 'precise' : 'global'
         citations = requireQaCitations(data.citations)
+        if ('resolvedEntities' in data && isRecord(data.resolvedEntities)) {
+          const rawEntities = data.resolvedEntities
+          const matchedEntities: QAMatchedEntity[] = Array.isArray(rawEntities.matched_entities)
+            ? rawEntities.matched_entities.filter(isRecord).map(e => ({
+                canonical_name: String(e.canonical_name ?? ''),
+                entity_id: typeof e.entity_id === 'string' ? e.entity_id : undefined,
+                entity_type: typeof e.entity_type === 'string' ? e.entity_type : undefined,
+                mention_count: typeof e.mention_count === 'number' ? e.mention_count : undefined,
+                matched_mention: typeof e.matched_mention === 'string' ? e.matched_mention : undefined,
+              }))
+            : []
+          resolvedEntities = {
+            matched_entities: matchedEntities,
+            is_structured_query: Boolean(rawEntities.is_structured_query),
+          }
+        }
         contextSeen = true
+        options.onContext?.({ mode, citations, resolvedEntities })
       } else if (message.event === 'done') {
         requireQaEventData(message.data, [], 'done')
         if (!statusSeen || !contextSeen || !answer) {
@@ -930,7 +959,7 @@ export async function sendChat(
   })
   if (streamError) throw new Error(streamError)
   if (!doneSeen || mode === null) throw new Error('问答响应意外中断')
-  return { answer, mode, citations }
+  return { answer, mode, citations, resolvedEntities }
 }
 
 export async function rebuildEmbeddings(bookId: string): Promise<string> {

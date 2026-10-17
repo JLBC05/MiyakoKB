@@ -25,6 +25,19 @@ export interface ChapterInfo {
   summary?: string
 }
 
+export interface QAMatchedEntity {
+  entity_id?: string
+  canonical_name: string
+  entity_type?: string
+  mention_count?: number
+  matched_mention?: string
+}
+
+export interface QAResolvedEntities {
+  matched_entities: QAMatchedEntity[]
+  is_structured_query?: boolean
+}
+
 export interface QAMessage {
   id: string
   role: 'user' | 'assistant'
@@ -33,6 +46,7 @@ export interface QAMessage {
   mode?: QAMode
   citations?: Array<{ page: number }>
   saved?: boolean
+  resolvedEntities?: QAResolvedEntities
 }
 
 export interface BatchConfig {
