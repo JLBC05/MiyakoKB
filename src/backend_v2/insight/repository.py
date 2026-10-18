@@ -486,6 +486,38 @@ def mark_book_insight_derived_stale(
     )
 
 
+def _entity_alignment_error_message(value: object) -> str | None:
+    """从 job step 的 error_json 中提取可展示的失败原因。"""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return text
+    if isinstance(parsed, Mapping):
+        message = parsed.get("message") or parsed.get("code")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    return text
+
+
+def _entity_alignment_entity_count(value: object) -> int | None:
+    """从 entity_alignment 产物 payload 中读取实体数量。"""
+    try:
+        parsed = (
+            json.loads(value)
+            if isinstance(value, (str, bytes, bytearray))
+            else value
+        )
+    except Exception:
+        return None
+    if not isinstance(parsed, Mapping):
+        return None
+    entities = parsed.get("canonical_entities")
+    return len(entities) if isinstance(entities, list) else None
+
+
 class InsightRepository:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
@@ -2438,6 +2470,7 @@ class InsightRepository:
                         analysis_page_results.c.status,
                         analysis_page_results.c.payload_json,
                         analysis_page_results.c.created_at,
+                        analysis_page_results.c.run_id,
                     )
                     .join(
                         analysis_page_results,
@@ -2459,72 +2492,87 @@ class InsightRepository:
                     .limit(limit)
                 ).mappings()
             )
-        items = []
-        for row in rows:
-            page_id = _required_string(row["page_id"], "recent analysis page id")
-            page_number = _required_integer(
-                row["page_number"],
-                "recent analysis page number",
-                minimum=1,
-            )
-            if (
-                _required_string(
-                    row["result_page_id"],
-                    "recent analysis current page id",
+            items = []
+            for row in rows:
+                page_id = _required_string(
+                    row["page_id"], "recent analysis page id"
                 )
-                != page_id
-                or _required_string(
-                    row["page_id_snapshot"],
-                    "recent analysis page id snapshot",
+                page_number = _required_integer(
+                    row["page_number"],
+                    "recent analysis page number",
+                    minimum=1,
                 )
-                != page_id
-                or _required_string(
-                    row["status"],
-                    "recent analysis status",
+                if (
+                    _required_string(
+                        row["result_page_id"],
+                        "recent analysis current page id",
+                    )
+                    != page_id
+                    or _required_string(
+                        row["page_id_snapshot"],
+                        "recent analysis page id snapshot",
+                    )
+                    != page_id
+                    or _required_string(
+                        row["status"],
+                        "recent analysis status",
+                    )
+                    != "published"
+                ):
+                    raise InsightConflict(
+                        "stored recent page analysis is invalid"
+                    )
+                snapshot_page_number = _required_integer(
+                    row["page_number_snapshot"],
+                    "recent analysis page number snapshot",
+                    minimum=1,
                 )
-                != "published"
-            ):
-                raise InsightConflict(
-                    "stored recent page analysis is invalid"
-                )
-            snapshot_page_number = _required_integer(
-                row["page_number_snapshot"],
-                "recent analysis page number snapshot",
-                minimum=1,
-            )
-            payload = _page_analysis(
-                row["payload_json"],
-                "analysis page payload",
-                page_id=page_id,
-                page_number=snapshot_page_number,
-                source_asset_id=_required_string(
-                    row["source_asset_id"],
-                    "recent analysis source asset id",
-                ),
-                source_checksum=_required_sha256(
-                    row["source_checksum"],
-                    "recent analysis source checksum",
-                ),
-                run_id=_required_string(row["run_id"], "recent analysis run id"),
-                connection=connection,
-            )
-            items.append(
-                {
-                    "pageId": page_id,
-                    "displayPageNumber": page_number,
-                    "summary": payload["page_summary"],
-                    "generatedAt": _iso(
-                        _required_datetime(
-                            row["created_at"],
-                            "recent analysis generatedAt",
-                        )
+                payload = _page_analysis(
+                    row["payload_json"],
+                    "analysis page payload",
+                    page_id=page_id,
+                    page_number=snapshot_page_number,
+                    source_asset_id=_required_string(
+                        row["source_asset_id"],
+                        "recent analysis source asset id",
                     ),
-                }
-            )
+                    source_checksum=_required_sha256(
+                        row["source_checksum"],
+                        "recent analysis source checksum",
+                    ),
+                    run_id=_required_string(
+                        row["run_id"], "recent analysis run id"
+                    ),
+                    connection=connection,
+                )
+                items.append(
+                    {
+                        "pageId": page_id,
+                        "displayPageNumber": page_number,
+                        "summary": payload["page_summary"],
+                        "generatedAt": _iso(
+                            _required_datetime(
+                                row["created_at"],
+                                "recent analysis generatedAt",
+                            )
+                        ),
+                    }
+                )
         return {"items": items}
 
+    def run_artifact_exists(self, *, run_id: str, kind: str) -> bool:
+        """判断指定 analysis run 是否已产出某类产物（含未激活的暂存产物）。"""
+        with self.engine.connect() as conn:
+            count = conn.execute(
+                select(func.count(analysis_artifacts.c.id)).where(
+                    analysis_artifacts.c.run_id == run_id,
+                    analysis_artifacts.c.kind == kind,
+                )
+            ).scalar_one()
+        return int(count) > 0
+
     def get_books_knowledge_status(self) -> dict[str, Any]:
-        """返回所有书籍的知识库构建状态（已构建/未构建/部分构建及章节统计）。"""
+        """返回所有书籍的知识库构建状态（章节统计 + 实体知识网络状态）。"""
         stmt = (
             select(
                 books.c.id.label("book_id"),
@@ -2548,10 +2596,62 @@ class InsightRepository:
             )
             .group_by(books.c.id)
         )
+        graph_stmt = (
+            select(
+                analysis_artifacts.c.book_id,
+                analysis_artifacts.c.status,
+                analysis_artifacts.c.revision,
+                analysis_artifacts.c.is_active,
+                analysis_artifacts.c.payload_json,
+                analysis_artifacts.c.updated_at,
+            )
+            .where(
+                analysis_artifacts.c.kind == "entity_alignment",
+                analysis_artifacts.c.template == "default",
+            )
+            .order_by(
+                analysis_artifacts.c.book_id,
+                analysis_artifacts.c.revision.desc(),
+            )
+        )
+        failure_stmt = (
+            select(
+                jobs.c.book_id,
+                job_steps.c.error_json,
+                jobs.c.created_at,
+            )
+            .select_from(
+                job_steps.join(
+                    job_items,
+                    job_items.c.id == job_steps.c.job_item_id,
+                ).join(jobs, jobs.c.id == job_items.c.job_id)
+            )
+            .where(
+                job_steps.c.kind == "insight_build_entity_alignment",
+                job_steps.c.status == "failed",
+            )
+            .order_by(jobs.c.book_id, jobs.c.created_at.desc())
+        )
 
         items: dict[str, dict[str, Any]] = {}
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
+            graphs: dict[str, Mapping[str, Any]] = {}
+            for row in conn.execute(graph_stmt).mappings():
+                graph_book_id = str(row["book_id"])
+                existing = graphs.get(graph_book_id)
+                # 优先取已激活的 revision；否则保留 revision 最高的暂存产物
+                if existing is None or (
+                    bool(row["is_active"]) and not bool(existing["is_active"])
+                ):
+                    graphs[graph_book_id] = row
+            failures: dict[str, tuple[Any, str]] = {}
+            for row in conn.execute(failure_stmt).mappings():
+                failure_book_id = str(row["book_id"])
+                if failure_book_id in failures:
+                    continue
+                message = _entity_alignment_error_message(row["error_json"])
+                failures[failure_book_id] = (row["created_at"], message or "实体知识网络生成失败")
             for row in rows:
                 book_id = str(row.book_id)
                 total = int(row.total_chapters or 0)
@@ -2567,9 +2667,59 @@ class InsightRepository:
                     "status": status,
                     "totalChapters": total,
                     "analyzedChapters": analyzed,
+                    "graph": self._knowledge_graph_status(
+                        graph_row=graphs.get(book_id),
+                        failure=failures.get(book_id),
+                    ),
                 }
 
         return {"items": items}
+
+    @staticmethod
+    def _knowledge_graph_status(
+        *,
+        graph_row: Mapping[str, Any] | None,
+        failure: tuple[Any, str] | None,
+    ) -> dict[str, Any]:
+        """汇总单本书的实体知识网络状态：ready / failed / pending / none。"""
+        graph: dict[str, Any] = {
+            "status": "none",
+            "revision": None,
+            "entityCount": None,
+            "updatedAt": None,
+            "lastError": None,
+        }
+        if graph_row is not None:
+            graph["revision"] = int(graph_row["revision"])
+            graph["entityCount"] = _entity_alignment_entity_count(
+                graph_row["payload_json"]
+            )
+            graph["updatedAt"] = _iso(graph_row["updated_at"])
+        if graph_row is not None and bool(graph_row["is_active"]):
+            graph["status"] = "ready"
+            if failure is not None:
+                failed_at = failure[0]
+                updated_at = graph_row["updated_at"]
+                try:
+                    stale = (
+                        failed_at is not None
+                        and updated_at is not None
+                        and failed_at > updated_at
+                    )
+                except TypeError:
+                    stale = True
+                if stale:
+                    graph["status"] = "failed"
+                    graph["lastError"] = failure[1]
+            return graph
+        if failure is not None:
+            graph["status"] = "failed"
+            graph["lastError"] = failure[1]
+            return graph
+        if graph_row is not None:
+            # 存在暂存产物但尚未被 publish_run 激活
+            graph["status"] = "pending"
+        return graph
 
     def list_chapters(self, book_id: str) -> dict[str, Any]:
         page_rows = self._book_page_statement(book_id).subquery(

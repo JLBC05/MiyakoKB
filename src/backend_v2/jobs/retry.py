@@ -308,7 +308,7 @@ class JobRetryService:
         validate_container_config(retry_config)
 
         display = _json_object(source.get("target_display_json"))
-        credentials, plugins = self._original_runtime_snapshots(source_id)
+        credentials = self._original_runtime_snapshots(source_id)
         spec = JobSpec(
             kind="container_import",
             book_id=_optional_text(source.get("book_id")),
@@ -323,7 +323,6 @@ class JobRetryService:
             credential_snapshots=(
                 credentials if strategy == "original" else None
             ),
-            plugin_snapshots=plugins if strategy == "original" else None,
             retry_of_job_id=source_id,
             retry_mode=strategy,
         )
@@ -364,7 +363,7 @@ class JobRetryService:
         requested_engine = _required_text(config, "requestedEngine")
         if not chapter_id or not source_url:
             raise JobConflict("web extraction retry target no longer exists")
-        credentials, plugins = self._original_runtime_snapshots(
+        credentials = self._original_runtime_snapshots(
             str(source["id"])
         )
         accepted = WebImportCommandService(
@@ -386,7 +385,6 @@ class JobRetryService:
             credential_snapshots=(
                 credentials if strategy == "original" else None
             ),
-            plugin_snapshots=plugins if strategy == "original" else None,
             text_style=config.get("textStyle"),
         )
         return {
@@ -482,7 +480,7 @@ class JobRetryService:
         }
         validate_web_commit_config(retry_config)
         display = _json_object(source.get("target_display_json"))
-        credentials, plugins = self._original_runtime_snapshots(source_id)
+        credentials = self._original_runtime_snapshots(source_id)
         item_specs = (
             *(
                 JobItemSpec(
@@ -512,7 +510,6 @@ class JobRetryService:
             credential_snapshots=(
                 credentials if strategy == "original" else None
             ),
-            plugin_snapshots=plugins if strategy == "original" else None,
             retry_of_job_id=source_id,
             retry_mode=strategy,
         )
@@ -567,7 +564,7 @@ class JobRetryService:
     def _original_runtime_snapshots(
         self,
         job_id: str,
-    ) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    ) -> dict[str, str]:
         with self.engine.connect() as connection:
             credentials = {
                 str(row["role"]): str(row["credential_version_id"])
@@ -578,17 +575,7 @@ class JobRetryService:
                     ).where(job_credential_snapshots.c.job_id == job_id)
                 ).mappings()
             }
-            plugins = {
-                str(row["plugin_version_id"]): _json_object(
-                    row["config_json"]
-                )
-                for row in connection.execute(
-                    select(job_plugin_snapshots).where(
-                        job_plugin_snapshots.c.job_id == job_id
-                    )
-                ).mappings()
-            }
-        return credentials, plugins
+        return credentials
 
     def _retry_translation(
         self,

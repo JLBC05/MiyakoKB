@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 from pathlib import Path
 import threading
@@ -68,6 +69,8 @@ from src.shared.user_logging import (
 )
 from src.backend_v2.public_policy import PublicUserPolicyAccess
 from src.backend_v2.runtime_profile import RuntimeProfile
+
+LOGGER = logging.getLogger("saber.api.insight")
 
 
 def create_insight_blueprint(
@@ -323,6 +326,21 @@ def create_insight_blueprint(
                 derived_commands.create_job(
                     book_id=book_id,
                     kind="vector",
+                    template="default",
+                    idempotency_key=_require_idempotency_key(),
+                )
+            ),
+            202,
+        )
+
+    @blueprint.post("/books/<book_id>/entity-alignment/rebuild")
+    def rebuild_entity_alignment(book_id: str):
+        _json_body(allowed_keys=set())
+        return (
+            jsonify(
+                derived_commands.create_job(
+                    book_id=book_id,
+                    kind="entity_alignment",
                     template="default",
                     idempotency_key=_require_idempotency_key(),
                 )
