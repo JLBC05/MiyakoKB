@@ -19,8 +19,10 @@ const citationChips = computed<ProductChipItem[]>(() => {
   return (
     props.message.citations?.map((citation, index) => {
       let label = `第${citation.page}页`
-      if (citation.chapterOrdinal !== undefined) {
-        label = `第${citation.chapterOrdinal}章：第${citation.page}页`
+      if (citation.chapterTitle) {
+        label = `${citation.chapterTitle}：第${citation.page}页`
+      } else if (citation.chapterOrdinal !== undefined) {
+        label = `第${citation.chapterOrdinal}话：第${citation.page}页`
       }
       return {
         id: index,

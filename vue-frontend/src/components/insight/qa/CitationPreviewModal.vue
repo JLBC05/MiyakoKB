@@ -24,13 +24,11 @@ const resolvedImageUrl = ref('')
 const modalTitle = computed(() => {
   if (!props.citation) return '引用页面预览'
   const c = props.citation
-  if (c.chapterOrdinal !== undefined) {
-    return c.chapterTitle
-      ? `${c.chapterTitle}（第${c.chapterOrdinal}章）：第${c.page}页`
-      : `第${c.chapterOrdinal}章：第${c.page}页`
-  }
   if (c.chapterTitle) {
     return `${c.chapterTitle}：第${c.page}页`
+  }
+  if (c.chapterOrdinal !== undefined) {
+    return `第${c.chapterOrdinal}话：第${c.page}页`
   }
   return `第${c.page}页`
 })

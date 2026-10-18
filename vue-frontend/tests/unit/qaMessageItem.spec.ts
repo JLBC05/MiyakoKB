@@ -55,7 +55,7 @@ describe('QAMessageItem', () => {
         message: {
           id: 'qa-msg-2',
           role: 'assistant',
-          content: '线索在第5章第16页',
+          content: '线索在第5话第16页',
           citations: [{ page: 16, chapterOrdinal: 5 }],
         },
         renderMarkdown: content => `<p>${content}</p>`,
@@ -66,8 +66,33 @@ describe('QAMessageItem', () => {
     expect(citations.props('items')).toEqual([
       {
         id: 0,
-        label: '第5章：第16页',
-        ariaLabel: '查看 第5章：第16页',
+        label: '第5话：第16页',
+        ariaLabel: '查看 第5话：第16页',
+        interactive: true,
+        tone: 'primary',
+      },
+    ])
+  })
+
+  it('formats citations preferring chapterTitle over chapterOrdinal without parenthesized chapter', () => {
+    const wrapper = mount(QAMessageItem, {
+      props: {
+        message: {
+          id: 'qa-msg-3',
+          role: 'assistant',
+          content: '线索在第10话第3页',
+          citations: [{ page: 3, chapterOrdinal: 47, chapterTitle: '第10话' }],
+        },
+        renderMarkdown: content => `<p>${content}</p>`,
+      },
+    })
+
+    const citations = wrapper.getComponent(ProductChipList)
+    expect(citations.props('items')).toEqual([
+      {
+        id: 0,
+        label: '第10话：第3页',
+        ariaLabel: '查看 第10话：第3页',
         interactive: true,
         tone: 'primary',
       },
