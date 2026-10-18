@@ -1,61 +1,65 @@
-# Saber-Translator Dependencies (CPU Version)
-# pip install -r requirements-cpu.txt
+# Saber-Translator / MiyakoKB runtime dependencies
+# Install: python -m pip install -r requirements-<cpu|gpu>.txt
+#
+# The CPU and GPU dependency sets are IDENTICAL: this file and its counterpart
+# (requirements-cpu.txt / requirements-gpu.txt) are byte-identical, because the
+# knowledge-base runtime no longer imports any accelerator-specific package.
+# The translation-era stack (torch, torchvision, manga-ocr, rapidocr, onnxruntime,
+# transformers, ultralytics, litelama, kornia, einops, seaborn, sentencepiece,
+# dill, shapely, pyclipper, pandas, networkx, packaging, requests) is not imported
+# by src/backend_v2/**, src/core/**, src/shared/**, saber_v2.py or run.py any more.
+#
+# Derived from the third-party imports of those modules.  Version pins come from
+# the machine this cleanup ran on where a version was observable; packages marked
+# "not installed here" are imported by the code but absent from that environment,
+# so they are left unpinned.
 
-# Flask
-flask
+# --- Web API / persistence ---
+flask>=3.1,<4
 waitress>=3.0,<4
 argon2-cffi>=25.1,<26
-
-# Backend-first v2 persistence
 SQLAlchemy>=2.0,<2.1
 psutil>=7.0,<8
-PySide6-Essentials==6.11.2  # 6.12.0 crashes during Windows test-process shutdown
 
-# Base tools
-pyyaml
+# --- Base libraries ---
+PyYAML>=6.0,<7
 pillow>=11.0.0
-numpy
-opencv-python
-requests
+numpy>=2.0,<3
+opencv-python>=4.10
 colorama>=0.4.6,<1
-packaging
-networkx
-shapely
-pyclipper
-pandas
+# imported by src/backend_v2/logging_config.py (not installed here)
+loguru
+pypinyin>=0.55,<1
+fonttools>=4.60
+# imported by src/core/rendering.py (not installed here)
 freetype-py
-fonttools
+# imported by src/backend_v2/transfer/worker.py (not installed here)
 img2pdf
+# imported by src/backend_v2/insight/continuation.py (not installed here)
 reportlab
 
-# AI/OCR
-openai
-manga-ocr==0.1.16  # Transformers 5 tokenizer compatibility
-rapidocr==3.9.2  # PP-OCRv6 ONNX runtime wrapper
-onnxruntime>=1.20,<2
-sentencepiece  # for PaddleOCR-VL
-transformers==5.15.0  # native PaddleOCR-VL-1.6 runtime
-
-# Deep Learning (CPU)
-torch==2.11.0
-torchvision==0.26.0
-einops
-ultralytics
-seaborn
-litelama==0.1.7
-kornia==0.8.2
-
-# Other
-dill
+# --- Import / export containers ---
+# lazily imported by src/backend_v2/transfer/worker.py (not installed here)
 mobi>=0.4.0
+# `import fitz`, lazily imported by src/backend_v2/transfer/worker.py (not installed here)
 PyMuPDF>=1.23.0
 
-# Manga Insight
-chromadb>=0.4.0
+# --- Model / API clients ---
+openai>=3,<4
 httpx[http2]>=0.25.0
 
-# Web Import
+# --- Insight (vector store; lazily imported by src/backend_v2/insight/derived.py and qa.py) ---
+chromadb>=1.5,<2
+
+# --- Web import ---
+# imported by src/backend_v2/web_import/ (not installed here)
 gallery-dl>=1.26.0
 
-# Build
+# --- Build ---
+# Required by .github/workflows/release.yml ("Build with PyInstaller") and app.spec.
 pyinstaller==6.19.0
+
+# --- Dev / test ---
+# CI installs this itself (.github/workflows/release.yml:275); kept commented so a
+# runtime install stays lean.
+# pytest>=8.4,<9
