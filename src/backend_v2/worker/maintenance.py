@@ -15,7 +15,6 @@ from src.backend_v2.insight.derived import InsightVectorStore
 from src.backend_v2.insight.gc import InsightReachabilityGarbageCollector
 from src.backend_v2.insight.qa import TransientRequestRepository
 from src.backend_v2.jobs.repository import JobQueueRepository, decode_job_config
-from src.backend_v2.plugins.repository import PluginRegistry
 from src.backend_v2.storage.assets import AssetStorageService
 from src.backend_v2.storage.database import immediate_transaction
 from src.backend_v2.storage.schema import (
@@ -57,7 +56,6 @@ class WorkerMaintenance:
         self.insight_gc = InsightReachabilityGarbageCollector(engine)
         self.transient_requests = TransientRequestRepository(engine)
         self.jobs = JobQueueRepository(engine)
-        self.plugins = PluginRegistry(data_root=data_root, engine=engine)
         self.engine = engine
         self.interval_seconds = interval_seconds
         self.clock = clock
@@ -81,12 +79,10 @@ class WorkerMaintenance:
         actions = (
             ("恢复存储事务", self.storage.recover_journal),
             ("清理导入临时文件", self._prune_import_temp),
-            ("清理插件任务临时目录", self._prune_plugin_worktrees),
             ("清理任务历史", self.jobs.prune_history),
             ("清理过期网页漫画任务", self._prune_browser_sessions),
             ("清理过期下载文件", self._prune_expired_artifacts),
             ("清理已结束即时操作", self._prune_terminal_operations),
-            ("清理已卸载插件", self.plugins.collect_uninstalled_plugins),
             ("清理幂等请求记录", self._prune_idempotency_records),
             ("清理漫画分析数据", self.insight_gc.collect),
             ("清理未引用资源", self.storage.collect_garbage),
@@ -302,49 +298,6 @@ class WorkerMaintenance:
             "webImportDrafts": removed_drafts,
             "containerInputs": removed_containers,
         }
-
-    def _prune_plugin_worktrees(self) -> int:
-        with self.engine.connect() as connection:
-            protected_job_ids = {
-                str(value)
-                for value in connection.execute(
-                    select(jobs.c.id).where(
-                        jobs.c.status.in_(NONTERMINAL_JOB_STATUSES)
-                    )
-                ).scalars()
-            }
-
-        root = (self.data_root / "temp" / "jobs").resolve()
-        if not root.is_dir():
-            return 0
-        cutoff = time.time() - timedelta(hours=24).total_seconds()
-        removed = 0
-        for job_dir in root.iterdir():
-            if not job_dir.is_dir() or job_dir.name in protected_job_ids:
-                continue
-            try:
-                resolved_job_dir = job_dir.resolve()
-                resolved_job_dir.relative_to(root)
-                worktree = (resolved_job_dir / "plugin-worktree").resolve()
-                worktree.relative_to(resolved_job_dir)
-            except (OSError, ValueError):
-                continue
-            if not worktree.is_dir() or worktree.stat().st_mtime > cutoff:
-                continue
-            try:
-                shutil.rmtree(worktree)
-                try:
-                    resolved_job_dir.rmdir()
-                except OSError:
-                    pass
-            except OSError:
-                LOGGER.warning(
-                    "无法删除过期插件任务临时目录，下次维护重试：%s",
-                    worktree,
-                )
-                continue
-            removed += 1
-        return removed
 
     def _prune_web_import_drafts(self, now: datetime) -> int:
         with immediate_transaction(self.engine) as connection:

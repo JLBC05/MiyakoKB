@@ -59,7 +59,7 @@ async function submit(): Promise<void> {
     <div class="account-shell">
       <header class="account-header">
         <div>
-          <p class="page-brand">Saber Translator</p>
+          <p class="page-brand">MiyakoKB</p>
           <h1>账户设置</h1>
           <p class="page-description">查看资产用量，并管理账户安全。</p>
         </div>

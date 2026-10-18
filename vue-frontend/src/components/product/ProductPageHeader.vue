@@ -24,8 +24,8 @@ withDefaults(defineProps<{
       <div class="product-page-header__brand">
         <slot v-if="$slots.brand" name="brand" />
         <RouterLink v-else :to="homeTo" :title="logoTitle" class="product-page-header__brand-link">
-          <img :src="logoUrl" alt="Saber-Translator Logo" class="product-page-header__logo">
-          <span class="product-page-header__name">Saber-Translator</span>
+          <img :src="logoUrl" alt="MiyakoKB Logo" class="product-page-header__logo">
+          <span class="product-page-header__name">MiyakoKB</span>
         </RouterLink>
       </div>
 

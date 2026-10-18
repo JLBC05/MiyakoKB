@@ -45,7 +45,6 @@ from src.backend_v2.redaction import (
     redact_sensitive_value,
     secret_values_from_json,
 )
-from src.backend_v2.plugins.snapshots import enabled_plugin_snapshots
 from src.backend_v2.storage.database import immediate_transaction, read_transaction
 from src.backend_v2.storage.schema import (
     CURRENT_JOB_STATUSES,
@@ -68,7 +67,6 @@ from src.backend_v2.storage.schema import (
     job_events,
     job_items,
     fonts,
-    job_plugin_snapshots,
     job_steps,
     jobs,
     operation_events,
@@ -828,11 +826,6 @@ class JobQueueRepository:
                         select(func.coalesce(func.max(jobs.c.queue_rank), 0))
                     ).scalar_one()
                 )
-                current_plugin_snapshots = (
-                    enabled_plugin_snapshots(connection)
-                    if any(spec.plugin_snapshots is None for spec in specs)
-                    else {}
-                )
                 for spec in specs:
                     next_rank += 1
                     job_id = str(uuid.uuid4())
@@ -895,25 +888,6 @@ class JobQueueRepository:
                                     "role": role,
                                 }
                                 for role, version_id in credential_refs.items()
-                            ],
-                        )
-                    effective_plugin_snapshots = (
-                        spec.plugin_snapshots
-                        if spec.plugin_snapshots is not None
-                        else current_plugin_snapshots
-                    )
-                    if effective_plugin_snapshots:
-                        connection.execute(
-                            insert(job_plugin_snapshots),
-                            [
-                                {
-                                    "job_id": job_id,
-                                    "plugin_version_id": version_id,
-                                    "config_json": _json(dict(plugin_config)),
-                                }
-                                for version_id, plugin_config in (
-                                    effective_plugin_snapshots.items()
-                                )
                             ],
                         )
                     for item_ordinal, item_spec in enumerate(spec.items, start=1):
@@ -4178,8 +4152,6 @@ class JobQueueRepository:
             connection.execute(
                 select(
                     operations.c.id,
-                    operations.c.kind,
-                    operations.c.page_id,
                 )
                 .join(pages, pages.c.id == operations.c.page_id)
                 .where(
@@ -4220,20 +4192,6 @@ class JobQueueRepository:
                         ),
                         created_at=now,
                     )
-                )
-            repair_page_ids = [
-                str(row["page_id"])
-                for row in operation_rows
-                if row["kind"] == "page_repair" and row["page_id"] is not None
-            ]
-            if repair_page_ids:
-                connection.execute(
-                    update(pages)
-                    .where(
-                        pages.c.id.in_(repair_page_ids),
-                        pages.c.render_status == "awaiting_repair",
-                    )
-                    .values(render_status="repair_failed", updated_at=now)
                 )
 
     def _set_blocked(

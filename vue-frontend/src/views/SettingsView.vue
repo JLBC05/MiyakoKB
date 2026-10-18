@@ -25,7 +25,7 @@ const insightStore = useInsightStore()
 type SettingsTabId = 'vlm' | 'llm' | 'embedding' | 'reranker' | 'analysis' | 'prompts'
 
 const settingsTabs = [
-  { id: 'vlm', label: 'VLM 视觉模型', icon: '🖼️', desc: '用于分镜画面识别、OCR 与实体初筛' },
+  { id: 'vlm', label: 'VLM 视觉模型', icon: '🖼️', desc: '用于分镜画面识别与实体初筛' },
   { id: 'llm', label: 'Chat 对话/裁决', icon: '💬', desc: '用于实体语义裁决、剧情问答与概览生成' },
   { id: 'embedding', label: 'Embedding 向量', icon: '🔢', desc: '用于画面与分镜语义检索、多模态 RAG 索引' },
   { id: 'reranker', label: 'Reranker 重排序', icon: '🔄', desc: '用于二次检索精排，提高问答检索准度' },

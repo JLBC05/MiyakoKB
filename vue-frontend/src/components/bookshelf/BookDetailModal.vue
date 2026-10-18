@@ -14,7 +14,6 @@ import BookDetailSummary from './book-detail/BookDetailSummary.vue'
 import ChapterFormContent from './book-detail/ChapterFormContent.vue'
 import ChapterList from './book-detail/ChapterList.vue'
 import QuickTagPicker from './book-detail/QuickTagPicker.vue'
-import { createTranslationBatch } from '@/api/v2/translation'
 import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import { useSettingsStore } from '@/stores/settings'
 
@@ -25,10 +24,8 @@ const emit = defineEmits<{
 
 withDefaults(defineProps<{
   insightAllowed?: boolean
-  translationAllowed?: boolean
 }>(), {
   insightAllowed: true,
-  translationAllowed: true,
 })
 
 const router = useRouter()
@@ -48,7 +45,6 @@ const deleteChapterId = ref<string | null>(null)
 const isDeleting = ref(false)
 const isChapterSaving = ref(false)
 const isBatchDownloading = ref(false)
-const isBatchTranslating = ref(false)
 const isReordering = ref(false)
 
 const currentBook = computed(() => bookshelfStore.currentBook)
@@ -165,33 +161,9 @@ function selectAllChapters(chapterIds: string[]) {
   selectedChapterIds.value = new Set(chapterIds)
 }
 
-async function translateSelectedChapters() {
-  const chapterIds = [...selectedChapterIds.value]
-  if (!chapterIds.length || isBatchTranslating.value || isBatchDownloading.value) return
-  isBatchTranslating.value = true
-  try {
-    const result = await createTranslationBatch({ chapterIds }, { mode: 'standard' })
-    selectedChapterIds.value = new Set()
-    for (const jobId of result.jobIds) taskCenterStore.trackJob(jobId)
-    await refreshBookDetail()
-    const skipped = result.skipped.length
-    showToast(
-      skipped
-        ? `已创建 ${result.jobIds.length} 个任务，跳过 ${skipped} 个章节`
-        : `已创建 ${result.jobIds.length} 个后端翻译任务`,
-      skipped ? 'warning' : 'success',
-    )
-    taskCenterStore.open({ batchId: result.batchId })
-  } catch (error) {
-    showToast(error instanceof Error ? error.message : '创建批量翻译任务失败', 'error')
-  } finally {
-    isBatchTranslating.value = false
-  }
-}
-
 async function downloadSelectedChapters() {
   const chapterIds = [...selectedChapterIds.value]
-  if (!chapterIds.length || isBatchDownloading.value || isBatchTranslating.value) return
+  if (!chapterIds.length || isBatchDownloading.value) return
   isBatchDownloading.value = true
   let queuedToastId: number | null = null
   try {
@@ -277,18 +249,6 @@ function deleteChapter(chapterId: string) {
   deleteTarget.value = 'chapter'
   deleteChapterId.value = chapterId
   showDeleteConfirm.value = true
-}
-
-function goToTranslate(chapterId: string) {
-  if (currentBook.value) {
-    router.push({
-      path: '/translate',
-      query: {
-        book: currentBook.value.id,
-        chapter: chapterId,
-      },
-    })
-  }
 }
 
 function goToReader(chapterId: string) {
@@ -520,8 +480,6 @@ async function quickAddTagToBook(tagName: string): Promise<boolean> {
         :dragged-chapter-index="draggedChapterIndex"
         :download-pending="isBatchDownloading"
         :selected-chapter-ids="selectedChapterIds"
-        :translation-pending="isBatchTranslating"
-        :translation-allowed="translationAllowed"
         @create="openCreateChapterModal"
         @delete="deleteChapter"
         @drag-end="handleChapterDragEnd"
@@ -532,10 +490,8 @@ async function quickAddTagToBook(tagName: string): Promise<boolean> {
         @download-selected="downloadSelectedChapters"
         @edit="openEditChapterModal"
         @read="goToReader"
-        @translate="goToTranslate"
         @select="selectChapter"
         @select-all="selectAllChapters"
-        @translate-selected="translateSelectedChapters"
       />
     </div>
   </BaseModal>

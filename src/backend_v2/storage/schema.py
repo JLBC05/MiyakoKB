@@ -127,7 +127,6 @@ PROMPT_TYPES = (
     "book_overview",
     "group_summary",
     "qa_response",
-    "question_decompose",
     "analysis_system",
 )
 

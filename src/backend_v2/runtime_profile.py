@@ -19,7 +19,6 @@ class RuntimeProfile:
     requires_auth: bool
     browser_credentials: bool
     enforce_asset_quota: bool
-    allow_plugins: bool
     allow_web_import: bool
     allow_local_providers: bool
 
@@ -29,7 +28,6 @@ _PROFILES = {
         requires_auth=False,
         browser_credentials=False,
         enforce_asset_quota=False,
-        allow_plugins=True,
         allow_web_import=True,
         allow_local_providers=True,
     ),
@@ -38,7 +36,6 @@ _PROFILES = {
         requires_auth=True,
         browser_credentials=True,
         enforce_asset_quota=True,
-        allow_plugins=False,
         allow_web_import=False,
         allow_local_providers=False,
     ),

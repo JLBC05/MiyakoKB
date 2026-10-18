@@ -20,15 +20,6 @@ from src.backend_v2.logging_config import (
     configure_backend_logging,
     set_backend_console_level,
 )
-from src.backend_v2.operations.executor import (
-    DurableRenderExecutor,
-    WorkerOperationRunner,
-)
-from src.backend_v2.operations.repository import (
-    OperationFence,
-    OperationFenced,
-    RenderFence,
-)
 from src.backend_v2.storage.schema import JOB_KINDS, OPERATION_KINDS
 from src.shared.user_logging import (
     JOB_LABELS,
@@ -578,38 +569,6 @@ def test_dynamic_insight_layer_labels_are_one_based_for_people() -> None:
     assert step_label("insight_build_layer_8") == "汇总第 9 层分析"
 
 
-def test_fenced_operation_log_does_not_claim_the_executor_switched() -> None:
-    fence = OperationFence(
-        operation_id="operation-fenced",
-        attempt_id="attempt",
-        executor_epoch_id="epoch",
-        executor_role="worker",
-        owner_user_id="local-user",
-    )
-
-    class Repository:
-        def claim_next(self, **_kwargs):
-            return fence, {"kind": "page_detect"}
-
-    runner = WorkerOperationRunner(
-        Repository(),  # type: ignore[arg-type]
-        worker_epoch_id="epoch",
-        handlers={
-            "page_detect": lambda _fence, _operation: (_ for _ in ()).throw(
-                OperationFenced("page revision changed")
-            )
-        },
-    )
-
-    with TestCase().assertLogs("saber.user", level="INFO") as captured:
-        assert runner.run_one() is True
-
-    rendered = "\n".join(captured.output)
-    assert "目标数据或执行状态已变化" in rendered
-    assert captured.records[-1].saber_log_category == "system"
-    assert "执行器已切换" not in rendered
-
-
 def test_stored_worker_errors_keep_their_real_traceback_type() -> None:
     error = RuntimeError("后台线程失败")
 
@@ -622,53 +581,6 @@ def test_stored_worker_errors_keep_their_real_traceback_type() -> None:
     rendered = "\n".join(captured.output)
     assert "RuntimeError: 后台线程失败" in rendered
     assert "NoneType: None" not in rendered
-
-
-def test_live_render_keeps_success_detail_at_debug_and_failures_visible() -> None:
-    class Repository:
-        def __init__(self) -> None:
-            self.failed: tuple[str, str] | None = None
-
-        def complete(self, _fence, *, publisher) -> bool:
-            publisher(object())
-            return True
-
-        def fail(self, _fence, *, code: str, message: str) -> None:
-            self.failed = (code, message)
-
-    fence = RenderFence(
-        render_request_id="render12-request",
-        page_id="page34-page",
-        rendering_revision=7,
-        attempt_id="attempt",
-        api_epoch_id="epoch",
-        owner_user_id="local-user",
-    )
-    repository = Repository()
-    executor = DurableRenderExecutor(
-        repository,  # type: ignore[arg-type]
-        api_epoch_id="epoch",
-        handler=lambda _fence: lambda _connection: None,
-    )
-
-    with TestCase().assertLogs("saber.user", level="DEBUG") as captured:
-        executor._execute(fence)
-
-    rendered = "\n".join(captured.output)
-    assert "操作 render12 · 编辑结果渲染｜开始｜文档版本 7" in rendered
-    assert "操作 render12 · 编辑结果渲染｜完成｜文档版本 7" in rendered
-
-    failing = DurableRenderExecutor(
-        repository,  # type: ignore[arg-type]
-        api_epoch_id="epoch",
-        handler=lambda _fence: (_ for _ in ()).throw(RuntimeError("字体不可用")),
-    )
-    with TestCase().assertLogs("saber.user", level="ERROR") as captured:
-        failing._execute(fence)
-
-    assert "编辑结果渲染｜失败" in captured.output[0]
-    assert "字体不可用" in captured.output[0]
-    assert repository.failed == ("RENDER_FAILED", "字体不可用")
 
 
 def test_background_scheduler_faults_log_once_and_report_recovery() -> None:

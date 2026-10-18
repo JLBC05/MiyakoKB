@@ -38,8 +38,7 @@ const composableHistorySimplified = '简化' + '设计'
 const composableExplicitAny = 'as ' + 'any'
 const relativeExportStatement = 'export * fr' + 'om'
 const missingRelativeExport = './missing' + 'Type'
-const characterStudioTypeExport = './character' + 'Studio'
-const webImportTypeExport = './web' + 'Import'
+const insightTypeExport = './ins' + 'ight'
 const staleTestFeatureLabel = 'Feature' + ': frontend-behavior'
 const staleTestPropertyLabel = 'Property ' + '42'
 const staleTestRequirementLabel = 'Validates' + ': Requirements'
@@ -1458,8 +1457,7 @@ describe('UI architecture source hygiene lint', () => {
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('types barrel missing export(s)')
-    expect(result.stderr).toContain(characterStudioTypeExport)
-    expect(result.stderr).toContain(webImportTypeExport)
+    expect(result.stderr).toContain(insightTypeExport)
   })
 
   it.each(['build_output.txt', 'build_error.txt', 'vite-dev.log'])(

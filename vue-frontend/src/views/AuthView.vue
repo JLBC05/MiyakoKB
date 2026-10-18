@@ -38,7 +38,7 @@ const description = computed(() =>
       : '无需邀请码，设置用户名和密码即可注册。'
     : mode.value === 'recover'
       ? '输入一次性恢复码，并为账户设置新密码。'
-      : '继续管理你的漫画翻译项目。'
+      : '继续管理你的漫画知识库。'
 )
 
 watch(mode, () => {
@@ -74,12 +74,12 @@ async function submit(): Promise<void> {
 
 function downloadRecoveryCodes(): void {
   const blob = new Blob(
-    [`Saber Translator 恢复码（每个只能使用一次）\n\n${recoveryCodes.value.join('\n')}\n`],
+    [`MiyakoKB 恢复码（每个只能使用一次）\n\n${recoveryCodes.value.join('\n')}\n`],
     { type: 'text/plain;charset=utf-8' }
   )
   const link = document.createElement('a')
   link.href = URL.createObjectURL(blob)
-  link.download = 'saber-recovery-codes.txt'
+  link.download = 'miyako-recovery-codes.txt'
   link.click()
   URL.revokeObjectURL(link.href)
 }
@@ -90,7 +90,7 @@ function downloadRecoveryCodes(): void {
     <section class="auth-card">
       <div class="auth-brand">
         <img :src="logoUrl" alt="" class="auth-logo" />
-        <span>Saber Translator</span>
+        <span>MiyakoKB</span>
       </div>
       <template v-if="recoveryCodes.length">
         <div class="auth-heading">

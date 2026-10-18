@@ -13,7 +13,6 @@ from src.backend_v2.jobs import MAX_DEEP_LEARNING_CONCURRENCY
 from src.backend_v2.storage.defaults import (
     DEFAULT_BROWSER_DOM_AGENT,
     DEFAULT_WEB_IMPORT_SETTINGS,
-    default_translation_settings,
 )
 from src.shared.ai_providers import (
     CHAT_CAPABILITY,

@@ -9,27 +9,6 @@ function source(file: string): string {
 }
 
 describe('type source contracts', () => {
-  it('imports Insight response types from the Insight domain type file', () => {
-    for (const file of [
-      'src/api/insight.ts',
-      'src/utils/insightStatus.ts',
-      'src/components/insight/timeline/useTimelinePanel.ts',
-    ]) {
-      const content = source(file)
-      const barrelImportBlocks =
-        content.match(/import\s+type\s+\{[\s\S]*?\}\s+from\s+['"]@\/types['"]/g) ?? []
-
-      for (const importBlock of barrelImportBlocks) {
-        for (const typeName of insightResponseTypeNames) {
-          expect(
-            importBlock,
-            `${file} should import ${typeName} from @/types/insight`
-          ).not.toContain(typeName)
-        }
-      }
-    }
-  })
-
   it('keeps Insight response interfaces out of the generic API type file', () => {
     const apiTypes = source('src/types/api.ts')
 
@@ -108,112 +87,6 @@ describe('type source contracts', () => {
     expect(source('src/types/textStyleSettings.ts')).toContain('export interface TextStyleSettings')
     expect(source('src/types/translationSettings.ts')).toContain(
       'export interface TranslationSettings'
-    )
-  })
-
-  it('keeps workflow UI metadata out of the shared workflow type module', () => {
-    const workflowTypes = source('src/types/workflow.ts')
-    const workflowConfig = source('src/components/translate/workflowModeConfig.ts')
-
-    for (const staleTypeOwnerContent of [
-      '/**',
-      'WORKFLOW_MODE_CONFIGS',
-      'DEFAULT_WORKFLOW_MODE',
-      'isWorkflowMode',
-      'label:',
-      'startLabel:',
-      '翻译当前图片',
-      '清除所有图片',
-    ]) {
-      expect(workflowTypes).not.toContain(staleTypeOwnerContent)
-    }
-
-    expect(workflowTypes).toContain('export type WorkflowMode')
-    expect(workflowTypes).toContain('export interface WorkflowRunRequest')
-    expect(workflowConfig).toContain('export const WORKFLOW_MODE_CONFIGS')
-    expect(workflowConfig).toContain('export const DEFAULT_WORKFLOW_MODE')
-    expect(workflowConfig).toContain('export function isWorkflowMode')
-  })
-
-  it('keeps WebImport types aligned with manifest-driven providers and grouped settings owners', () => {
-    const webImportTypes = source('src/types/webImport.ts')
-
-    for (const staleNarration of [
-      '/**',
-      '网页导入相关类型定义',
-      "| 'openai'",
-      "| 'siliconflow'",
-      'Firecrawl 配置',
-      'AI Agent 配置',
-      '网页导入完整设置',
-      '网页导入运行时状态',
-    ]) {
-      expect(webImportTypes).not.toContain(staleNarration)
-    }
-
-    expect(webImportTypes).toContain('export type WebImportAgentProvider = string')
-
-    for (const ownerInterface of [
-      'WebImportFirecrawlSettings',
-      'WebImportAgentSettings',
-      'WebImportExtractionSettings',
-      'WebImportDownloadSettings',
-      'WebImportAdvancedSettings',
-      'WebImportUiSettings',
-    ]) {
-      expect(webImportTypes).toContain(`export interface ${ownerInterface}`)
-    }
-    expect(webImportTypes).toContain('export type WebImportStatus')
-    expect(webImportTypes).not.toContain('export interface WebImportState')
-    expect(webImportTypes).not.toContain('export interface WebImportDownloadProgress')
-  })
-
-  it('keeps Character Studio types split by owner behind the public Studio barrel', () => {
-    const studioTypes = source('src/types/characterStudio.ts')
-
-    for (const typeName of [
-      'CharacterStudioCandidate',
-      'CharacterStudioDocument',
-      'LorebookEntryNode',
-      'RegexScript',
-      'StateTask',
-      'CharacterStudioChatSession',
-      'CharacterStudioEditorPendingState',
-      'CharacterStudioAgentPatchV2',
-      'CharacterStudioIndexResponse',
-    ]) {
-      expect(studioTypes, `${typeName} should be re-exported from an owner file`).not.toContain(
-        `export interface ${typeName}`
-      )
-      expect(studioTypes, `${typeName} should be re-exported from an owner file`).not.toContain(
-        `export type ${typeName}`
-      )
-    }
-
-    for (const exportPath of [
-      './characterStudioApi',
-      './characterStudioChat',
-      './characterStudioDocument',
-      './characterStudioEditor',
-      './characterStudioPatch',
-    ]) {
-      expect(studioTypes).toContain(`from '${exportPath}'`)
-    }
-
-    expect(source('src/types/characterStudioApi.ts')).toContain(
-      'export interface CharacterStudioIndex'
-    )
-    expect(source('src/types/characterStudioChat.ts')).toContain(
-      'export interface CharacterStudioChatSession'
-    )
-    expect(source('src/types/characterStudioDocument.ts')).toContain(
-      'export interface CharacterStudioDocument'
-    )
-    expect(source('src/types/characterStudioEditor.ts')).toContain(
-      'export interface CharacterStudioEditorPendingState'
-    )
-    expect(source('src/types/characterStudioPatch.ts')).toContain(
-      'export interface CharacterStudioAgentPatchV2'
     )
   })
 
@@ -320,14 +193,10 @@ describe('type source contracts', () => {
       './image',
       './settings',
       './api',
-      './ocr',
       './folder',
       './insight',
-      './characterStudio',
-      './webImport',
       './workflow',
       './bookTranslationConstraints',
-      './translationConstraints',
     ].flatMap(modulePath => [`${exportPrefix}'${modulePath}'`, ''])
     expectedLines.pop()
 
@@ -420,21 +289,6 @@ describe('type source contracts', () => {
 
     expect(ocrTypes).toContain(
       "export type OcrResult = components['schemas']['BubbleOcrResult']",
-    )
-  })
-
-  it('uses generated translation constraint contracts without handwritten copies', () => {
-    const constraintTypes = source('src/types/translationConstraints.ts')
-
-    for (const staleNarration of ['/**', '术语表 / 禁翻表相关类型', '相关类型']) {
-      expect(constraintTypes).not.toContain(staleNarration)
-    }
-
-    expect(constraintTypes).toContain(
-      "export type GlossaryEntry = components['schemas']['TranslationGlossaryEntry']",
-    )
-    expect(constraintTypes).toContain(
-      "export type NonTranslateEntry = components['schemas']['TranslationNonTranslateEntry']",
     )
   })
 

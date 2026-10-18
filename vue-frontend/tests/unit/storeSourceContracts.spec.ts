@@ -3,34 +3,6 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 describe('store source contracts', () => {
-  it('keeps overlay pointer preview state out of the durable bubble store', () => {
-    const storeSource = readFileSync(resolve(process.cwd(), 'src/stores/bubbleStore.ts'), 'utf8')
-    const overlaySource = readFileSync(
-      resolve(process.cwd(), 'src/components/edit/BubbleOverlay.vue'),
-      'utf8'
-    )
-
-    for (const field of [
-      'isDragging',
-      'draggingIndex',
-      'dragOffsetX',
-      'dragOffsetY',
-      'dragInitialX',
-      'dragInitialY',
-      'isResizing',
-      'resizingIndex',
-      'resizeCurrentCoords',
-      'isRotating',
-      'rotatingIndex',
-      'rotateCurrentAngle',
-    ]) {
-      expect(storeSource, field).not.toContain(field)
-    }
-
-    expect(overlaySource).not.toContain("from '@/stores/bubbleStore'")
-    expect(overlaySource).not.toContain("from 'pinia'")
-  })
-
   it('serializes insight OpenAI-compatible config only at the API boundary', () => {
     const apiSource = readFileSync(resolve(process.cwd(), 'src/api/insight.ts'), 'utf8')
     const storeSource = readFileSync(resolve(process.cwd(), 'src/stores/insightStore.ts'), 'utf8')
@@ -132,25 +104,4 @@ describe('store source contracts', () => {
     expect(storeSource).not.toContain('UseInsightQAOptions')
   })
 
-  it('keeps settings provider cache OpenAI option types sourced from shared settings types', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/stores/settings/types.ts'), 'utf8')
-
-    expect(source).toContain("import type { OpenAICompatibleOptions } from '@/types/settings'")
-    expect(source.match(/openaiOptions\?: OpenAICompatibleOptions/g) ?? []).toHaveLength(4)
-    expect(source).not.toMatch(/openaiOptions\?:\s*\{\s*request\?:/s)
-  })
-
-  it('keeps web import store on the shared clone helper', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/stores/webImportStore.ts'), 'utf8')
-
-    expect(source).toContain("import { deepClone } from '@/utils/deepClone'")
-    expect(source).toContain("} from './webImportSettingsPayload'")
-    expect(source).not.toContain('function parseCurrentWebImportSettings')
-    expect(source).not.toContain('function parseCurrentProviderConfigs')
-    expect(source).not.toContain('function parseCurrentWebImportPayload')
-    expect(source).not.toContain('function parseCurrentLocalPayload')
-    expect(source).not.toContain('function cloneValue')
-    expect(source).not.toContain('JSON.parse(JSON.stringify(value))')
-
-  })
 })

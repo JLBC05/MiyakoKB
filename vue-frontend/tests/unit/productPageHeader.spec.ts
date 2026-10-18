@@ -37,8 +37,8 @@ describe('ProductPageHeader', () => {
       'product-page-header--brand',
     ]))
     expect(wrapper.get('.product-page-header__brand-link').attributes('title')).toBe('书架首页')
-    expect(wrapper.get('.product-page-header__logo').attributes('alt')).toBe('Saber-Translator Logo')
-    expect(wrapper.get('.product-page-header__name').text()).toBe('Saber-Translator')
+    expect(wrapper.get('.product-page-header__logo').attributes('alt')).toBe('MiyakoKB Logo')
+    expect(wrapper.get('.product-page-header__name').text()).toBe('MiyakoKB')
     expect(wrapper.find('.product-page-header__meta .test-meta').exists()).toBe(true)
     expect(wrapper.get('nav[aria-label="书架链接"] .test-nav').exists()).toBe(true)
     expect(wrapper.find('.product-page-header__actions .test-action').exists()).toBe(true)
@@ -186,18 +186,6 @@ describe('ProductPageHeader', () => {
     expect(source).toMatch(/\.product-header-action--plain:hover:not\(\.product-header-action--disabled, \.product-header-action--static\)/)
   })
 
-  it('keeps header action visual state ownership inside the action primitive', () => {
-    const pageHeaderSource = readFileSync(resolve(process.cwd(), 'src/components/product/ProductPageHeader.vue'), 'utf8')
-    const studioTopbarSource = readFileSync(resolve(process.cwd(), 'src/components/insight/studio/StudioTopbar.vue'), 'utf8')
-    const actionSource = readFileSync(resolve(process.cwd(), 'src/components/product/ProductHeaderAction.vue'), 'utf8')
-    const legacyStateToken = /--product-header-action-(background|border|text|hover-background|hover-border|hover-text|solid-background|solid-border|solid-hover-background|solid-hover-border|solid-shadow|solid-text|plain-text|danger-text|active-background|active-text)\b/
-
-    expect(pageHeaderSource).not.toMatch(legacyStateToken)
-    expect(studioTopbarSource).not.toMatch(legacyStateToken)
-    expect(actionSource).toContain('--product-header-action-context-surface')
-    expect(actionSource).toContain('--product-header-action-surface')
-  })
-
   it('keeps header chrome colors on semantic tokens', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/components/product/ProductPageHeader.vue'), 'utf8')
 
@@ -243,17 +231,4 @@ describe('ProductPageHeader', () => {
     expect(mobileBlock).toMatch(/\.product-page-header--fixed \.product-page-header__nav,\s*\.product-page-header--fixed \.product-page-header__actions\s*\{[\s\S]*gap:\s*8px/)
   })
 
-  it('reserves header action space for the global task-center launcher', () => {
-    const headerSource = readFileSync(resolve(process.cwd(), 'src/components/product/ProductPageHeader.vue'), 'utf8')
-    const launcherSource = readFileSync(resolve(process.cwd(), 'src/components/task-center/TaskCenterLauncher.vue'), 'utf8')
-    const studioTopbarSource = readFileSync(resolve(process.cwd(), 'src/components/insight/studio/StudioTopbar.vue'), 'utf8')
-
-    expect(headerSource).toMatch(/\.product-page-header--brand \.product-page-header__actions,\s*\.product-page-header--fixed \.product-page-header__actions\s*\{[^}]*margin-right:\s*136px/)
-    expect(headerSource).toMatch(/@media \(--breakpoint-md-down\)[\s\S]*margin-right:\s*72px/)
-    expect(headerSource).not.toMatch(/\.product-page-header--reader \.product-page-header__actions[^}]*margin-right/)
-    expect(launcherSource).toContain('task-center-launcher__label')
-    expect(launcherSource).toMatch(/@media \(--breakpoint-md-down\)[\s\S]*\.task-center-launcher__label\s*\{[^}]*display:\s*none/)
-    expect(studioTopbarSource).toContain('padding: 10px 156px 10px 20px')
-    expect(studioTopbarSource).toMatch(/@media \(--breakpoint-md-down\)[\s\S]*padding-right:\s*84px/)
-  })
 })

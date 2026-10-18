@@ -22,11 +22,11 @@ const emit = defineEmits<{
     :class="{ 'public-trial-notice--compact': compact }"
     icon-name="globe"
     role="note"
-    title="Saber Translator 在线试用版"
+    title="MiyakoKB 在线试用版"
     tone="neutral"
   >
     <div class="public-trial-notice__copy">
-      <p>本网站用于在线体验 Saber Translator 的漫画翻译与分析功能。</p>
+      <p>本网站用于在线体验 MiyakoKB 的漫画知识库与分析功能。</p>
       <p>
         共享服务器在高峰期可能需要等待，部分高性能模型或功能可能暂时关闭，试用数据会不定期清理。
       </p>

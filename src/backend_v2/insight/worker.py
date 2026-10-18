@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from collections.abc import Mapping, Sequence
 import hashlib
 import json
@@ -27,6 +29,8 @@ from src.backend_v2.jobs.repository import (
 from src.backend_v2.storage.assets import AssetStorageService
 from src.backend_v2.storage.platform_repositories import SettingsRepository
 from src.shared.user_logging import json_details, log_result, user_log
+
+LOGGER = logging.getLogger("saber.worker.insight_analysis")
 
 
 class InsightAlgorithms(Protocol):
@@ -66,20 +70,11 @@ class ProviderInsightAlgorithms:
             prompts.get("batch_analysis"),
             "frozen Insight batch_analysis prompt",
         )
-        prompt = _required_string(
+        base_prompt = _required_string(
             prompt_section.get("content"),
             "frozen Insight batch_analysis prompt content",
-        ).strip().replace("{page_count}", str(len(page_numbers)))
-        prompt = prompt.replace("{start_page}", str(page_numbers[0]))
-        prompt = prompt.replace("{end_page}", str(page_numbers[-1]))
+        ).strip()
         previous_context = _format_previous_batches(previous_batches)
-        if previous_context:
-            prompt += (
-                f"\n\n【前文概要（前{len(previous_batches)}批内容）】\n"
-                "请参考以下前文信息，保持剧情、人物和事件连贯：\n"
-                f"{previous_context}"
-            )
-        page_number_json = json.dumps(list(page_numbers), ensure_ascii=False)
         analysis_cfg = config.get("analysis") if isinstance(config.get("analysis"), Mapping) else {}
         extra_entities = list(analysis_cfg.get("extraEntities") or config.get("extraEntities") or [])
         knowledge_mode = bool(analysis_cfg.get("knowledgeMode") or config.get("knowledgeMode") or extra_entities)
@@ -96,19 +91,6 @@ class ProviderInsightAlgorithms:
                     parts.append(f'"{ent}":[{{"name":"..."}}]')
             extra_template_parts = "," + ",".join(parts)
 
-        page_templates = ",".join(
-            (
-                '{"page_number":'
-                f"{page_number}"
-                ',"page_summary":"...","key_events":'
-                '[{"summary":"...","importance":"high|medium|normal",'
-                '"event_type":"optional"}],"continuity_notes":"...",'
-                '"warnings":[{"code":"...","message":"..."}]'
-                f"{extra_template_parts}"
-                "}"
-            )
-            for page_number in page_numbers
-        )
         common_guidelines = (
             "\n【生成质量与评估标准】\n"
             "1. 生成顺序与摘要质量：必须先完整生成 page_summary，再提取其他字段。"
@@ -127,11 +109,11 @@ class ProviderInsightAlgorithms:
                 f"必须提取的实体字段：{', '.join(extra_entities)}。\n"
                 "每个实体列表必须是对象数组，且每个对象必须包含非空的 'name' 字段。\n"
                 "实体分类与边界定义（严禁混淆）：\n"
-                "  - items（物品）：仅收录可随身携带、可移动、具备独立实体属性的具体物品/道具/书籍（如：电脑、公文包、全家福照片、FX交易入门书、手机、特级咒物）。严禁将建筑物、房间、固定设施、家具、环境结构或抽象概念/数字金额归入 items！\n"
+                "  - items（物品）：仅收录可随身携带、可移动、具备独立实体属性的具体物品/道具（如：随身工具、书籍、电子设备、证件、照片、关键道具）。严禁将建筑物、房间、固定设施、家具、环境结构或抽象概念/数字金额归入 items！\n"
                 "  - locations（地点）：收录场景发生的具体地理位置、建筑、房间、固定设施或环境结构。"
-                "【地点粒度与命名规则（严格执行）】：同一场景只保留一个条目，采用完整层级路径命名（例如：'杉泽第三高中·家庭科准备室'、'杉泽第三高中·操场百叶箱'），严禁拆分成'学校'和'房间'两条独立记录！同一场景在连续页面中必须保持完全一致的命名与粒度。\n"
-                "  - abilities（能力/招式）：收录明确施展或提及的技能、术式、咒术、超常能力（如：十种影法术·蟾蜍）。严禁将金融机制、现实技能或抽象概念归入 abilities！\n"
-                "  - concepts（概念/设定）：作品特有的抽象概念——交易机制、心理状态、社会现象、专业术语、规则设定、关键数字/金额（如：FX、杠杆、爆仓、追加保证金、2000万日元欠款、雷曼危机）。每个 concept 是 {\"name\": \"...\", \"type\": \"...\", \"description\": \"...\"}，type 字段开放，由模型自行判断（如：交易机制、金融术语、心理状态、关键金额、历史事件等）。明确要求：FX、杠杆、爆仓、欠款金额、金融危机等，必须放入 concepts，绝对不要放入 items 或 abilities！\n"
+                "【地点粒度与命名规则（严格执行）】：同一场景只保留一个条目，采用完整层级路径命名，路径用 '·' 分隔，从最外层机构/建筑写到最内层房间或区域（例如：'<机构或建筑名>·<房间或区域名>'）；严禁拆分成'<机构>'和'<房间>'两条独立记录！同一场景在连续页面中必须保持完全一致的命名与粒度。\n"
+                "  - abilities（能力/招式）：收录明确施展或提及的技能、术式、超常能力（命名同样采用 '<体系或流派名>·<招式名>' 的层级路径）。严禁将现实机制、职业技能或抽象概念归入 abilities！\n"
+                "  - concepts（概念/设定）：作品特有的抽象概念——机制、心理状态、社会现象、专业术语、规则设定、关键数字/金额。每个 concept 是 {\"name\": \"...\", \"type\": \"...\", \"description\": \"...\"}，type 字段开放，由模型自行判断（如：机制、术语、心理状态、关键金额、历史事件等）。明确要求：抽象机制、专业术语、关键金额、社会或历史事件，必须放入 concepts，绝对不要放入 items 或 abilities！\n"
                 "  - 确定性原则：实体归属不确定或边界模糊时，宁可留空 []，绝不要归入错误的字段中。\n"
                 "强制判定：只要本页有角色、对话、战斗或能力展示，即使不是重大转折，也必须提取实体。只有纯风景页或纯过渡页才允许返回空列表 []。\n"
             )
@@ -139,51 +121,139 @@ class ProviderInsightAlgorithms:
             forbidden = "scene、mood、panels、dialogues、speaker_name、original_text、translated_text、characters 或 character_mentions"
             extraction_rules = f"{common_guidelines}\n"
 
-        strict_suffix = (
-            f"\n\n{extraction_rules}"
-            f"按图片给出的顺序分析这 {len(page_numbers)} 页，"
-            f"对应页码依次为 {page_number_json}。只输出 JSON："
-            f'{{"pages":[{page_templates}]}}。'
-            "pages 必须逐页完整覆盖上述页码且不得重复。"
-            f"不要输出 {forbidden}。"
-        )
+        def build_prompt(pages: Sequence[int]) -> str:
+            prompt = base_prompt.replace("{page_count}", str(len(pages)))
+            prompt = prompt.replace("{start_page}", str(pages[0]))
+            prompt = prompt.replace("{end_page}", str(pages[-1]))
+            if previous_context:
+                prompt += (
+                    f"\n\n【前文概要（前{len(previous_batches)}批内容）】\n"
+                    "请参考以下前文信息，保持剧情、人物和事件连贯：\n"
+                    f"{previous_context}"
+                )
+            page_number_json = json.dumps(list(pages), ensure_ascii=False)
+            page_templates = ",".join(
+                (
+                    '{"page_number":'
+                    f"{page_number}"
+                    ',"page_summary":"...","key_events":'
+                    '[{"summary":"...","importance":"high|medium|normal",'
+                    '"event_type":"optional"}],"continuity_notes":"...",'
+                    '"warnings":[{"code":"...","message":"..."}]'
+                    f"{extra_template_parts}"
+                    "}"
+                )
+                for page_number in pages
+            )
+            strict_suffix = (
+                f"\n\n{extraction_rules}"
+                f"按图片给出的顺序分析这 {len(pages)} 页，"
+                f"对应页码依次为 {page_number_json}。只输出 JSON："
+                f'{{"pages":[{page_templates}]}}。'
+                "pages 必须逐页完整覆盖上述页码且不得重复。"
+                f"不要输出 {forbidden}。"
+            )
+            return (prompt + strict_suffix).strip()
+
         client = VLMClient(vlm_config)
-        valid_pages: dict[int, dict[str, Any]] = {}
 
-        def validate_batch(result: dict[str, Any]) -> dict[str, Any]:
-            errors = []
-            for page in result["pages"]:
-                number = page["page_number"]
-                if number in valid_pages:
-                    continue
-                try:
-                    valid_pages[number] = normalize_model_page(
-                        page,
-                        page_number=number,
-                        extra_entities=extra_entities,
-                    )
-                except ValueError as exc:
-                    errors.append(f"第 {number} 页：{exc}")
-            missing = [number for number in page_numbers if number not in valid_pages]
-            if missing:
-                raise ValueError(f"页面 {missing} 尚无有效结果；" + "; ".join(errors))
-            return {"pages": [valid_pages[number] for number in page_numbers]}
+        async def run_chunk(
+            chunk_pages: Sequence[int],
+            chunk_images: Sequence[bytes],
+        ) -> Mapping[str, Any]:
+            valid_pages: dict[int, dict[str, Any]] = {}
 
-        async def execute() -> Mapping[str, Any]:
+            def validate_chunk(result: dict[str, Any]) -> dict[str, Any]:
+                errors = []
+                for page in result["pages"]:
+                    number = page["page_number"]
+                    if number in valid_pages:
+                        continue
+                    try:
+                        valid_pages[number] = normalize_model_page(
+                            page,
+                            page_number=number,
+                            extra_entities=extra_entities,
+                        )
+                    except ValueError as exc:
+                        errors.append(f"第 {number} 页：{exc}")
+                missing = [number for number in chunk_pages if number not in valid_pages]
+                if missing:
+                    raise ValueError(f"页面 {missing} 尚无有效结果；" + "; ".join(errors))
+                return {"pages": [valid_pages[number] for number in chunk_pages]}
+
             try:
                 return await client.analyze_batch(
-                    list(image_bytes),
-                    list(page_numbers),
-                    (prompt + strict_suffix).strip(),
-                    validator=validate_batch,
+                    list(chunk_images),
+                    list(chunk_pages),
+                    build_prompt(chunk_pages),
+                    validator=validate_chunk,
                 )
             except Exception as exc:
                 if not valid_pages or is_memory_allocation_error(exc):
                     raise
                 user_log("warning", f"本批部分页面重试失败，保留 {len(valid_pages)} 页有效结果｜{exc}")
-                return {"pages": [valid_pages[number] for number in page_numbers if number in valid_pages]}
+                return {"pages": [valid_pages[number] for number in chunk_pages if number in valid_pages]}
+
+        pages_list = list(page_numbers)
+        chunks = _split_batch(pages_list, list(image_bytes), _batch_concurrency())
+
+        async def execute() -> Mapping[str, Any]:
+            if len(chunks) == 1:
+                chunk_pages, chunk_images = chunks[0]
+                return await run_chunk(chunk_pages, chunk_images)
+            results = await asyncio.gather(
+                *(run_chunk(chunk_pages, chunk_images) for chunk_pages, chunk_images in chunks),
+                return_exceptions=True,
+            )
+            merged: dict[int, dict[str, Any]] = {}
+            errors: list[str] = []
+            for (chunk_pages, _), result in zip(chunks, results):
+                if isinstance(result, BaseException):
+                    errors.append(f"第 {chunk_pages[0]}-{chunk_pages[-1]} 页分片失败：{result}")
+                    continue
+                for page in result.get("pages", []):
+                    merged[page["page_number"]] = page
+            if errors:
+                user_log("warning", f"本批分片分析部分失败，保留 {len(merged)} 页有效结果｜" + "；".join(errors))
+            if not merged:
+                raise ValueError("；".join(errors) or "本批分片分析全部失败")
+            return {"pages": [merged[number] for number in pages_list if number in merged]}
 
         return asyncio.run(execute())
+
+
+def _batch_concurrency() -> int:
+    """VLM 批量内并发分片数（环境变量 INSIGHT_ANALYZE_PARALLEL，默认 3）。"""
+    raw = os.environ.get("INSIGHT_ANALYZE_PARALLEL", "").strip()
+    try:
+        value = int(raw) if raw else 3
+    except ValueError:
+        value = 3
+    return max(1, min(8, value))
+
+
+def _split_batch(
+    page_numbers: Sequence[int],
+    images: Sequence[bytes],
+    concurrency: int,
+) -> list[tuple[list[int], list[bytes]]]:
+    count = min(concurrency, len(page_numbers))
+    if count <= 1:
+        return [(list(page_numbers), list(images))]
+    base, extra = divmod(len(page_numbers), count)
+    chunks: list[tuple[list[int], list[bytes]]] = []
+    offset = 0
+    for index in range(count):
+        size = base + (1 if index < extra else 0)
+        chunks.append(
+            (
+                list(page_numbers[offset:offset + size]),
+                list(images[offset:offset + size]),
+            )
+        )
+        offset += size
+    return chunks
 
 
 class InsightAnalysisWorkerService:
@@ -208,7 +278,7 @@ class InsightAnalysisWorkerService:
         step: Mapping[str, Any],
     ) -> Mapping[str, Any]:
         kind = _required_string(step.get("stepKind"), "Insight step kind")
-        if kind in {"insight_analyze_batch", "insight_analyze_page"}:
+        if kind == "insight_analyze_batch":
             return self._analyze_batch(fence, step)
         if kind == "insight_validate_run":
             return self._validate_run(fence, step)
@@ -607,6 +677,10 @@ class InsightAnalysisWorkerService:
                     f"失败页：{checkpoint.get('failureCount', 0)}",
                 ),
             )
+            self._dispatch_entity_alignment_if_missing(
+                run_id=run_id,
+                book_id=_required_string(config.get("bookId"), "Insight bookId"),
+            )
             return {**checkpoint, "__already_published__": True}
         except AttemptFenced:
             raise
@@ -638,6 +712,40 @@ class InsightAnalysisWorkerService:
                 "failed": True,
                 "__already_published__": True,
             }
+
+    def _dispatch_entity_alignment_if_missing(
+        self,
+        *,
+        run_id: str,
+        book_id: str,
+    ) -> None:
+        """时间线步骤内联的实体对齐缺失/失败时，补派独立实体图谱构建任务。
+
+        内联对齐失败只会写日志，不阻塞分析结果发布；这里在发布成功后做一次补偿，
+        保证实体知识网络最终一定会被生成（幂等键按 run 固定，重复发布会去重）。
+        """
+        try:
+            if self.repository.run_artifact_exists(
+                run_id=run_id,
+                kind="entity_alignment",
+            ):
+                return
+            from src.backend_v2.insight.derived import (
+                InsightDerivedCommandService,
+            )
+
+            InsightDerivedCommandService(self.engine).create_job(
+                book_id=book_id,
+                kind="entity_alignment",
+                template="default",
+                idempotency_key=f"insight-entity-alignment-compensate:{run_id}",
+            )
+            user_log(
+                "info",
+                "实体知识网络未随分析结果生成，已派发独立重建任务",
+            )
+        except Exception as exc:
+            LOGGER.warning("实体知识网络补偿任务派发失败: %s", exc)
 
     def _with_vlm_credentials(
         self,

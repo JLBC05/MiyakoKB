@@ -2284,16 +2284,6 @@ class ContentRepository:
             )
             if changed.rowcount != 1:
                 raise ContentConflict("page document revision changed")
-            if advance_render_request:
-                from src.backend_v2.operations.repository import (
-                    RenderRequestRepository,
-                )
-
-                RenderRequestRepository(self.engine).upsert(
-                    connection,
-                    page_id=page_id,
-                    requested_revision=new_revision,
-                )
             result = {
                 "document": self._get_page_document(connection, page_id),
                 "mutationResults": mutation_results,

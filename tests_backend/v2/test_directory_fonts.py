@@ -14,15 +14,13 @@ import pytest
 from sqlalchemy import insert, select, update
 
 from src.backend_v2.auth.constants import LOCAL_USER_ID
-from src.backend_v2.auth.ownership import owner_scope
-from src.backend_v2.rendering.fonts import resolve_font_path
 from src.backend_v2.storage import font_files
 from src.backend_v2.storage.assets import AssetQuotaExceeded, AssetStorageService
 from src.backend_v2.storage.database import create_sqlite_engine
 from src.backend_v2.storage.defaults import DEFAULT_FONT_ID
 from src.backend_v2.storage.lifecycle import initialize_database
 from src.backend_v2.storage.platform_repositories import FontRepository, RevisionConflict
-from src.backend_v2.storage.schema import assets, fonts, pages, platform_config
+from src.backend_v2.storage.schema import fonts, pages, platform_config
 from src.backend_v2.storage.seeding import QUICK_WORKSPACE_CHAPTER_ID
 from src.storage_migrator.contracts import contract_sql, read_identity
 from src.storage_migrator.runner import StorageManager
@@ -43,25 +41,6 @@ def directory_fonts(tmp_path, monkeypatch):
         yield root, engine, FontRepository(engine), AssetStorageService(root, engine), source.read_bytes()
     finally:
         engine.dispose()
-
-
-def test_manual_files_refresh_without_restart_and_missing_file_is_explicit(directory_fonts):
-    root, engine, catalog, storage, payload = directory_fonts
-    assert catalog.list()[0]['isDefault']
-    added = root / 'fonts/shared/手动字体.ttf'
-    added.write_bytes(payload)
-    item = next(f for f in catalog.list() if f['displayName'] == '手动字体')
-    with engine.connect() as connection:
-        path = resolve_font_path(connection, storage, item['id'])
-        assert ImageFont.truetype(path, 16).getbbox('A') is not None
-    added.unlink()
-    assert item['id'] not in {f['id'] for f in catalog.list()}
-    with engine.connect() as connection:
-        with pytest.raises(LookupError, match='移除'):
-            resolve_font_path(connection, storage, item['id'])
-        assert connection.execute(select(fonts.c.id).where(fonts.c.id == item['id'])).scalar_one()
-    added.write_bytes(payload)
-    assert item in catalog.list()
 
 
 def test_first_use_installation_can_race_without_overwriting_files(directory_fonts):
@@ -167,28 +146,6 @@ def test_custom_shared_acl_is_preserved(directory_fonts):
     assert _windows_acl_is_protected(shared)
     assert catalog.list()
     assert _windows_acl_is_protected(shared)
-
-
-def test_upload_and_manual_private_files_are_isolated_and_not_assets(directory_fonts):
-    root, engine, catalog, storage, payload = directory_fonts
-    with owner_scope('alice'):
-        alice, replay = catalog.upload(filename='same.ttf', payload=payload, display_name='Alice', idempotency_key='upload')
-        assert not replay and alice['scope'] == 'private'
-        assert catalog.upload(filename='same.ttf', payload=payload, display_name='Alice', idempotency_key='upload') == (alice, True)
-        (root / 'fonts/users/alice/manual.ttf').write_bytes(payload)
-        assert any(f['displayName'] == 'manual' for f in catalog.list())
-    with owner_scope('bob'):
-        bob, _ = catalog.upload(filename='same.ttf', payload=payload, display_name='Bob', idempotency_key='upload')
-        assert alice['id'] != bob['id']
-        assert alice['id'] not in {f['id'] for f in catalog.list()}
-        with engine.connect() as connection:
-            with pytest.raises(LookupError):
-                resolve_font_path(connection, storage, alice['id'])
-            assert Path(resolve_font_path(connection, storage, bob['id'])).read_bytes() == payload
-        with pytest.raises(LookupError):
-            catalog.delete(font_id=alice['id'], idempotency_key='foreign-delete')
-    with engine.connect() as connection:
-        assert not connection.execute(select(assets.c.id)).all()
 
 
 @pytest.mark.parametrize('filename', ['../escape.ttf', '..\\escape.ttf', '/escape.ttf', 'C:\\escape.ttf', 'a.ttf:stream', 'nested/a.ttf'])

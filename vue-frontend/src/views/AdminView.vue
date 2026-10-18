@@ -109,7 +109,6 @@ const featureControls: Array<{
   label: string
   description: string
 }> = [
-  { key: 'translation', label: '翻译', description: '进入翻译页并创建翻译、消字任务' },
   { key: 'insight', label: '漫画分析', description: '进入漫画分析页并运行分析任务' },
   { key: 'characterStudio', label: '角色工坊', description: '进入角色工坊并使用相关功能' },
   { key: 'editMode', label: '编辑模式', description: '进入气泡编辑并提交编辑操作' },
@@ -124,7 +123,6 @@ const modelControls: Array<{
   { key: 'detector_yolo', label: 'YOLO 检测' },
   { key: 'aux_ysg_yolo', label: 'YSG YOLO 辅助检测' },
   { key: 'saber_yolo', label: 'Saber YOLO 精修' },
-  { key: 'manga_ocr', label: 'Manga OCR' },
   { key: 'ocr_48px', label: '48px OCR' },
   { key: 'paddle_ocr', label: 'Paddle OCR' },
   { key: 'paddleocr_vl', label: 'PaddleOCR-VL' },
@@ -354,7 +352,7 @@ onBeforeUnmount(() => {
     <div class="admin-shell">
       <header class="admin-header">
         <div>
-          <p class="page-brand">Saber Translator</p>
+          <p class="page-brand">MiyakoKB</p>
           <h1>管理后台</h1>
           <p class="page-description">管理账户、资产额度与访问凭据。</p>
         </div>

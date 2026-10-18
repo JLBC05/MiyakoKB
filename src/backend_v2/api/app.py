@@ -366,24 +366,12 @@ def create_api_app(settings: ApiSettings) -> Flask:
     from src.backend_v2.jobs.repository import JobQueueRepository
     from src.backend_v2.jobs.routes import create_jobs_blueprint
     from src.backend_v2.insight.routes import create_insight_blueprint
-    from src.backend_v2.operations.routes import create_operations_blueprint
-    from src.backend_v2.plugins.routes import create_plugins_blueprint
-    from src.backend_v2.plugins.agent_routes import (
-        create_plugin_agent_blueprint,
-    )
-    from src.backend_v2.operations.executor import (
-        DurableOperationExecutor,
-        DurableRenderExecutor,
-    )
-    from src.backend_v2.operations.repair import PageRepairService
-    from src.backend_v2.operations.repository import OperationRepository
     from src.backend_v2.settings.routes import create_settings_blueprint
     from src.backend_v2.transfer.routes import create_transfer_blueprint
     from src.backend_v2.web_import.routes import (
         create_web_import_blueprint,
     )
     from src.backend_v2.api.web import create_web_blueprint
-    from src.backend_v2.api.system_routes import create_system_blueprint
     from src.backend_v2.storage.platform_repositories import ProviderRateLimiter
     from src.backend_v2.scheduling_policy import (
         SchedulingPolicyCache,
@@ -396,44 +384,18 @@ def create_api_app(settings: ApiSettings) -> Flask:
     broadcaster = JobEventBroadcaster(
         JobQueueRepository(engine),
     )
-    repair_service = PageRepairService(
-        data_root=settings.data_root,
-        engine=engine,
-        repository=OperationRepository(engine),
-    )
     scheduling_policy = (
         SchedulingPolicyCache(SchedulingPolicyRepository(engine))
         if settings.profile.name == "public"
         else None
     )
-    cpu_operation_executor = DurableOperationExecutor(
-        repair_service.repository,
-        executor_role="api",
-        executor_epoch_id=settings.identity.epoch_id,
-        handlers={
-            "page_repair": repair_service.handle,
-        },
-        max_workers=8 if scheduling_policy is not None else 4,
-        concurrency_limit=(
-            (lambda: int(scheduling_policy.load()["apiOperationConcurrency"]))
-            if scheduling_policy is not None
-            else None
-        ),
-    )
-    browser_blueprint = None
-    app.extensions["saber_v2_runtime"] = ApiRuntimeServices(
-        job_events=broadcaster,
-        executors=(cpu_operation_executor,),
-    )
+    app.extensions["saber_v2_runtime"] = ApiRuntimeServices(job_events=broadcaster)
     app.register_blueprint(
         create_content_blueprint(
             data_root=settings.data_root,
             engine=engine,
             profile=settings.profile,
         )
-    )
-    app.register_blueprint(
-        create_system_blueprint(engine=engine, profile=settings.profile)
     )
     app.register_blueprint(
         create_jobs_blueprint(
@@ -450,34 +412,6 @@ def create_api_app(settings: ApiSettings) -> Flask:
             url_prefix="/api/v2/insight",
         )
     )
-    app.register_blueprint(
-        create_insight_blueprint(
-            engine=engine,
-            data_root=settings.data_root,
-            profile=settings.profile,
-            url_prefix="/insight",
-        )
-    )
-    app.register_blueprint(
-        create_operations_blueprint(
-            data_root=settings.data_root,
-            engine=engine,
-            profile=settings.profile,
-        )
-    )
-    if settings.profile.allow_plugins:
-        app.register_blueprint(
-            create_plugins_blueprint(
-                data_root=settings.data_root,
-                engine=engine,
-            )
-        )
-        app.register_blueprint(
-            create_plugin_agent_blueprint(
-                data_root=settings.data_root,
-                engine=engine,
-            )
-        )
     app.register_blueprint(
         create_settings_blueprint(
             data_root=settings.data_root,
@@ -499,8 +433,6 @@ def create_api_app(settings: ApiSettings) -> Flask:
                 engine=engine,
             )
         )
-    if browser_blueprint is not None:
-        app.register_blueprint(browser_blueprint)
     app.register_blueprint(create_web_blueprint())
 
     # Unit tests may share a pytest process with suites that import Torch and

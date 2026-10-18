@@ -14,10 +14,6 @@ import signal
 import threading
 from typing import Any
 
-from src.backend_v2.local_models import (
-    normalize_resident_models,
-    preload_local_models,
-)
 from src.backend_v2.logging_config import configure_backend_logging
 from src.backend_v2.paths import data_root_fingerprint, ensure_data_root, resolve_data_root
 from src.backend_v2.runtime_identity import (
@@ -75,9 +71,6 @@ def _write_ready_marker(data_root: Path, identity: RuntimeIdentity) -> None:
 @current_storage_process("worker")
 def run_worker(args: object) -> int:
     profile = resolve_runtime_profile(getattr(args, "profile", "local"))
-    resident_models = normalize_resident_models(
-        getattr(args, "resident_model", ())
-    )
     if profile.name == "public" and not getattr(args, "data_dir", None):
         raise ValueError("--data-dir is required for the public profile")
     os.environ[PROFILE_ENV] = profile.name
@@ -133,7 +126,6 @@ def run_worker(args: object) -> int:
                     "status": "ready",
                     "epochId": identity.epoch_id,
                     "dataRootFingerprint": data_root_fingerprint(data_root),
-                    "residentModels": list(resident_models),
                 },
                 sort_keys=True,
             )
@@ -186,16 +178,6 @@ def run_worker(args: object) -> int:
             from src.backend_v2.insight.exports import (
                 InsightExportWorkerService,
             )
-            from src.backend_v2.operations.executor import WorkerOperationRunner
-            from src.backend_v2.operations.repair import PageRepairService
-            from src.backend_v2.operations.repository import OperationRepository
-            from src.backend_v2.plugins.runtime import (
-                PluginJobRuntime,
-                PluginOperationRuntime,
-            )
-            from src.backend_v2.plugins.agent_worker import (
-                PluginAgentWorkerService,
-            )
             from src.backend_v2.content.image_import import (
                 ImportSafetyLimits,
                 PUBLIC_IMPORT_SAFETY_LIMITS,
@@ -203,10 +185,6 @@ def run_worker(args: object) -> int:
             from src.backend_v2.transfer.worker import TransferWorkerService
             from src.backend_v2.web_import.worker import (
                 WebImportWorkerService,
-            )
-            from src.backend_v2.worker.model_lifecycle import (
-                WorkerModelControlRepository,
-                WorkerModelLifecycle,
             )
             from src.backend_v2.worker.maintenance import WorkerMaintenance
             from src.backend_v2.storage.platform_repositories import (
@@ -228,11 +206,6 @@ def run_worker(args: object) -> int:
                 else None
             )
             job_repository = JobQueueRepository(engine)
-            plugin_job_runtime = PluginJobRuntime(
-                data_root=data_root,
-                engine=engine,
-                repository=job_repository,
-            )
             transfer = TransferWorkerService(
                 data_root=data_root,
                 engine=engine,
@@ -277,7 +250,6 @@ def run_worker(args: object) -> int:
             job_handlers.update(
                 {
                     "insight_analyze_batch": insight.handle,
-                    "insight_analyze_page": insight.handle,
                     "insight_validate_run": insight.handle,
                     "insight_publish_run": insight.handle,
                 }
@@ -293,6 +265,7 @@ def run_worker(args: object) -> int:
                     "insight_build_compressed_context": insight_derived.handle,
                     "insight_build_timeline": insight_derived.handle,
                     "insight_build_vectors": insight_derived.handle,
+                    "insight_build_entity_alignment": insight_derived.handle,
                     "insight_stage_compressed_context": insight_derived.handle,
                     "insight_stage_overview_no_spoiler": insight_derived.handle,
                     "insight_stage_overview_story_summary": insight_derived.handle,
@@ -322,51 +295,11 @@ def run_worker(args: object) -> int:
                 jobs=job_repository,
             )
             job_handlers["insight_export_report"] = insight_export.handle
-            plugin_agent = PluginAgentWorkerService(
-                data_root=data_root,
-                engine=engine,
-                jobs=job_repository,
-            )
-            job_handlers["plugin_agent_execute"] = plugin_agent.handle
-            operation_repository = OperationRepository(engine)
-            plugin_operation_runtime = PluginOperationRuntime(
-                data_root=data_root,
-                engine=engine,
-                repository=operation_repository,
-            )
-            repairs = PageRepairService(
-                data_root=data_root,
-                engine=engine,
-                repository=operation_repository,
-                plugin_runtime=plugin_operation_runtime,
-            )
-            operation_runner = WorkerOperationRunner(
-                operation_repository,
-                worker_epoch_id=identity.epoch_id,
-                handlers={
-                    "page_repair": repairs.handle,
-                },
-            )
             qa_runner = InsightQAWorkerService(
                 data_root=data_root,
                 engine=engine,
                 worker_epoch_id=identity.epoch_id,
             )
-            model_lifecycle = WorkerModelLifecycle(
-                WorkerModelControlRepository(engine),
-                worker_epoch_id=identity.epoch_id,
-                idle_timeout_provider=(
-                    (lambda: float(scheduling_policy.load()["modelIdleSeconds"]))
-                    if scheduling_policy is not None
-                    else None
-                ),
-                release_callbacks=(
-                    plugin_job_runtime.release_cached_instances,
-                    plugin_operation_runtime.release_cached_instances,
-                ),
-                resident_models=resident_models,
-            )
-            preload_local_models(resident_models)
             maintenance = WorkerMaintenance(
                 data_root=data_root,
                 engine=engine,
@@ -378,27 +311,16 @@ def run_worker(args: object) -> int:
                 threshold = int(
                     scheduling_policy.load()["minAvailableMemoryMiB"]
                 )
-                if threshold == 0 or available_memory_mib() >= threshold:
-                    return True
-                try:
-                    model_lifecycle.release_for_memory_pressure()
-                except Exception as exc:
-                    if not is_sqlite_busy_error(exc):
-                        raise
-                    return False
-                return available_memory_mib() >= threshold
+                return threshold == 0 or available_memory_mib() >= threshold
 
             def run_immediate_work() -> bool:
                 try:
                     maintenance.run_browser_cleanup_if_due()
-                    if model_lifecycle.run_pending_release():
-                        return True
                     if not memory_admitted():
                         return False
-                    if operation_runner.run_one() or qa_runner.run_one():
-                        model_lifecycle.note_activity()
+                    if qa_runner.run_one():
                         return True
-                    return model_lifecycle.release_if_idle()
+                    return False
                 except Exception as exc:
                     if not is_sqlite_busy_error(exc):
                         raise
@@ -451,15 +373,13 @@ def run_worker(args: object) -> int:
                 admission_check=(
                     memory_admitted if scheduling_policy is not None else None
                 ),
-                on_activity=model_lifecycle.note_activity,
                 on_control_timeout=abort_stalled_attempt,
                 control_timeout_seconds=30.0 if identity.test_mode else 1.5,
-                plugin_runtime=plugin_job_runtime,
             )
             _write_ready_marker(data_root, identity)
             LOGGER.debug(
                 "Worker 服务初始化完成并写入 ready marker："
-                "epoch=%s，任务步骤处理器=%s，批处理器=3，操作处理器=4",
+                "epoch=%s，任务步骤处理器=%s，批处理器=3",
                 identity.epoch_id[:8],
                 len(job_handlers),
             )

@@ -519,54 +519,6 @@ class SettingsResolver:
             },
         }
 
-    def resolve_page_repair(self, *, page_id: str) -> dict[str, object]:
-        """Freeze the chapter's LaMA resize setting for one repair operation."""
-
-        with self.engine.connect() as connection:
-            row = connection.execute(
-                select(
-                    app_settings.c.payload_json,
-                    app_settings.c.revision,
-                    chapters.c.settings_memory_json,
-                    chapters.c.settings_memory_revision,
-                )
-                .select_from(pages)
-                .join(chapters, chapters.c.id == pages.c.chapter_id)
-                .join(
-                    app_settings,
-                    (app_settings.c.domain == "translation")
-                    & (app_settings.c.owner_user_id == effective_owner_id()),
-                )
-                .join(books, books.c.id == chapters.c.book_id)
-                .where(
-                    pages.c.id == page_id,
-                    books.c.owner_user_id == effective_owner_id(),
-                )
-            ).mappings().one_or_none()
-        if row is None:
-            raise ValueError("page or translation settings not found")
-        global_settings = compose_editable_settings(
-            "translation",
-            json.loads(row["payload_json"]),
-        )
-        chapter_memory = json.loads(row["settings_memory_json"])
-        if not isinstance(chapter_memory, Mapping):
-            raise ValueError("chapter settings memory must be an object")
-        effective = validate_setting_payload(
-            "translation",
-            _deep_merge(global_settings, chapter_memory),
-        )
-        return {
-            "disableResize": effective["lamaDisableResize"],
-            "regionalInpainting": effective["lamaRegionalInpainting"],
-            "settingsSnapshot": {
-                "appRevision": int(row["revision"]),
-                "chapterMemoryRevision": int(
-                    row["settings_memory_revision"]
-                ),
-            },
-        }
-
     def resolve_page_operation(
         self,
         *,
@@ -811,7 +763,6 @@ class SettingsResolver:
             "book_overview",
             "group_summary",
             "qa_response",
-            "question_decompose",
             "analysis_system",
         )
         provider_domains = (

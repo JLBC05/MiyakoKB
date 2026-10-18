@@ -33,7 +33,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  MODELS_RELEASE_TAG: models-storage
   PYTHON_VERSION: '3.12'
   PIP_NO_CACHE_DIR: '1'
 
@@ -54,12 +53,6 @@ jobs:
 
       - name: Verify release guard
         run: node --test .github/scripts/prepare_release.test.cjs
-
-      - name: Get extension version
-        id: extension
-        run: |
-          version=$(jq -er .version browser-extension/package.json)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Get version
         id: version
@@ -126,7 +119,6 @@ jobs:
             - CPU 版本：下载所有 `Saber-Translator-${{ steps.version.outputs.VERSION }}-cpu.7z*` 文件
             - GPU 版本：下载所有 `Saber-Translator-${{ steps.version.outputs.VERSION }}-gpu.7z*` 文件
             - 将所有分卷放在同一目录，使用 **7-Zip** 或 **Bandzip** 解压 `.7z.001` 文件即可
-            - 浏览器漫画翻译：下载 `saber-translator-browser-extension-v${{ steps.extension.outputs.version }}.zip` 和对应 `.sha256` 文件，按 ZIP 内 README 安装
             
             🔧 **源码部署用户：**
             - 下载所有 `models.z*` 分卷并放在同一目录，从 `models.zip` 解压到项目根目录，得到 `models/` 文件夹
@@ -161,9 +153,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      # --------------------------------------------------
-      # 2. 从 models-storage Release 下载模型文件
-      # --------------------------------------------------
       - name: Prepare build disk
         run: |
           # This hosted runner does not need the preinstalled Android SDK.
@@ -181,47 +170,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Download models from storage release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          Write-Host "Downloading models from release: ${{ env.MODELS_RELEASE_TAG }}"
-          gh release download ${{ env.MODELS_RELEASE_TAG }} --pattern "models.z*" --dir .
-          
-          Write-Host "Downloaded files:"
-          Get-ChildItem -Filter "models.z*" | Format-Table Name, @{N='SizeMB';E={[math]::Round($_.Length/1MB, 2)}}
-
-      # --------------------------------------------------
-      # 3. 解压模型文件
-      # --------------------------------------------------
-      - name: Extract models
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          Write-Host "Extracting models..."
-          7z x models.zip -y
-          
-          Write-Host "Models extracted. Directory contents:"
-          Get-ChildItem -Path models/ | Select-Object Name, @{N='SizeMB';E={[math]::Round($_.Length/1MB, 2)}}
-
-      - name: Verify required model files
-        run: python .github/scripts/check_models.py models
-
-      - name: Upload models to draft
-        if: matrix.variant == 'cpu'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python .github/scripts/upload_release_assets.py "${{ needs.prepare.outputs.tag_name }}" . "models.z*"
-
-      # --------------------------------------------------
-      # 4. 清理模型压缩包（节省磁盘空间）
-      # --------------------------------------------------
-      - name: Clean up model archives
-        run: |
-          Write-Host "Cleaning up model archives to save disk space..."
-          $workspace = (Resolve-Path -LiteralPath $env:GITHUB_WORKSPACE).Path
-          Get-ChildItem -LiteralPath $workspace -Filter 'models.z*' -File | Remove-Item -Force
 
       # --------------------------------------------------
       # 6. 安装依赖 (CPU 和 GPU 流程不同)
@@ -249,7 +197,6 @@ jobs:
           cache: npm
           cache-dependency-path: |
             vue-frontend/package-lock.json
-            browser-extension/package-lock.json
 
       - name: Build v2 frontend
         working-directory: vue-frontend
@@ -295,16 +242,6 @@ jobs:
         working-directory: vue-frontend
         run: npm run lint:ui:audit
 
-      - name: Verify and package browser extension
-        if: matrix.variant == 'cpu'
-        working-directory: browser-extension
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          npm ci
-          npm test
-          npm run typecheck
-          npm run package
-
       # --------------------------------------------------
       # 8. 使用 PyInstaller 打包
       # --------------------------------------------------
@@ -319,29 +256,8 @@ jobs:
           Write-Host "Build completed. Output directory:"
           Get-ChildItem -Path dist/ | Select-Object Name
 
-      # --------------------------------------------------
-      # 9. 验证 TorchScript 所需源码文件已随包生成
-      # --------------------------------------------------
-      - name: Verify TorchScript source files
-        run: |
-          $requiredFiles = @(
-            "dist\Saber-Translator\_internal\litelama\litelama.py",
-            "dist\Saber-Translator\_internal\kornia\geometry\epipolar\_metrics.py"
-          )
-
-          foreach ($file in $requiredFiles) {
-            if (-not (Test-Path $file)) {
-              Write-Host "Missing required TorchScript source file: $file"
-              exit 1
-            }
-            Write-Host "Verified source file: $file"
-          }
-
       - name: Probe packaged runtime
         run: python .github/scripts/probe_package.py dist/Saber-Translator/Saber-Translator.exe
-
-      - name: Verify bundled model files
-        run: python .github/scripts/check_models.py dist/Saber-Translator/_internal/models
 
       # --------------------------------------------------
       # 10. 7z 分卷压缩（最高压缩率）
@@ -400,12 +316,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python .github/scripts/upload_release_assets.py "${{ needs.prepare.outputs.tag_name }}" . "Saber-Translator-${{ needs.prepare.outputs.version }}-${{ matrix.variant }}.7z*"
-
-      - name: Upload browser extension to Release
-        if: matrix.variant == 'cpu'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python .github/scripts/upload_release_assets.py "${{ needs.prepare.outputs.tag_name }}" browser-extension/release "saber-translator-*.zip*"
 
   # ============================================================================
   # 完成 Job - 输出结果

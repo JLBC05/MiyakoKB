@@ -12,7 +12,6 @@ from tests_backend.v2.test_stage5_insight import (
     FakeInsightAlgorithms, _run_job, insight_platform,
 )
 from src.backend_v2.insight.commands import InsightAnalysisCommandService
-from src.backend_v2.insight.continuation import DefaultContinuationAlgorithms
 from src.backend_v2.insight.derived import (
     InsightDerivedRepository, ProviderDerivedAlgorithms, _normalized_timeline_result,
 )
@@ -20,9 +19,6 @@ from src.backend_v2.insight.worker import ProviderInsightAlgorithms
 from src.backend_v2.insight.repository import InsightRepository
 from src.backend_v2.settings.resolver import SettingsResolver
 from src.backend_v2.storage.schema import timeline_versions, timeline_characters, timeline_events, provider_settings
-from src.backend_v2.studio.service import DefaultStudioAlgorithms
-from src.backend_v2.translation.pipeline import CoreTranslationAlgorithms
-from src.shared.openai_execution import OpenAICompatibleBusinessRetriesExhaustedError
 
 
 def _config(platform):
@@ -56,52 +52,6 @@ def responses(monkeypatch):
     monkeypatch.setattr("src.shared.openai_execution.asyncio.sleep", sleep)
     monkeypatch.setattr("src.shared.openai_execution.time.sleep", lambda _: None)
     return values, calls
-
-
-@pytest.mark.parametrize("kind", ["overview", "compressed", "script", "page", "summary", "terms"])
-@pytest.mark.parametrize("exhaust", [False, True])
-def test_result_field_validation_uses_configured_retries(insight_platform, responses, kind, exhaust):
-    config = _config(insight_platform)
-    values, calls = responses
-    valid = {
-        "overview": {"title": "Title", "content": "Story"},
-        "compressed": {"summary": {"events": ["Story"]}},
-        "script": {"script": "Story"},
-        "page": {"storyText": "Story", "continuityText": "", "dialogueText": "", "characters": [], "finalPrompt": "Draw story"},
-        "summary": {"summary": "Story"},
-        "terms": {"terms": [{"source": " A ", "target": " B "}]},
-    }[kind]
-    bad = {"terms": [{"original": "A", "translation": "B"}]} if kind == "terms" else {}
-    values.extend([bad, bad if exhaust else valid])
-    pages = [{"pageId": "p", "pageNumber": 1, "analysis": {"summary": "Story"}}]
-
-    def generate():
-        if kind == "overview":
-            return ProviderDerivedAlgorithms().build_overview(pages, template="story_summary", config=config)
-        if kind == "compressed":
-            return ProviderDerivedAlgorithms().build_compressed_context(pages, config=config)
-        if kind == "script":
-            return DefaultContinuationAlgorithms().generate_script(context={}, config=config)
-        if kind == "page":
-            return DefaultContinuationAlgorithms().generate_page(ordinal=1, script="Story", previous=None, config=config)
-        if kind == "summary":
-            return DefaultStudioAlgorithms().summarize([], config=config)
-        return CoreTranslationAlgorithms().extract_terms(["A"], config["chat"], prompt="Return source and target")
-
-    if exhaust:
-        with pytest.raises(OpenAICompatibleBusinessRetriesExhaustedError):
-            generate()
-    else:
-        result = generate()
-        if kind == "terms":
-            assert result["candidates"] == [{"source": "A", "target": "B", "note": "", "matchMode": "text"}]
-        elif kind == "page":
-            assert result == {**valid, "status": "ready"}
-        elif kind == "script":
-            assert result == "Story"
-        else:
-            assert result == valid
-    assert len(calls) == 2
 
 
 def _page(number):

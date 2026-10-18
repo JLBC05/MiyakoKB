@@ -194,8 +194,7 @@ const COMPOSABLE_IMPLEMENTATION_HISTORY_RE = /从\s+[^*\n\r]+提取|【(?:简化
 const EXPLICIT_ANY_RE = /\bas\s+any\b|:\s*any\b|\bany\[\]/g
 const RELATIVE_EXPORT_RE = /\bexport\s+(?:type\s+)?(?:\*|\{[\s\S]*?\})\s+from\s+['"](\.[^'"]+)['"]/g
 const TYPE_BARREL_REQUIRED_EXPORTS = new Set([
-  './characterStudio',
-  './webImport',
+  './insight',
 ])
 const CSS_BLOCK_RE = /([^{}]+)\{([^{}]*)\}/g
 const CUSTOM_PROPERTY_RE = /(--[A-Za-z0-9_-]+)\s*:\s*([^;]+);/g

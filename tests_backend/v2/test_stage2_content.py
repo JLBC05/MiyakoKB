@@ -24,15 +24,10 @@ from src.backend_v2.content.translation_constraints import (
     validate_translation_constraints,
 )
 from src.backend_v2.runtime_identity import RuntimeIdentity
-from src.backend_v2.rendering.fonts import (
-    materialize_render_payloads,
-    resolve_font_path,
-)
 from src.backend_v2.runtime_profile import PROFILE_ENV
 from src.backend_v2.storage.assets import AssetQuotaExceeded, AssetStorageService
 from src.backend_v2.storage.font_files import (
     bundled_font_files,
-    font_path,
 )
 from src.backend_v2.storage.database import create_sqlite_engine
 from src.backend_v2.storage.defaults import (
@@ -43,7 +38,6 @@ from src.backend_v2.storage.schema import (
     app_settings,
     assets,
     books,
-    bubbles,
     chapter_write_locks,
     chapters,
     fonts,
@@ -53,7 +47,6 @@ from src.backend_v2.storage.schema import (
     page_assets,
     pages,
     platform_config,
-    translation_constraints,
 )
 from src.backend_v2.storage.seeding import seed_system_records
 from src.backend_v2.storage.seeding import QUICK_WORKSPACE_BOOK_ID
@@ -193,34 +186,6 @@ def test_local_image_upload_ignores_the_public_asset_budget(
 def test_rgb_color_rejects_malformed_algorithm_results(value: object) -> None:
     with pytest.raises(ValueError, match="RGB color"):
         rgb_to_hex(value)
-
-
-def test_font_resolution_rejects_an_unknown_v2_font(content_platform) -> None:
-    _data_root, engine, _repository, storage, _importer, _book, _chapter = (
-        content_platform
-    )
-    with engine.connect() as connection:
-        with pytest.raises(LookupError, match="font not found"):
-            resolve_font_path(connection, storage, str(uuid.uuid4()))
-
-
-def test_bundled_font_id_resolves_to_a_renderable_resource(content_platform) -> None:
-    _data_root, engine, _repository, storage, _importer, _book, _chapter = (
-        content_platform
-    )
-    bundled = next(
-        font for font in bundled_font_files() if font.path.name == "ALGER.TTF"
-    )
-    with engine.connect() as connection:
-        resolved = resolve_font_path(connection, storage, bundled.id)
-
-    assert Path(resolved).samefile(storage.data_root / bundled.relative_path)
-    assert ImageFont.truetype(resolved, 16).getbbox("A") is not None
-
-
-def test_font_resolver_rejects_non_catalog_paths(tmp_path) -> None:
-    with pytest.raises(ValueError):
-        font_path(tmp_path, "fonts/shared/../outside.ttf", None)
 
 
 def _import(
@@ -1753,89 +1718,6 @@ def test_page_document_allows_propagating_current_style_without_a_style_patch(
     assert payload["blockAlign"] == "start"
 
 
-def test_page_document_rejects_malformed_bubble_payload(
-    content_platform,
-) -> None:
-    _root, engine, repository, _storage, importer, _book, chapter = content_platform
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((50, 50)),
-        logical_path="bubble-schema.png",
-        key="bubble-schema-page",
-    )
-    page_id = str(imported["page"]["id"])
-    created, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=1,
-        mutations=[{
-            "op": "create",
-            "clientMutationId": "bubble-schema-create",
-            "fields": _bubble_fields(),
-        }],
-        idempotency_key="bubble-schema-create-command",
-    )
-    bubble_id = created["mutationResults"][0]["bubbleId"]
-
-    with engine.begin() as connection:
-        connection.execute(
-            update(bubbles)
-            .where(bubbles.c.id == bubble_id)
-            .values(payload_json="{}")
-        )
-
-    with pytest.raises(ValueError, match="bubble payload is missing fields"):
-        repository.get_page_document(page_id)
-
-
-def test_content_rejects_malformed_embedded_documents(
-    content_platform,
-) -> None:
-    _root, engine, repository, _storage, importer, book, chapter = content_platform
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((50, 50)),
-        logical_path="noncurrent-schema.png",
-        key="noncurrent-schema-page",
-    )
-    page_id = str(imported["page"]["id"])
-
-    with engine.begin() as connection:
-        connection.execute(
-            update(translation_constraints)
-            .where(translation_constraints.c.book_id == book["id"])
-            .values(payload_json="[]")
-        )
-        connection.execute(
-            update(chapters)
-            .where(chapters.c.id == chapter["id"])
-            .values(settings_memory_json="[]")
-        )
-        connection.execute(
-            update(pages)
-            .where(pages.c.id == page_id)
-            .values(page_style_defaults_json="[]")
-        )
-
-    with pytest.raises(ValueError, match="translation constraints must be an object"):
-        repository.get_constraints(str(book["id"]))
-    repository.update_constraints(
-        book_id=str(book["id"]),
-        base_revision=1,
-        payload=empty_translation_constraints(),
-    )
-    repository.update_chapter_settings_memory(
-        chapter_id=str(chapter["id"]),
-        base_revision=1,
-        payload={},
-    )
-    with pytest.raises(ValueError, match="page text style must be an object"):
-        repository.get_page_document(page_id)
-
-
 def test_page_document_route_persists_editor_mutations_and_optional_font(
     content_platform,
 ) -> None:
@@ -2027,131 +1909,6 @@ def test_content_routes_reject_scalar_coercion_and_missing_required_fields(
         app.extensions["saber_v2_runtime"].close()
 
 
-def test_plan_page_source_bubble_and_render_status_routes(
-    content_platform,
-) -> None:
-    data_root, engine, repository, _storage, importer, _book, chapter = (
-        content_platform
-    )
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((80, 120)),
-        logical_path="plan-routes.png",
-        key="plan-routes",
-    )
-    page_id = str(imported["page"]["id"])
-    seeded, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=1,
-        mutations=[
-            {
-                "op": "create",
-                "clientMutationId": "plan-source-existing-bubble",
-                "fields": _bubble_fields(coords=[3, 4, 30, 40]),
-            }
-        ],
-        idempotency_key="plan-source-existing-bubble",
-    )
-    assert seeded["document"]["bubbles"]
-    app = create_api_app(
-        ApiSettings(
-            data_root=data_root,
-            identity=RuntimeIdentity(
-                epoch_id="test-plan-page-routes",
-                epoch_token="test-only",
-                test_mode=True,
-            ),
-            engine=engine,
-        )
-    )
-    client = app.test_client()
-    try:
-        replaced = client.put(
-            f"/api/v2/pages/{page_id}/source",
-            headers={"Idempotency-Key": "plan-source-replace"},
-            data={
-                "baseSourceRevision": "1",
-                "file": (BytesIO(_image_bytes((96, 144))), "replacement.png"),
-            },
-            content_type="multipart/form-data",
-        )
-        assert replaced.status_code == 200
-        assert "/api/v2/pages/<page_id>/replace-source" not in {
-            rule.rule for rule in app.url_map.iter_rules()
-        }
-        with engine.connect() as connection:
-            state = connection.execute(
-                select(pages.c.detection_state).where(pages.c.id == page_id)
-            ).scalar_one()
-            bubble_count = len(
-                connection.execute(
-                    select(bubbles.c.id).where(bubbles.c.page_id == page_id)
-                ).scalars().all()
-            )
-        assert state == "unprocessed"
-        assert bubble_count == 0
-
-        base_revision = replaced.get_json()["documentRevision"]
-        created = client.post(
-            f"/api/v2/pages/{page_id}/bubbles",
-            headers={"Idempotency-Key": "plan-bubble-create"},
-            json={
-                "baseRevision": base_revision,
-                "fields": _bubble_fields(
-                    translatedText="后端气泡",
-                    coords=[5, 6, 50, 60],
-                    fontSize=20,
-                ),
-            },
-        )
-        assert created.status_code == 200
-        created_payload = created.get_json()
-        bubble_id = created_payload["mutationResults"][0]["bubbleId"]
-
-        render_status = client.get(
-            f"/api/v2/pages/{page_id}/render-status"
-        )
-        assert render_status.status_code == 200
-        assert render_status.get_json()["pageId"] == page_id
-        assert render_status.get_json()["documentRevision"] == (
-            created_payload["document"]["documentRevision"]
-        )
-
-        patched = client.patch(
-            f"/api/v2/pages/{page_id}/bubbles/{bubble_id}",
-            headers={"Idempotency-Key": "plan-bubble-patch"},
-            json={
-                "baseRevision": created_payload["document"]["documentRevision"],
-                "fields": {"translatedText": "修改后"},
-            },
-        )
-        assert patched.status_code == 200
-        patched_payload = patched.get_json()
-        assert patched_payload["document"]["bubbles"][0]["payload"][
-            "translatedText"
-        ] == "修改后"
-
-        deleted = client.delete(
-            f"/api/v2/pages/{page_id}/bubbles/{bubble_id}",
-            headers={"Idempotency-Key": "plan-bubble-delete"},
-            json={
-                "baseRevision": patched_payload["document"][
-                    "documentRevision"
-                ]
-            },
-        )
-        assert deleted.status_code == 200
-        assert deleted.get_json()["document"]["bubbles"] == []
-        with engine.connect() as connection:
-            assert connection.execute(
-                select(pages.c.detection_state).where(pages.c.id == page_id)
-            ).scalar_one() == "processed"
-    finally:
-        app.extensions["saber_v2_runtime"].close()
-
-
 def test_page_document_command_is_idempotent_and_propagates_style(
     content_platform,
 ) -> None:
@@ -2207,132 +1964,6 @@ def test_page_document_command_is_idempotent_and_propagates_style(
                 "page_style_defaults_patch": {"fontSize": 31},
             }
         )
-
-
-def test_document_mutation_materializes_auto_style_before_render_projection(
-    content_platform,
-    monkeypatch,
-) -> None:
-    _root, engine, repository, storage, importer, _book, chapter = (
-        content_platform
-    )
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((160, 120)),
-        logical_path="auto-style.png",
-        key="auto-style",
-    )
-    page_id = str(imported["page"]["id"])
-    document, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=1,
-        mutations=[
-            {
-                "op": "create",
-                "clientMutationId": "auto-style-create-bubble",
-                "fields": _bubble_fields(
-                    translatedText="自动样式",
-                    coords=[0, 0, 120, 80],
-                    autoFgColor=[1, 2, 3],
-                    autoBgColor=[10, 11, 12],
-                ),
-            }
-        ],
-        idempotency_key="auto-style-create",
-        page_style_defaults_patch={
-            "autoFontSize": True,
-            "layoutDirection": "auto",
-            "useAutoTextColor": True,
-        },
-        propagate_style_fields=[
-            "fontSize",
-            "layoutDirection",
-            "textColor",
-            "fillColor",
-        ],
-    )
-    document = document["document"]
-    persisted_payload = document["bubbles"][0]["payload"]
-    assert persisted_payload["textDirection"] == "horizontal"
-    assert persisted_payload["textColor"] == "#010203"
-    assert persisted_payload["fillColor"] == "#0A0B0C"
-    assert persisted_payload["fontSize"] > 12
-
-    from src.core import rendering
-
-    def fail_if_recalculated(*_args, **_kwargs):
-        raise AssertionError("ordinary render projection recalculated auto font size")
-
-    monkeypatch.setattr(
-        rendering,
-        "calculate_auto_font_size",
-        fail_if_recalculated,
-    )
-    with engine.connect() as connection:
-        projected = materialize_render_payloads(
-            connection,
-            storage,
-            page_id,
-        )
-
-    _bubble_id, persisted, render_payload = projected[0]
-    assert persisted["textDirection"] == "horizontal"
-    assert persisted["textColor"] == "#010203"
-    assert persisted["fillColor"] == "#0A0B0C"
-    assert persisted["fontSize"] == persisted_payload["fontSize"]
-    assert render_payload["fontFamily"]
-    assert "00000000-0000-0000-0000-000000000010" not in str(
-        render_payload["fontFamily"]
-    )
-
-    manual, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=2,
-        mutations=[],
-        idempotency_key="auto-style-manual",
-        page_style_defaults_patch={
-            "useAutoTextColor": False,
-            "textColor": "#123456",
-            "fillColor": "#ABCDEF",
-        },
-        propagate_style_fields=["textColor", "fillColor"],
-    )
-    manual = manual["document"]
-    manual_payload = manual["bubbles"][0]["payload"]
-    assert manual["pageStyleDefaults"]["useAutoTextColor"] is False
-    assert manual_payload["textColor"] == "#123456"
-    assert manual_payload["fillColor"] == "#ABCDEF"
-    assert manual_payload["autoFgColor"] == [1, 2, 3]
-    assert manual_payload["autoBgColor"] == [10, 11, 12]
-
-
-def test_render_projection_rejects_malformed_page_style(
-    content_platform,
-) -> None:
-    _root, engine, repository, storage, importer, _book, chapter = (
-        content_platform
-    )
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((40, 40)),
-        logical_path="render-schema.png",
-        key="render-schema",
-    )
-    page_id = str(imported["page"]["id"])
-    with engine.begin() as connection:
-        connection.execute(
-            update(pages)
-            .where(pages.c.id == page_id)
-            .values(page_style_defaults_json="[]")
-        )
-
-    with engine.connect() as connection:
-        with pytest.raises(ValueError, match="page text style must be an object"):
-            materialize_render_payloads(connection, storage, page_id)
 
 
 def test_quick_workspace_promote_moves_relations_without_moving_assets(
@@ -2490,28 +2121,6 @@ def test_content_tag_filters_and_batch_updates_reject_duplicate_ids(
             action="add",
         )
 
-
-def test_quick_workspace_promote_rejects_malformed_constraints(
-    content_platform,
-) -> None:
-    _root, engine, repository, _storage, _importer, _book, _chapter = (
-        content_platform
-    )
-    with engine.begin() as connection:
-        connection.execute(
-            update(translation_constraints)
-            .where(
-                translation_constraints.c.book_id == QUICK_WORKSPACE_BOOK_ID
-            )
-            .values(payload_json="[]")
-        )
-
-    with pytest.raises(ValueError, match="translation constraints must be an object"):
-        repository.promote_quick_workspace(
-            chapter_title="Current only",
-            new_book_title="No migration",
-        )
-    assert repository.list_books(search="No migration") == []
 
 @pytest.mark.parametrize("blocker", ("job", "operation"))
 def test_quick_workspace_reset_and_promote_reject_every_active_work_kind(

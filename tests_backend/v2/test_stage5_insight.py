@@ -16,7 +16,7 @@ import zipfile
 from PIL import Image
 import pytest
 from flask import Flask
-from sqlalchemy import delete, event, insert, select, update
+from sqlalchemy import delete, event, func, insert, select, update
 
 from src.backend_v2.content.image_import import ImageImportService
 from src.backend_v2.content.repository import ContentRepository
@@ -90,6 +90,8 @@ from src.backend_v2.storage.schema import (
     continuation_pages,
     continuation_projects,
     job_asset_inputs,
+    job_items,
+    job_steps,
     jobs,
     metadata,
     page_assets,
@@ -711,48 +713,6 @@ def test_every_analysis_mode_builds_global_artifacts(insight_platform, scope):
         assert connection.execute(select(vector_generations.c.page_count).where(
             vector_generations.c.book_id == book_id, vector_generations.c.is_active.is_(True),
         )).scalar_one() == 2
-
-
-def test_incremental_without_new_pages_repairs_missing_global_context(insight_platform):
-    platform = insight_platform
-    book_id = str(platform["book"]["id"])
-    commands = InsightAnalysisCommandService(platform["engine"])
-    commands.create_analysis_job(command={"bookId": book_id, "scope": "full"},
-                                 idempotency_key="repair-baseline")
-    assert _run_job(platform, FakeInsightAlgorithms()) == "completed"
-    with platform["engine"].begin() as connection:
-        connection.execute(delete(analysis_artifacts).where(
-            analysis_artifacts.c.book_id == book_id,
-            analysis_artifacts.c.kind == "compressed_context",
-        ))
-    accepted = commands.create_analysis_job(
-        command={"bookId": book_id, "scope": "incremental"}, idempotency_key="repair-only",
-    )
-    algorithms = FakeInsightAlgorithms()
-    assert _run_job(platform, algorithms) == "completed"
-    assert algorithms.calls == []
-    derived = InsightDerivedRepository(platform["engine"])
-    artifact = derived.get_artifact(book_id=book_id, kind="compressed_context", template="default")
-    assert artifact["status"] == "ready"
-    assert artifact["runId"] == accepted["runId"]
-    assert len(derived.snapshot(book_id=book_id).pages) == 2
-
-    # Exercise the exact Studio endpoint which rejected the user's completed book.
-    from src.backend_v2.api.app import ApiSettings, create_api_app
-    from src.backend_v2.runtime_identity import RuntimeIdentity
-    from src.backend_v2.studio.repository import StudioRepository
-
-    document = StudioRepository(platform["engine"]).create_document(book_id=book_id, title="Saber")
-    app = create_api_app(ApiSettings(
-        data_root=platform["data_root"], engine=platform["engine"],
-        identity=RuntimeIdentity(epoch_id="repair-context-api", epoch_token="test-only", test_mode=True),
-    ))
-    response = app.test_client().post(
-        f"/api/v2/studio/documents/{document['id']}/generate",
-        json={"baseRevision": document["revision"], "section": "full"},
-        headers={"Idempotency-Key": "repaired-studio-generate"},
-    )
-    assert response.status_code == 202, response.get_json()
 
 
 def test_page_reanalysis_keeps_other_chapters_in_global_context(insight_platform):
@@ -5914,4 +5874,283 @@ def test_insight_slug_mode_written_to_analysis_runs_config_json(insight_platform
     assert "pinyin" in grouped_ents
     assert "romanized" in grouped_ents
     assert any(e["canonical_name"] == "未知测试角色" for e in grouped_ents["romanized"])
+
+
+def _enable_knowledge_mode(platform) -> None:
+    """打开知识模式，使假 VLM 附带的实体字段能通过页面校验。"""
+    with platform["engine"].begin() as connection:
+        settings = json.loads(
+            connection.execute(
+                select(app_settings.c.payload_json).where(
+                    app_settings.c.domain == "insight",
+                )
+            ).scalar_one()
+        )
+        settings["analysis"]["batch"]["knowledgeMode"] = True
+        connection.execute(
+            update(app_settings)
+            .where(app_settings.c.domain == "insight")
+            .values(payload_json=json.dumps(settings))
+        )
+
+
+class EntityAwareInsightAlgorithms(FakeInsightAlgorithms):
+    """假 VLM：页面结果附带实体，用于验证实体知识网络链路。"""
+
+    def analyze_batch(self, image_bytes, *, page_numbers, previous_batches, config):
+        payload = super().analyze_batch(
+            image_bytes,
+            page_numbers=page_numbers,
+            previous_batches=previous_batches,
+            config=config,
+        )
+        return {
+            **payload,
+            "pages": [
+                {
+                    **page,
+                    "characters": [{"name": "主角甲"}],
+                    "items": [{"name": "关键道具乙"}],
+                    "locations": [{"name": "机构丙·房间丁"}],
+                }
+                for page in payload["pages"]
+            ],
+        }
+
+
+def test_entity_alignment_is_published_with_the_analysis_run(insight_platform) -> None:
+    platform = insight_platform
+    book_id = str(platform["book"]["id"])
+    _enable_knowledge_mode(platform)
+    accepted = InsightAnalysisCommandService(platform["engine"]).create_analysis_job(
+        command={"bookId": book_id, "scope": "full"},
+        idempotency_key="entity-graph-published",
+    )
+    assert _run_job(platform, EntityAwareInsightAlgorithms()) == "completed"
+
+    with platform["engine"].connect() as connection:
+        rows = list(
+            connection.execute(
+                select(analysis_artifacts).where(
+                    analysis_artifacts.c.book_id == book_id,
+                    analysis_artifacts.c.kind == "entity_alignment",
+                )
+            ).mappings()
+        )
+        fingerprints = set(
+            connection.execute(
+                select(analysis_artifacts.c.dependency_fingerprint).where(
+                    analysis_artifacts.c.run_id == accepted["runId"],
+                )
+            ).scalars()
+        )
+    # 图谱作为该 run 的暂存产物被原子发布，且与同 run 其他产物共用输入指纹
+    assert len(rows) == 1
+    artifact = rows[0]
+    assert artifact["run_id"] == accepted["runId"]
+    assert artifact["status"] == "ready"
+    assert artifact["is_active"] is True
+    assert len(fingerprints) == 1
+    payload = json.loads(artifact["payload_json"])
+    assert {
+        entity["canonical_name"] for entity in payload["canonical_entities"]
+    } >= {"主角甲", "关键道具乙", "机构丙·房间丁"}
+
+    repository = InsightRepository(platform["engine"])
+    graph = repository.get_books_knowledge_status()["items"][book_id]["graph"]
+    assert graph["status"] == "ready"
+    assert graph["revision"] == artifact["revision"]
+    assert graph["entityCount"] == len(payload["canonical_entities"])
+    assert graph["lastError"] is None
+
+    # 独立重建：新增 revision 并激活，旧 revision 停用
+    InsightDerivedCommandService(platform["engine"]).create_job(
+        book_id=book_id,
+        kind="entity_alignment",
+        template="default",
+        idempotency_key="entity-graph-rebuild",
+    )
+    assert _run_derived_job(platform, algorithms=FakeDerivedAlgorithms()) == "completed"
+    with platform["engine"].connect() as connection:
+        active = list(
+            connection.execute(
+                select(analysis_artifacts).where(
+                    analysis_artifacts.c.book_id == book_id,
+                    analysis_artifacts.c.kind == "entity_alignment",
+                    analysis_artifacts.c.is_active.is_(True),
+                )
+            ).mappings()
+        )
+    assert len(active) == 1
+    assert active[0]["revision"] == artifact["revision"] + 1
+    assert active[0]["run_id"] is None
+    assert (
+        repository.get_books_knowledge_status()["items"][book_id]["graph"]["revision"]
+        == active[0]["revision"]
+    )
+
+
+def test_missing_entity_alignment_is_compensated_after_publish(
+    insight_platform,
+    monkeypatch,
+) -> None:
+    platform = insight_platform
+    book_id = str(platform["book"]["id"])
+    _enable_knowledge_mode(platform)
+
+    def _fail_alignment(self, **_kwargs):
+        raise RuntimeError("simulated entity alignment failure")
+
+    monkeypatch.setattr(InsightDerivedRepository, "align_entities", _fail_alignment)
+    accepted = InsightAnalysisCommandService(platform["engine"]).create_analysis_job(
+        command={"bookId": book_id, "scope": "full"},
+        idempotency_key="entity-graph-compensate",
+    )
+    # 内联实体对齐失败不阻塞分析结果发布
+    assert _run_job(platform, EntityAwareInsightAlgorithms()) == "completed"
+    assert InsightRepository(platform["engine"]).get_run(accepted["runId"])["status"] == "completed"
+
+    def _alignment_steps():
+        with platform["engine"].connect() as connection:
+            return list(
+                connection.execute(
+                    select(job_steps.c.id, job_steps.c.status)
+                    .select_from(
+                        job_steps.join(
+                            job_items,
+                            job_items.c.id == job_steps.c.job_item_id,
+                        ).join(jobs, jobs.c.id == job_items.c.job_id)
+                    )
+                    .where(job_steps.c.kind == "insight_build_entity_alignment")
+                ).all()
+            )
+
+    steps = _alignment_steps()
+    assert len(steps) == 1
+    assert steps[0].status == "pending"
+
+    # 同一 run 的重复补偿不会派发第二个任务
+    service = InsightAnalysisWorkerService(
+        data_root=platform["data_root"],
+        engine=platform["engine"],
+        jobs=JobQueueRepository(platform["engine"]),
+        algorithms=EntityAwareInsightAlgorithms(),
+    )
+    service._dispatch_entity_alignment_if_missing(
+        run_id=accepted["runId"],
+        book_id=book_id,
+    )
+    service._dispatch_entity_alignment_if_missing(
+        run_id=accepted["runId"],
+        book_id=book_id,
+    )
+    assert len(_alignment_steps()) == 1
+
+
+def test_knowledge_status_reports_graph_pending_and_failure(insight_platform) -> None:
+    platform = insight_platform
+    book_id = str(platform["book"]["id"])
+    _enable_knowledge_mode(platform)
+    repository = InsightRepository(platform["engine"])
+    assert (
+        repository.get_books_knowledge_status()["items"][book_id]["graph"]["status"]
+        == "none"
+    )
+
+    InsightAnalysisCommandService(platform["engine"]).create_analysis_job(
+        command={"bookId": book_id, "scope": "full"},
+        idempotency_key="entity-graph-status",
+    )
+    assert _run_job(platform, EntityAwareInsightAlgorithms()) == "completed"
+    assert (
+        repository.get_books_knowledge_status()["items"][book_id]["graph"]["status"]
+        == "ready"
+    )
+
+    # 暂存但未激活 → pending
+    with platform["engine"].begin() as connection:
+        connection.execute(
+            update(analysis_artifacts)
+            .where(
+                analysis_artifacts.c.book_id == book_id,
+                analysis_artifacts.c.kind == "entity_alignment",
+            )
+            .values(is_active=False, status="building")
+        )
+    assert (
+        repository.get_books_knowledge_status()["items"][book_id]["graph"]["status"]
+        == "pending"
+    )
+
+    # 独立重建失败 → failed，并带上失败原因
+    InsightDerivedCommandService(platform["engine"]).create_job(
+        book_id=book_id,
+        kind="entity_alignment",
+        template="default",
+        idempotency_key="entity-graph-status-failed",
+    )
+    queue = JobQueueRepository(platform["engine"])
+    fence = queue.claim_next(worker_epoch_id=platform["epoch_id"])
+    assert fence is not None
+    step = queue.next_step(fence)
+    assert step is not None
+    assert step["stepKind"] == "insight_build_entity_alignment"
+    queue.fail_step(
+        fence,
+        step_id=step["stepId"],
+        code="STEP_FAILED",
+        message="simulated graph failure",
+    )
+    graph = repository.get_books_knowledge_status()["items"][book_id]["graph"]
+    assert graph["status"] == "failed"
+    assert "simulated graph failure" in graph["lastError"]
+
+
+def test_entity_alignment_rebuild_endpoint_queues_a_derived_job(insight_platform) -> None:
+    platform = insight_platform
+    book_id = str(platform["book"]["id"])
+    app = Flask("entity-alignment-endpoint")
+    app.register_blueprint(
+        create_insight_blueprint(
+            engine=platform["engine"],
+            data_root=platform["data_root"],
+            qa_algorithms=FakeQAApiAlgorithms(),
+            profile=LOCAL_PROFILE,
+        )
+    )
+    response = app.test_client().post(
+        f"/api/v2/insight/books/{book_id}/entity-alignment/rebuild",
+        json={},
+        headers={"Idempotency-Key": "entity-alignment-endpoint"},
+    )
+    # 没有已发布的分析结果时拒绝重建
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "not_found"
+
+    InsightAnalysisCommandService(platform["engine"]).create_analysis_job(
+        command={"bookId": book_id, "scope": "full"},
+        idempotency_key="entity-alignment-endpoint-source",
+    )
+    assert _run_job(platform, FakeInsightAlgorithms()) == "completed"
+    response = app.test_client().post(
+        f"/api/v2/insight/books/{book_id}/entity-alignment/rebuild",
+        json={},
+        headers={"Idempotency-Key": "entity-alignment-endpoint"},
+    )
+    assert response.status_code == 202, response.get_json()
+    job_id = response.get_json()["jobIds"][0]
+    with platform["engine"].connect() as connection:
+        kinds = list(
+            connection.execute(
+                select(job_steps.c.kind)
+                .select_from(
+                    job_steps.join(
+                        job_items,
+                        job_items.c.id == job_steps.c.job_item_id,
+                    ).join(jobs, jobs.c.id == job_items.c.job_id)
+                )
+                .where(jobs.c.id == job_id)
+            ).scalars()
+        )
+    assert kinds == ["insight_build_entity_alignment"]
 

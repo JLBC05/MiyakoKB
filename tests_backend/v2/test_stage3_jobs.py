@@ -58,7 +58,6 @@ from src.backend_v2.storage.schema import (
     operations,
     pages,
     process_epochs,
-    render_requests,
     web_import_drafts,
 )
 from src.backend_v2.storage.seeding import seed_system_records
@@ -1590,101 +1589,6 @@ def test_releasing_chapter_lock_unblocks_waiter_atomically(job_platform) -> None
     assert event_types[-2:] == ["job_blocked", "job_unblocked"]
     claimed = repository.claim_next(worker_epoch_id=worker_epoch_id)
     assert claimed is not None and claimed.job_id == waiter_id
-
-
-def test_write_job_reserves_chapter_and_preempts_old_render_work(
-    job_platform,
-) -> None:
-    engine, repository, _book, chapter, worker_epoch_id = job_platform
-    page_id = str(uuid.uuid4())
-    render_id = str(uuid.uuid4())
-    with engine.begin() as connection:
-        connection.execute(
-            insert(pages).values(
-                id=page_id,
-                chapter_id=str(chapter["id"]),
-                ordinal=1,
-                logical_source_path="pending-render.png",
-                render_status="stale",
-            )
-        )
-        connection.execute(
-            insert(render_requests).values(
-                id=render_id,
-                page_id=page_id,
-                requested_revision=1,
-                status="pending",
-            )
-        )
-    job_id = _create_job(
-        repository,
-        kind="translation",
-        chapter_id=str(chapter["id"]),
-    )
-    fence = repository.claim_next(worker_epoch_id=worker_epoch_id)
-    assert fence is not None and fence.job_id == job_id
-    with engine.connect() as connection:
-        assert connection.execute(
-            select(chapter_write_locks.c.job_id).where(
-                chapter_write_locks.c.chapter_id == str(chapter["id"])
-            )
-        ).scalar_one() == job_id
-        render = connection.execute(
-            select(
-                render_requests.c.status,
-                render_requests.c.attempt_id,
-                render_requests.c.executor_epoch_id,
-                render_requests.c.error_json,
-            ).where(render_requests.c.id == render_id)
-        ).one()
-    assert render[:3] == ("failed", None, None)
-    assert json.loads(render.error_json)["code"] == "DURABLE_JOB_PREEMPTED"
-    with pytest.raises(ContentLocked):
-        ContentRepository(engine).delete_page(page_id)
-
-    cancelled = repository.request_cancel(job_id)
-    assert cancelled["blockedReason"] is None
-    assert cancelled["blockedByJobId"] is None
-
-
-def test_write_job_claims_immediately_after_preempting_pending_render(
-    job_platform,
-) -> None:
-    engine, repository, _book, chapter, worker_epoch_id = job_platform
-    page_id = str(uuid.uuid4())
-    render_id = str(uuid.uuid4())
-    with engine.begin() as connection:
-        connection.execute(
-            insert(pages).values(
-                id=page_id,
-                chapter_id=str(chapter["id"]),
-                ordinal=1,
-                logical_source_path="preempted-render.png",
-                render_status="stale",
-            )
-        )
-        connection.execute(
-            insert(render_requests).values(
-                id=render_id,
-                page_id=page_id,
-                requested_revision=1,
-                status="pending",
-            )
-        )
-    job_id = _create_job(
-        repository,
-        kind="translation",
-        chapter_id=str(chapter["id"]),
-    )
-
-    fence = repository.claim_next(worker_epoch_id=worker_epoch_id)
-    assert fence is not None and fence.job_id == job_id
-    with engine.connect() as connection:
-        assert connection.execute(
-            select(render_requests.c.status).where(
-                render_requests.c.id == render_id
-            )
-        ).scalar_one() == "failed"
 
 
 @pytest.mark.parametrize("terminal_step", ["save", "publish_clean", "detect"])

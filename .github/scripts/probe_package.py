@@ -16,7 +16,7 @@ def main() -> None:
         version = subprocess.run([*command, "--version"], cwd=directory, capture_output=True, text=True, timeout=120, check=True)
         if version.stdout.strip() != manifest["version"]:
             raise RuntimeError("Packaged version differs from release manifest")
-        for role in ("desktop", "launcher", "api", "worker"):
+        for role in ("launcher", "api", "worker"):
             result = subprocess.run(
                 [*command, "--role", role, "--probe", "--test-mode",
                  "--data-dir", str(Path(directory) / role)],

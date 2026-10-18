@@ -279,15 +279,6 @@ class PublicUserPolicyAccess:
         self._require_page_inpaint_models(page_ids, result.get("textStyleSnapshot"))
         return result
 
-    def apply_page_repair_settings(self, value: Mapping[str, Any]) -> dict[str, Any]:
-        result = deepcopy(dict(value))
-        if not self.restricted():
-            return result
-        lama = self.policy()["settings"]["lamaDisableResize"]
-        if not lama["editable"]:
-            result["disableResize"] = lama["value"]
-        return result
-
     def require_inpaint_method(self, method: object) -> None:
         model = _INPAINT_MODELS.get(str(method))
         if model is not None:

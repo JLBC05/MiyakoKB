@@ -8,21 +8,16 @@ import psutil
 import pytest
 from sqlalchemy import select, update
 
-from src.backend_v2.browser_extension.auth import (
+from src.backend_v2.launcher.entrypoint import (
     BROWSER_EXTENSION_ENABLED_ENV,
     BROWSER_EXTENSION_TOKEN_ENV,
-)
-from src.backend_v2.launcher.entrypoint import (
     LauncherConfig,
     LauncherState,
     LauncherSupervisor,
-    RESIDENT_MODEL_WORKER_READY_TIMEOUT_SECONDS,
     _child_environment,
     _new_registration,
     _read_api_health,
-    _role_command,
     _spawn,
-    _start_child,
 )
 from src.backend_v2.logging_config import STREAM_FRAME_ENV
 from src.backend_v2.runtime_identity import INTERNAL_HEALTH_TOKEN_HEADER
@@ -152,98 +147,6 @@ def test_launcher_authenticates_its_internal_api_health_request(
         INTERNAL_HEALTH_TOKEN_HEADER.lower(): "epoch-token"
     }
     assert captured["timeout"] == 0.5
-
-
-def test_launcher_passes_resident_models_only_to_the_worker(tmp_path) -> None:
-    config = LauncherConfig(
-        data_root=tmp_path,
-        host="127.0.0.1",
-        port=5000,
-        resident_models=("manga_ocr", "detector_yolo", "manga_ocr"),
-    )
-
-    worker = _role_command(
-        "worker",
-        data_root=tmp_path,
-        host=config.host,
-        port=config.port,
-        profile=config.profile,
-        resident_models=config.resident_models,
-    )
-    api = _role_command(
-        "api",
-        data_root=tmp_path,
-        host=config.host,
-        port=config.port,
-        profile=config.profile,
-        resident_models=config.resident_models,
-    )
-
-    assert config.resident_models == ("detector_yolo", "manga_ocr")
-    assert worker[-4:] == [
-        "--resident-model",
-        "detector_yolo",
-        "--resident-model",
-        "manga_ocr",
-    ]
-    assert "--resident-model" not in api
-
-
-def test_resident_worker_gets_a_preload_aware_startup_timeout(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    waited: dict[str, object] = {}
-
-    class FakeProcess:
-        pid = 1234
-
-        @staticmethod
-        def poll():
-            return None
-
-    class FakeRepository:
-        @staticmethod
-        def register(_registration) -> None:
-            return None
-
-        @staticmethod
-        def bind_pid(_registration, _pid) -> bool:
-            return True
-
-    class FakeJob:
-        @staticmethod
-        def assign(_process) -> None:
-            return None
-
-    monkeypatch.setattr(
-        "src.backend_v2.launcher.entrypoint._spawn",
-        lambda *_args, **_kwargs: FakeProcess(),
-    )
-    monkeypatch.setattr(
-        "src.backend_v2.launcher.entrypoint._start_output_reader",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        "src.backend_v2.launcher.entrypoint._wait_for_worker",
-        lambda *_args, **kwargs: waited.update(kwargs),
-    )
-
-    _start_child(
-        role="worker",
-        data_root=tmp_path,
-        host="127.0.0.1",
-        port=5000,
-        profile="local",
-        repository=FakeRepository(),  # type: ignore[arg-type]
-        child_job=FakeJob(),  # type: ignore[arg-type]
-        restart_count=0,
-        resident_models=("detector_yolo",),
-    )
-
-    assert waited["timeout_seconds"] == (
-        RESIDENT_MODEL_WORKER_READY_TIMEOUT_SECONDS
-    )
 
 
 def test_stop_requested_before_run_is_not_lost(tmp_path) -> None:

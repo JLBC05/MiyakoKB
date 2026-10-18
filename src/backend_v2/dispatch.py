@@ -6,7 +6,6 @@ import argparse
 import logging
 from collections.abc import Sequence
 
-from src.backend_v2.local_models import LOCAL_MODEL_IDS
 from src.backend_v2.runtime_profile import PROFILE_NAMES
 from src.shared.user_logging import user_log
 
@@ -52,24 +51,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
         help="Console log level. Detailed DEBUG logs are always kept in log files.",
     )
-    parser.add_argument(
-        "--resident-model",
-        action="append",
-        choices=LOCAL_MODEL_IDS,
-        default=[],
-        help=(
-            "Preload a built-in local model and keep it resident in the Worker. "
-            "Repeat this option to select multiple models."
-        ),
-    )
     return parser
 
 
 def dispatch(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    if args.resident_model and args.role not in {"launcher", "worker"}:
-        parser.error("--resident-model is only supported by launcher and worker roles")
 
     if args.role == "storage-migrator":
         from src.storage_migrator.entrypoint import run_migrator

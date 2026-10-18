@@ -24,7 +24,6 @@ def test_production_spec_uses_only_the_backend_first_entrypoint() -> None:
     assert "'src.backend_v2.api.entrypoint'" in spec
     assert "'src.backend_v2.worker.entrypoint'" in spec
     assert "'src.backend_v2.launcher.entrypoint'" in spec
-    assert "'src.backend_v2.desktop.entrypoint'" in spec
     assert "'PySide6'" not in spec.split("excludes =", 1)[1].split("]", 1)[0]
     assert "'desktop', 'assets'" in spec
     assert "'desktop', 'assets', 'app-icon.ico'" in spec
@@ -101,22 +100,6 @@ def test_production_spec_has_no_missing_project_hidden_imports() -> None:
             missing.append(module_name)
 
     assert missing == []
-
-
-def test_production_spec_lists_only_current_ctd_runtime_modules() -> None:
-    spec = (PROJECT_ROOT / "app.spec").read_text(encoding="utf-8")
-
-    for module_name in (
-        "src.interfaces.ctd.basemodel",
-        "src.interfaces.ctd.detector",
-        "src.interfaces.ctd.utils.db_utils",
-        "src.interfaces.ctd.utils.imgproc_utils",
-        "src.interfaces.ctd.utils.yolov5_utils",
-        "src.interfaces.ctd.yolov5.common",
-        "src.interfaces.ctd.yolov5.yolo",
-    ):
-        assert repr(module_name) in spec
-    assert "完整 - 包含所有子模块" not in spec
 
 
 def test_release_workflow_builds_the_triggering_revision() -> None:

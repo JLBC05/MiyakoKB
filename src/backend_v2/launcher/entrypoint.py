@@ -36,7 +36,6 @@ from src.backend_v2.logging_config import (
     STREAM_FRAME_ENV,
     configure_backend_logging,
 )
-from src.backend_v2.local_models import normalize_resident_models
 BROWSER_EXTENSION_ENABLED_ENV = "SABER_BROWSER_EXTENSION_ENABLED"
 BROWSER_EXTENSION_TOKEN_ENV = "SABER_BROWSER_EXTENSION_TOKEN"
 from src.backend_v2.paths import (
@@ -83,7 +82,6 @@ MAX_CONSECUTIVE_RESTARTS = 3
 RESTART_STABILITY_SECONDS = 30.0
 TORCH_CUDNN_V8_API_LRU_CACHE_LIMIT_ENV = "TORCH_CUDNN_V8_API_LRU_CACHE_LIMIT"
 WORKER_CUDNN_V8_API_LRU_CACHE_LIMIT = "1000"
-RESIDENT_MODEL_WORKER_READY_TIMEOUT_SECONDS = 600.0
 LOGGER = logging.getLogger("saber.launcher")
 
 
@@ -113,16 +111,8 @@ class LauncherConfig:
     profile: str = "local"
     log_level: str | None = None
     open_browser: bool = False
-    resident_models: tuple[str, ...] = ()
     browser_extension_enabled: bool = False
     browser_extension_token: str = field(default="", repr=False)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "resident_models",
-            normalize_resident_models(self.resident_models),
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +143,6 @@ def _role_command(
     host: str,
     port: int,
     profile: str,
-    resident_models: tuple[str, ...] = (),
 ) -> list[str]:
     if getattr(sys, "frozen", False):
         command = [sys.executable]
@@ -172,9 +161,6 @@ def _role_command(
         "--profile",
         profile,
     ]
-    if role == "worker":
-        for model_id in normalize_resident_models(resident_models):
-            role_command.extend(("--resident-model", model_id))
     return role_command
 
 
@@ -497,7 +483,6 @@ def _probe_payload(
     host: str,
     port: int,
     profile: str = "local",
-    resident_models: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     return {
         "role": "launcher",
@@ -514,7 +499,6 @@ def _probe_payload(
             host=host,
             port=port,
             profile=profile,
-            resident_models=resident_models,
         ),
     }
 
@@ -545,7 +529,6 @@ def _start_child(
     log_level: str | None = None,
     credential_broker_url: str | None = None,
     credential_broker_token: str | None = None,
-    resident_models: tuple[str, ...] = (),
     output_callback: ChildOutputCallback | None = None,
     stop_event: threading.Event | None = None,
     browser_extension_enabled: bool = False,
@@ -570,7 +553,6 @@ def _start_child(
                 host=host,
                 port=port,
                 profile=profile,
-                resident_models=resident_models,
             ),
             _child_environment(
                 role,
@@ -608,11 +590,7 @@ def _start_child(
                 data_root,
                 expected_epoch_id=registration.epoch_id,
                 child=process,
-                timeout_seconds=(
-                    RESIDENT_MODEL_WORKER_READY_TIMEOUT_SECONDS
-                    if resident_models
-                    else 30.0
-                ),
+                timeout_seconds=30.0,
                 stop_event=stop_event,
             )
     except BaseException as error:
@@ -665,7 +643,6 @@ def _start_child_with_retries(
     log_level: str | None = None,
     credential_broker_url: str | None = None,
     credential_broker_token: str | None = None,
-    resident_models: tuple[str, ...] = (),
     output_callback: ChildOutputCallback | None = None,
     stop_event: threading.Event | None = None,
     browser_extension_enabled: bool = False,
@@ -687,7 +664,6 @@ def _start_child_with_retries(
                 log_level=log_level,
                 credential_broker_url=credential_broker_url,
                 credential_broker_token=credential_broker_token,
-                resident_models=resident_models,
                 output_callback=output_callback,
                 stop_event=stop_event,
                 browser_extension_enabled=browser_extension_enabled,
@@ -832,7 +808,6 @@ class LauncherSupervisor:
                                         if credential_broker is not None
                                         else None
                                     ),
-                                    resident_models=config.resident_models,
                                     output_callback=self._output_callback,
                                     stop_event=self._stop_event,
                                     browser_extension_enabled=(
@@ -954,7 +929,6 @@ class LauncherSupervisor:
                                             if credential_broker is not None
                                             else None
                                         ),
-                                        resident_models=config.resident_models,
                                         output_callback=self._output_callback,
                                         stop_event=self._stop_event,
                                         browser_extension_enabled=(
@@ -1010,9 +984,6 @@ class LauncherSupervisor:
 
 def run_launcher(args: object) -> int:
     profile = resolve_runtime_profile(getattr(args, "profile", "local"))
-    resident_models = normalize_resident_models(
-        getattr(args, "resident_model", ())
-    )
     explicit_data_root = getattr(args, "data_dir", None)
     if profile.name == "public" and not explicit_data_root:
         raise ValueError("public profile requires an explicit --data-dir")
@@ -1035,7 +1006,6 @@ def run_launcher(args: object) -> int:
                     host,
                     port,
                     profile.name,
-                    resident_models,
                 ),
                 sort_keys=True,
             )
@@ -1068,7 +1038,6 @@ def run_launcher(args: object) -> int:
             profile=profile.name,
             log_level=log_level,
             open_browser=not args.no_browser,
-            resident_models=resident_models,
         )
     )
     try:

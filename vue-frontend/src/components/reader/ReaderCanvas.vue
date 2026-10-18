@@ -9,7 +9,6 @@ import type { V2PageSummary } from '@/api/v2/content'
 import { DEFAULT_READER_SETTINGS, type ReaderSettings } from './readerSettings'
 import { fitScale, type ReaderPosition } from './readerLayout'
 import ReaderImage from './ReaderImage.vue'
-import { usePublicUserAccess } from '@/composables/usePublicUserAccess'
 
 const props = withDefaults(
   defineProps<{
@@ -28,12 +27,9 @@ const props = withDefaults(
 )
 const emit = defineEmits<{
   positionChange: [position: ReaderPosition]
-  goTranslate: []
   navigate: [delta: number, fromEnd?: boolean]
   size: [id: string, width: number, height: number]
 }>()
-const publicAccess = usePublicUserAccess()
-const canTranslate = computed(() => publicAccess.featureAllowed('translation'))
 const paged = computed(() => ['single', 'double'].includes(props.settings.layout))
 const pageButtons = computed(() => (['left', 'right'] as const).map(side => {
   const delta = (side === 'left' ? -1 : 1) * (props.settings.direction === 'rtl' ? -1 : 1)
@@ -221,11 +217,7 @@ onUnmounted(() => {
       title="暂无图片"
       description="该章节还没有图片"
       variant="inverse"
-    >
-      <template #actions>
-        <UiButton v-if="canTranslate" @click="emit('goTranslate')">进入翻译</UiButton>
-      </template>
-    </ProductEmptyState>
+    />
     <div
       v-else
       class="reader-canvas__surface"
