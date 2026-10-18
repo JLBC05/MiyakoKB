@@ -8,6 +8,8 @@ import asyncio
 import json
 import logging
 import math
+import os
+import random
 import re
 import time
 from dataclasses import dataclass, field, replace
@@ -413,7 +415,7 @@ class OpenAICompatibleSyncExecutor:
                 if attempt >= total_attempts - 1:
                     break
                 self._log_business_retry(effective_logger, invocation, attempt, total_attempts, error)
-                time.sleep(1)
+                time.sleep(_business_retry_delay(attempt))
             finally:
                 if stream_log is not None:
                     stream_log.finish(completed=False)
@@ -488,6 +490,26 @@ class OpenAICompatibleSyncExecutor:
             label, attempt + 2, total_attempts, error,
         )
         log_retry(label, attempt + 2, total_attempts, error)
+
+
+def _business_retry_delay(attempt: int) -> float:
+    """业务重试退避：指数增长 + ±20% 抖动，默认 1s 起、上限 16s。
+
+    网关 502/504/超时属于瞬时故障（历史上出现过连续 30 分钟的 5xx 风暴），
+    固定 1s 间隔会让所有重试落进同一个故障窗口；指数退避 + 抖动可显著提高逃逸率，
+    也能避免多个并发请求同步重试造成二次拥堵。
+    可用环境变量覆盖：OPENAI_COMPATIBLE_RETRY_BASE_SECONDS / OPENAI_COMPATIBLE_RETRY_CAP_SECONDS。
+    """
+    try:
+        base = float(os.environ.get("OPENAI_COMPATIBLE_RETRY_BASE_SECONDS", "1") or 1)
+    except (TypeError, ValueError):
+        base = 1.0
+    try:
+        cap = float(os.environ.get("OPENAI_COMPATIBLE_RETRY_CAP_SECONDS", "16") or 16)
+    except (TypeError, ValueError):
+        cap = 16.0
+    delay = min(max(base, 0.0) * (2 ** max(0, int(attempt))), max(cap, 0.0))
+    return delay * random.uniform(0.8, 1.2)
 
 
 class OpenAICompatibleAsyncExecutor:
@@ -571,7 +593,7 @@ class OpenAICompatibleAsyncExecutor:
                     total_attempts,
                     error,
                 )
-                await asyncio.sleep(1)
+                await asyncio.sleep(_business_retry_delay(attempt))
             finally:
                 if stream_log is not None:
                     stream_log.finish(completed=False)
