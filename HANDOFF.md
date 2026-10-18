@@ -78,12 +78,13 @@
 - [x] 验收点 3：关系图谱轻量化、丝滑无卡顿，故事梗概合并打通实体。
 - [x] 验收点 4：问答引用消除冗余括号章节号，优先显示真实话数。
 - [x] 验收点 5：统一启动器拉起双进程稳定运行。
-- [ ] 验收点 6：生产环境大体量漫画（如 50+ 话）的端到端压力测试与跨章节实体消歧观察。
+- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察、§5 下游验证、§6 发现 #1-#22）。
 - **阻塞**：无代码或架构阻塞。
-- **下一步**：
-  1. 打开终端运行 `python run.py` 或双击 `启动.bat` 启动系统，在浏览器访问 `http://127.0.0.1:5000`；
-  2. 测试导入一部全新的长篇漫画，触发全量知识库构建；
-  3. 在问答页面针对不同章节的细节情节进行问答测试，验证跨章节实体追踪与准确度。
+- **下一步**（按优先级）：
+  1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；
+  2. **衍生缺口补跑**：已按优先级 0 加共享执行器指数退避重试（`src/shared/openai_execution.py`）并用 `POST /api/v2/jobs/<id>/retry-failed` 只重跑失败项（源 job `39c2c48f`，重试 job `091d72b7`，20 项 = 10 个失败页 + 衍生重跑）；待确认无剧透概览/剧情总结正常发布（原为 404）后关闭发现 #18/#19；
+  3. **排查 global 问答召回**：问"少年院"只返回第 1 话引用并答"证据不足"，而该场景在第 6-8 话（报告发现 #20）；
+  4. 清理收尾：`tests_backend` 失效 import 已清零（`python -m pytest tests_backend --collect-only -q` = 969 tests, 0 errors；扫描脚本 `tmp_scan_tests.py`）；`vue-frontend` 类型检查 23 条（均为存量基线：图标/按钮变体白名单 19 条 + settings 事务类型漂移 4 条，剪裁 spec 导致的 2 条已消除）；PySide6-Essentials 已从 requirements-cpu/gpu 删除；根目录临时脚本仍待归置（`tmp_*.py` 一律不入库）。
 
 ---
 
@@ -100,6 +101,16 @@
 - **决策 4：书架与书籍详情页彻底剥离翻译分析工作台**
   - *否决方案*：保留页面树选择、标注进度面板等原翻译交互。
   - *理由*：知识库产品只需“一键构建知识库”和“查看知识图谱/问答”，分析细节全部收敛至统一的任务中心浮层中，降低用户心智负担。
+- **决策 5：实体对齐裁决改为「硬拒绝规则前置 + 每书缓存 + 批量并发」，而非单纯收紧字面阈值**
+  - *否决方案*：把字面重合度阈值从 0.40 直接抬到 0.50/0.60。
+  - *理由*：用 3013 对历史裁决缓存做离线回放（`tmp_replay_rules.py`）证明，抬阈值会大量误伤真合并——真合并多为译名/同义/上下位（字面重合低），假候选反而常共享姓氏或泛称前缀（字面重合高）。因此改为 4 条确定性硬拒绝规则前置（数值/日期不等、`X·A` vs `X·B`、单侧关系/形态词、泛称 vs 括号限定名，见 `hard_reject_pair`），并修补 `min(len1,len2) <= 2` 的单字碰撞（`is_judge_candidate` 要求完整子串包含）；把 45 分钟的主因（`judge_pair_sync` 每对一次 LLM 调用）换成归并前一次性批量预判（`prefetch_alignment_judgements`，batch 30 + 并发 3 + 索引对齐校验）。回放结果：省 1154/3013 次调用（38.3%）、潜在误伤 22 对（0.73%）、Rule 2.1 静默合并救回 0 对（该分支只对五大类目之外的类别生效）。
+- **决策 6：裁决缓存与失败语义——异常绝不落盘、按 `book_id` 隔离、保持布尔二态**
+  - *否决方案*：给裁决结果引入 `inconclusive` 第三态。
+  - *理由*：未命中缓存天然会在下次重跑时重判，第三态只增加下游解析复杂度；而把异常固化成 `same=false` 会永久污染结论（坑 6）。缓存文件名按书隔离（`llm_entity_judge_cache.<book_id>.json`），写入改为 `.tmp` + `os.replace` 原子落盘，异常只计数不改写缓存。
+- **决策 7：OpenAPI 只描述真实存在的后端接口**
+  - *背景*：剪裁后的 `openapi/v2.yaml` 丢了 `ExportPreferences` 与 `WorkerCommandAccepted` 两个 schema，前端类型检查因此多 2 条错误。
+  - *决策*：补回 `ExportPreferences`（`export_preferences` 域在后端仍活着，`validation.py` 精确校验 `{preserveOriginalFilenames: bool}`）；**不**补 `WorkerCommandAccepted` 与 `/system/release-models`（该路由已随本地模型特性删除，grep 全 `src/` 只剩陈旧打包产物），改为删掉对应前端死代码（`vue-frontend/src/api/v2/system.ts` 的 `releaseWorkerModelCache` 与任务中心的"释放显存"按钮/处理函数）。
+  - *结果*：`vue-tsc -b` 错误数 25 → **23**（等于存量基线：图标/按钮变体白名单 19 条 + settings 类型漂移 4 条）。
 
 ---
 
@@ -114,6 +125,15 @@
   - *解法*：任何前端修改后，必须使用环境内的 node/pnpm 运行 `pnpm build` 进行全量打包验证。
 - **坑 4：数据库脚本手写字段或枚举违背 AGENTS.md 约束**
   - *解法*：所有涉及 DB 的操作必须 `from src.backend_v2.storage.schema import books, chapters, ...`，严禁拼写字符串表名与枚举。
+- **坑 5：test-mode Worker 被强杀 → 整条队列死锁（孤儿 running job）**
+  - *现象*：Worker 崩溃/被杀后，简化版 unified_launcher 只做 2 秒原样重启、不调用 reconcile，新 epoch 的 Worker 不收敛旧在途 item；job 停在 `running` 且 `worker_epoch_id` 为空，`uq_jobs_one_current` 使队列无法推进，`/continue` 也因 running 被拒。
+  - *解法*：`JobQueueRepository.reconcile_lost_worker_jobs(conn, worker_epoch_id=None, now=...)` 把 steps/items 回置 pending 并追加 `job_interrupted`，再 `POST /api/v2/jobs/<id>/continue`；已自动化在守护脚本 `tmp_guard_job.py`（空闲 360s 触发）。
+- **坑 6：LLM 裁决器失败被静默吞成"判定为否"，并被永久缓存**
+  - *现象*：旧 `get_default_llm_judge()` 硬编码网关（与设置脱钩，切供应商后仍打旧网关）；`judge_batch` 异常时把整批写 `False`（derived.py:520-524），且缓存文件位于父工作区、跨书共享 → 失败结论被固化为"非同一实体"并污染后续 run。
+  - *解法*：裁决器已改为跟随 frozen chat 配置（`_alignment_judge(config, book_id)`）；**已实施**（决策 6）：异常不落缓存、不引入第三态、缓存按 `book_id` 隔离、写入原子化；`_arbitrate_single` 失败返回 `None` 而不写 `same=false`。
+- **坑 7：删除整个域之后留下的"未定义全局名"（NameError 定时炸弹）**
+  - *现象*：`POST /api/v2/jobs/<id>/retry-failed` 直接 500：`NameError: name 'job_plugin_snapshots' is not defined`（`src/backend_v2/jobs/retry.py:660`，`_retry_insight`）——插件域被移除时清掉了 schema import，但使用点仍在；同类问题还有 `src/backend_v2/insight/routes.py:475` 的 `LOGGER`（既没 `import logging` 也没定义 logger）。
+  - *解法*：补回 `job_plugin_snapshots` 到 `retry.py` 的 schema import（表本身仍在 schema.py，未删）；按仓库惯例给 `insight/routes.py` 加 `import logging` + `LOGGER = logging.getLogger("saber.api.insight")`。另留一个基于 `symtable` 的静态扫描脚本 `tmp_scan_undefined.py`（扫 `src/`，"用了但从没定义过的模块级全局名"，函数局部变量不会误报），当前扫描结果为空。
 
 ---
 
@@ -124,6 +144,9 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#22、裁决候选对离线回放数据、附录里的分析脚本清单）。
+8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" --mode exact|global`）。
+9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）。
 
 ---
 
@@ -139,7 +162,21 @@
 - `Saber-Translator-main/vue-frontend/src/components/insight/qa/QAMessageItem.vue`
 - `Saber-Translator-main/vue-frontend/src/components/insight/qa/CitationPreviewModal.vue`
 - `Saber-Translator-main/vue-frontend/tests/unit/qaMessageItem.spec.ts`
+- `Saber-Translator-main/acceptance6_stress_report.md`
+- `Saber-Translator-main/verify_acceptance6_alignment.py`
+- `Saber-Translator-main/verify_acceptance6_downstream.py`
+- `Saber-Translator-main/verify_acceptance6_qa.py`
+- `Saber-Translator-main/tmp_candidate_rules_eval.py`（候选对规则离线回放，零 token）
+- `Saber-Translator-main/tmp_replay_rules.py`（本轮对齐规则离线回放：硬拒绝规则命中分布、误伤清单、别名/合并日志回归）
+- `Saber-Translator-main/src/shared/openai_execution.py`（共享执行器指数退避重试，优先级 0）
+- `Saber-Translator-main/src/backend_v2/jobs/retry.py`（`retry-failed` 局部重跑；坑 7 的 NameError 修复点）
+- `Saber-Translator-main/src/backend_v2/insight/derived.py`（硬拒绝规则、`is_judge_candidate`、每书缓存、批量预判）
+- `Saber-Translator-main/openapi/v2.yaml`（补回 `ExportPreferences`）
 
 ### 仍需人工确认的项目
 1. 实际启动服务（运行 `python run.py`）后，在浏览器中测试点击问答引用气泡，确认弹窗预览真实图片与章节话数展示完全符合预期。
 2. 如需接入其它第三方模型（非 Gemini），可在 `/settings` 页面中配置对应的 API Key 与自定义 Base URL。
+3. **对齐裁决第二阶段**（报告 §4.3-4.4、发现 #13-#17）：方案 4→1→5 已落地；方案 3（给裁决器注入频次/出现页/描述上下文）与方案 2（改提议通道 + 向量召回）待评估，量化基线已离线算出。
+4. 本轮构建的衍生缺口补跑（job `091d72b7`）：概览 no_spoiler/story_summary 原为 404、时间线为 simple 降级（人物条目 0），需在重跑结束后复核是否已发布。
+5. global 问答召回异常（报告发现 #20）待复现定位。
+6. 旧全局裁决缓存 `llm_entity_judge_cache.json`（3013 对、父工作区）里可能残留被上游异常写成 `false` 的真合并对——已被新的按书缓存取代，建议直接归档删除，不要迁移进新缓存。
