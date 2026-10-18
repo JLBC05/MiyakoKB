@@ -1,6 +1,6 @@
 # MiyakoKB 验收点6 压测报告
 
-> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #22。
+> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #25。
 > 目标：生产环境大体量漫画（50+ 话）端到端压力测试与跨章节实体消歧观察。
 
 ## 1. 测试范围与环境
@@ -153,6 +153,19 @@
 
 已知代价：无分隔符的 2 字形近字（`宿儸`/`宿儺`）不再进候选，需形近字表才能救回。
 
+### 4.6 局部重跑暴露的两处副作用与修复（2026-10-19）
+
+`retry-failed` 只补失败页（源 job `39c2c48f` → 重试 job `091d72b7`，只补 10 个失败页 + 6 个衍生步骤），这让新 run 自身缺少 layer 结果、且同一批页面在 `analysis_page_results` 里出现第二行，于是暴露出两处缺陷（发现 #24/#25）：
+
+| 缺陷 | 机制 | 处置 |
+| --- | --- | --- |
+| 向量索引静默按 0 条事件发布 | `_layer_zero_event_records(frozen)` 只查本 run；重试 run 没有 `analysis_layer_results` → `vector_generations.event_count=0`、`eventTotal=0`，而 `coverage` 因 `expected_total = 页数 + 0` 仍算出 1.0 被当作成功发布；`qa/status.coverage.events` 随之从 152 掉到 0，global 问答失去事件召回 | **已修**：源 run 取不到 layer-0 时，回退到本书最近一次产出 layer-0 的 run（按 `analysis_runs.created_at` 倒序找首个有结果者）；`source_run_id=None` 的旧语义保持不变 |
+| 对齐产物 `total_frequency` 翻倍 | 归并统计按 `analysis_page_results` 行累加，而 `pages` 已按页去重（虎杖悠仁 `total_frequency` 146 → 292，`pages` 仍 146；实体总数 252/别名 279/合并 34 均未变） | **待定**：属展示语义选择（按行累计 vs 按页去重），需产品决策（见 §6 发现 #25） |
+
+离线验证（`tmp_verify_vector_events.py`，零 token）：原始 run `bf374dbe` 自身有 layer → 152 条事件；重试 run `43bf699e` 自身无 layer → 回退后 152 条；不存在的 run → 同样回退 152 条；`source_run_id=None` → 保持 0 条。`python -m compileall -q src/backend_v2/insight/derived.py` exit 0；`tests_backend/v2/test_stage5_insight.py` = **4 failed / 148 passed**（181s；本轮修 `repository.py` 后由 5 降到 4，HEAD 基线为 5），失败项均为既有期望漂移，无新增回归。
+
+遗留：已发布的那一代向量（generation 2）目前仍是 `event_count=0`，需在网关恢复后重跑 vectors 步骤才会被改写；在网关全故障期间（`/v1/models` 持续 502）无法在线复验。
+
 ## 5. 阶段4：下游验证（已填）
 
 ### 5.1 本轮 job 结果
@@ -203,6 +216,8 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 | 21 | 中 | 流式响应中的空 choices 帧（SSE 内联错误帧）使整批 5 页失败（本 run 10 页；`_extract_stream_chunk` 仅容忍 `choices==[]`，src/shared/ai_transport.py:425-441） | 传输层把「无 choices 的错误帧」判为可重试错误，而非不可恢复的格式致命错误 |
 | 22 | 低 | 页面 schema 强校验（CORE_PAGE_FIELDS 含 warnings，无默认值，insight/page_schema.py:115-119）导致模型漏字段时整批 5 页重试（本 run 第 55-58 页同类现象后恢复） | 可缺省字段给出默认值，或把校验失败降级为单页重试 |
 | 23 | 中 | 清理插件域时遗漏「未定义全局名」：`jobs/retry.py:660` 的 `job_plugin_snapshots` 未导入、`insight/routes.py:475` 的 `LOGGER` 未定义 → `retry-failed` 直接 500（已修复，见 §5.3） | 把「未定义全局名」静态扫描（`tmp_scan_undefined.py`，基于 symtable）纳入 CI，防止"删域漏使用点"这类回归 |
+| 24 | 高 | **局部重跑（retry-failed）后向量索引静默按 0 条事件发布**：新 run 自身没有 layer 结果，`_layer_zero_event_records(frozen)` 只查 `frozen.source_run_id` → `eventTotal=0`，而 `coverage` 仍报 1.0；同一现象使 `qa/status` 的 `coverage.events` 从 152 掉到 0（`vector_generations.event_count`，derived.py:5622-5631）。实测：原始 run 45 条 layer-0 / 224 页，重试 run 0 条 | **已修复**：源 run 无 layer-0 时回退到本书最近产出 layer-0 的 run（实测重试 run 恢复 152 条事件）；后续应把「向量覆盖率为 1.0 但事件数 0」列为发布前校验项 |
+| 25 | 中 | 同一批页面被重跑后，对齐产物 `total_frequency` 翻倍（虎杖悠仁 146 → 292，`pages` 仍 146）：归并以已有产物为基底**累加**计数（`total_frequency += info["count"]`，derived.py:4186/4237/4254），而 `pages` 是去重并集 | 需要语义决策：增量范围（新增章节）才累加，同页重析应替换；建议按「页 → 计数」存证或按页集合重算，而非跨修订累加 |
 
 ## 7. 附录
 - 监控手段：job_items 状态分布查询（tmp_job_status.py）、worker 日志（data-v2/logs/saber-worker.log）、守护脚本（tmp_guard_job.py，空闲 360s 触发 reconcile+continue）。

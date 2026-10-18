@@ -135,6 +135,11 @@
   - *现象*：`POST /api/v2/jobs/<id>/retry-failed` 直接 500：`NameError: name 'job_plugin_snapshots' is not defined`（`src/backend_v2/jobs/retry.py:660`，`_retry_insight`）——插件域被移除时清掉了 schema import，但使用点仍在；同类问题还有 `src/backend_v2/insight/routes.py:475` 的 `LOGGER`（既没 `import logging` 也没定义 logger）。
   - *解法*：补回 `job_plugin_snapshots` 到 `retry.py` 的 schema import（表本身仍在 schema.py，未删）；按仓库惯例给 `insight/routes.py` 加 `import logging` + `LOGGER = logging.getLogger("saber.api.insight")`。另留一个基于 `symtable` 的静态扫描脚本 `tmp_scan_undefined.py`（扫 `src/`，"用了但从没定义过的模块级全局名"，函数局部变量不会误报），当前扫描结果为空。
 
+- **坑 8：局部重跑后向量索引静默按 0 条事件发布（coverage 仍报 1.0）**
+  - *现象*：`retry-failed` 生成的新 run（只补失败页）自身没有 `analysis_layer_results`；`InsightDerivedWorkerService._layer_zero_event_records(frozen)` 只查 `frozen.source_run_id`，于是返回空列表 → `vector_generations.event_count=0`、`eventTotal=0`，但 `coverage` 因 `expected_total = 页数 + 0` 仍算出 1.0 被当成成功发布；连带 `qa/status` 的 `coverage.events` 从 152 掉到 0（读的就是 `vector_generations.event_count`，derived.py:5622-5631），global 问答因此缺事件召回。实测：原始 run `bf374dbe` 有 45 条 layer-0（覆盖 224 页），重试 run `43bf699e` 有 0 条。
+  - *解法*：源 run 取不到 layer-0 时，回退到**本书最近一次产出 layer-0 的 run**（`analysis_layer_results` join `analysis_runs` 按 `created_at` 倒序找首个有结果者）；`source_run_id` 为 `None` 的旧语义保持不变。验证脚本 `tmp_verify_vector_events.py`：原始 run 152 条、重试 run 回退后 152 条、不存在的 run 同样回退 152 条、`None` 仍为 0；`tests_backend/v2/test_stage5_insight.py` 失败数 4（此前 5，HEAD 为 5），无新增回归。
+  - *遗留*：已发布的那一代向量（generation 2）仍是 `event_count=0`，需在网关恢复后重跑 vectors 步骤才会被改写。
+
 ---
 
 ## 6. 新会话先读
@@ -144,7 +149,7 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#22、裁决候选对离线回放数据、附录里的分析脚本清单）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#25、裁决候选对离线回放数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" --mode exact|global`）。
 9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）。
 
