@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import json
+import logging
 import math
 from numbers import Real
 import os
@@ -72,103 +73,56 @@ from src.backend_v2.storage.schema import (
 from src.shared.memory_errors import is_memory_allocation_error
 from src.shared.user_logging import json_details, log_result
 
+LOGGER = logging.getLogger("saber.worker.insight_derived")
+
 
 DERIVED_KINDS = frozenset(
-    {"overview", "compressed_context", "timeline", "vector"}
+    {"overview", "compressed_context", "timeline", "vector", "entity_alignment"}
 )
 FINAL_ANALYSIS_RUN_STATUSES = frozenset(
     {"completed", "completed_with_errors"}
 )
 
 
-# 1. 固化的已知核心地名/词根映射表（按长度降序优先替换）
-KNOWN_LOCATION_ROOTS = [
-    ("杉泽第三高中", "sugisawa_third_high"),
-    ("杉泽第三高校", "sugisawa_third_high"),
-    ("杉泽高中", "sugisawa_high"),
-    ("杉泽医院", "sugisawa_hospital"),
-    ("杉泽", "sugisawa"),
-    ("东京都立咒术高等专门学校", "tokyo_jujutsu_high"),
-    ("咒术高专", "jujutsu_high"),
-    ("高专", "jujutsu_high"),
-    ("仙台市", "sendai_city"),
-    ("仙台", "sendai"),
-    ("宫城县", "miyagi_prefecture"),
-    ("宫城", "miyagi"),
-]
+# 1. 显式加载 entity_slug_map.json 配置（不再从 cwd / 仓库目录隐式探测）
+ENTITY_SLUG_MAP_FILENAME = "entity_slug_map.json"
+_SLUG_MAP_CATEGORIES = ("characters", "items", "abilities", "locations", "concepts")
 
-# 2. 固化的子场景/子设施词根映射表
-KNOWN_LOCATION_SUBS = [
-    ("家庭科准备室", "home_economics_room"),
-    ("灵研会活动室", "occult_club_room"),
-    ("灵异研活动室", "occult_club_room"),
-    ("百叶箱", "instrument_shelter"),
-    ("操场", "playground"),
-    ("橄榄球场", "rugby_field"),
-    ("足球场", "soccer_field"),
-    ("田径场", "track_and_field_ground"),
-    ("校门外", "school_gate_outside"),
-    ("校门", "school_gate"),
-    ("校舍外", "school_building_outside"),
-    ("校舍", "school_building"),
-    ("教学楼连接天台", "classroom_building_rooftop"),
-    ("连接走廊天台", "connecting_corridor_rooftop"),
-    ("走廊天台", "corridor_rooftop"),
-    ("天台", "rooftop"),
-    ("教学楼4楼走廊", "classroom_building_4f_corridor"),
-    ("教学楼走廊", "classroom_building_corridor"),
-    ("教学楼", "classroom_building"),
-    ("走廊", "corridor"),
-    ("楼梯间", "stairwell"),
-    ("301病房", "ward_301"),
-    ("病房", "ward"),
-    ("大厅前台", "lobby_front_desk"),
-    ("大厅", "lobby"),
-    ("前台", "front_desk"),
-    ("附近街道", "nearby_street"),
-    ("街道", "street"),
-    ("地下室", "basement"),
-    ("活动室", "club_room"),
-    ("准备室", "prep_room"),
-]
 
-# 3. 动态加载 entity_slug_map.json 配置
-def load_entity_slug_map(config_path: str | None = None) -> dict[str, dict[str, str]]:
-    """加载实体到罗马音/英文 slug 的映射配置。"""
-    paths_to_try = []
-    if config_path:
-        paths_to_try.append(Path(config_path))
-    paths_to_try.extend([
-        Path.cwd() / "entity_slug_map.json",
-        Path(__file__).resolve().parents[4] / "entity_slug_map.json",
-        Path(__file__).resolve().parent / "entity_slug_map.json",
-    ])
-    for p in paths_to_try:
-        if p.is_file():
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                return {
-                    "characters": dict(data.get("characters", {})),
-                    "items": dict(data.get("items", {})),
-                    "abilities": dict(data.get("abilities", {})),
-                    "locations": dict(data.get("locations", {})),
-                    "concepts": dict(data.get("concepts", {})),
-                }
-            except Exception:
-                pass
-    return {"characters": {}, "items": {}, "abilities": {}, "locations": {}, "concepts": {}}
+def empty_entity_slug_map() -> dict[str, dict[str, str]]:
+    return {category: {} for category in _SLUG_MAP_CATEGORIES}
 
-CHAR_PINYIN = {
-    '杉': 'shan', '泽': 'ze', '第': 'di', '三': 'san', '高': 'gao', '中': 'zhong',
-    '家': 'jia', '庭': 'ting', '科': 'ke', '准': 'zhun', '备': 'bei', '室': 'shi',
-    '百': 'bai', 'ye': 'ye', '箱': 'xiang', '操': 'cao', '场': 'chang', '橄': 'gan',
-    '榄': 'lan', '球': 'qiu', '校': 'xiao', '门': 'men', '外': 'wai', '走': 'zou',
-    '廊': 'lang', '天': 'tian', '台': 'tai', '教': 'jiao', '学': 'xue', '楼': 'lou',
-    '连': 'lian', '接': 'jie', '灵': 'ling', '研': 'yan', '会': 'hui', '活': 'huo',
-    '动': 'dong', '房': 'fang', '病': 'bing', '街': 'jie', '道': 'dao', '附': 'fu',
-    '近': 'jin', '舍': 'she', '梯': 'ti', '间': 'jian', '前': 'qian', '院': 'yuan',
-}
+
+def load_entity_slug_map(config_path: str | Path | None) -> dict[str, dict[str, str]]:
+    """加载实体到罗马音/英文 slug 的映射配置。
+
+    只接受调用方显式传入的路径：历史实现会依次探测 cwd、仓库根与模块目录下的
+    ``entity_slug_map.json``，导致任何遗留在工作目录里的作品专属映射表都被当成
+    全局配置生效。现在路径缺失或文件不可用时返回空映射并记录日志。
+    """
+    if not config_path:
+        LOGGER.info("未配置 entity_slug_map 路径，本次不使用外部 slug 映射")
+        return empty_entity_slug_map()
+
+    path = Path(config_path)
+    if not path.is_file():
+        LOGGER.warning("entity_slug_map 不存在，本次不使用外部 slug 映射：%s", path)
+        return empty_entity_slug_map()
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - 配置损坏不应中断流水线
+        LOGGER.warning("entity_slug_map 解析失败，本次不使用外部 slug 映射：%s（%s）", path, exc)
+        return empty_entity_slug_map()
+
+    if not isinstance(data, Mapping):
+        LOGGER.warning("entity_slug_map 结构不是对象，本次不使用外部 slug 映射：%s", path)
+        return empty_entity_slug_map()
+
+    return {
+        category: dict(data.get(category, {}) or {})
+        for category in _SLUG_MAP_CATEGORIES
+    }
 
 CATEGORY_PREFIX = {
     "characters": "character",
@@ -178,32 +132,30 @@ CATEGORY_PREFIX = {
     "concepts": "concept",
 }
 
-def romanize_location_string(loc_str: str) -> str:
-    norm = loc_str.strip()
-    parts = norm.split("·") if "·" in norm else [norm]
-    roman_parts = []
-    for part in parts:
-        s = part
-        for zh, en in KNOWN_LOCATION_ROOTS:
-            if zh in s:
-                s = s.replace(zh, f"_{en}_")
-                break
-        for zh, en in KNOWN_LOCATION_SUBS:
-            if zh in s:
-                s = s.replace(zh, f"_{en}_")
-                break
-        res = []
-        for ch in s:
-            if ch in CHAR_PINYIN:
-                res.append(f"_{CHAR_PINYIN[ch]}_")
-            elif re.match(r'[a-zA-Z0-9_]', ch):
-                res.append(ch)
-            else:
-                res.append('_')
-        cleaned = re.sub(r'_+', '_', "".join(res)).strip('_').lower()
-        if cleaned:
-            roman_parts.append(cleaned)
-    return "_".join(roman_parts) or "location_unknown"
+
+def pinyin_slug(text: str) -> str:
+    """把实体名称统一转成 ASCII slug。
+
+    优先用 pypinyin 生成拼音；pypinyin 缺失或结果为空时退化为保留原文本中的
+    ASCII 字符。历史实现按类别分别查表（地点走硬编码词根表、其余走单字拼音表），
+    两张表都是作品专属数据，已统一为同一套规则。
+    """
+    slug = ""
+    try:
+        import pypinyin
+        py_list = pypinyin.lazy_pinyin(text)
+        if py_list:
+            slug = "_".join(py_list)
+    except Exception:  # noqa: BLE001 - pypinyin 不可用时回退到 ASCII 字符
+        slug = ""
+    slug = re.sub(r'[^a-zA-Z0-9_]+', '_', slug)
+    slug = re.sub(r'_+', '_', slug).strip('_').lower()
+    if slug:
+        return slug
+    fallback = re.sub(r'[^a-zA-Z0-9_]+', '_', text)
+    fallback = re.sub(r'_+', '_', fallback).strip('_').lower()
+    return fallback or "entity"
+
 
 def to_romanized_slug(
     category: str,
@@ -212,59 +164,26 @@ def to_romanized_slug(
     slug_mode: str = "pinyin",
 ) -> str:
     """根据 category 和 text 生成 slug。
-    
+
     规则：
-    1. 地点优先走 romanize_location_string；
-    2. "romanized" 模式：
+    1. "romanized" 模式：
        - 优先命中 entity_slug_map 配置 → 返回正式罗马音/英文 slug；
        - 未命中配置 → 回退并在 slug 中添加 'romanized_' 前缀供 list_pinyin_entities 提取审核。
-    3. "pinyin" 模式：
+    2. "pinyin" 模式：
        - 全量采用拼音格式生成 slug（如 'hu_zhang_you_ren'），不附加前缀。
     """
-    if category == "locations":
-        return romanize_location_string(text)
-    
     mode = (slug_mode or "pinyin").strip().lower()
     if mode == "english":
         mode = "romanized"
     if mode not in {"pinyin", "romanized"}:
         mode = "pinyin"
 
-    if mode == "romanized":
-        if slug_map:
-            cat_map = slug_map.get(category, {})
-            if text in cat_map:
-                return cat_map[text]
-        else:
-            default_map = load_entity_slug_map()
-            cat_map = default_map.get(category, {})
-            if text in cat_map:
-                return cat_map[text]
+    if mode == "romanized" and slug_map:
+        cat_map = slug_map.get(category, {})
+        if text in cat_map:
+            return cat_map[text]
 
-    pinyin_str = ""
-    try:
-        import pypinyin
-        py_list = pypinyin.lazy_pinyin(text)
-        if py_list:
-            slug = "_".join(py_list)
-            slug = re.sub(r'[^a-zA-Z0-9_]', '_', slug)
-            slug = re.sub(r'_+', '_', slug).strip('_').lower()
-            if slug:
-                pinyin_str = slug
-    except Exception:
-        pass
-
-    if not pinyin_str:
-        res = []
-        for ch in text:
-            if ch in CHAR_PINYIN:
-                res.append(CHAR_PINYIN[ch])
-            elif re.match(r'[a-zA-Z0-9]', ch):
-                res.append(ch)
-            elif ch in ['_', '-']:
-                res.append('_')
-        slug = re.sub(r'_+', '_', "".join(res)).strip('_').lower()
-        pinyin_str = slug or "entity"
+    pinyin_str = pinyin_slug(text)
 
     if mode == "pinyin":
         return pinyin_str
@@ -284,7 +203,7 @@ def calculate_char_overlap_ratio(str1: str, str2: str) -> float:
     """计算两个中文实体名称的字符重合度比例。
     
     使用双向重合度（交集字符在较短串中的占比或两串平均占比）。
-    针对实体别名匹配（如 '宿傩之指' vs '宿傩的手指'），以最大包含度为准：
+    针对实体别名匹配（如 'X之指' vs 'X的手指'），以最大包含度为准：
     overlap_ratio = len(chars1 & chars2) / min(len(chars1), len(chars2))
     """
     s1 = re.sub(r'[\s·・_—\-\(\)（）]', '', str1)
@@ -306,9 +225,246 @@ SUBORDINATE_RELATION_SUFFIXES = (
     "室友", "同屋", "朋友", "好友", "同学", "同事", "老师", "学生", "前男友", "前女友", "女友", "男友"
 )
 
+# --- 实体对齐硬性拒绝规则（pre-filter）与候选闸门 ---------------------------
+# 设计目标：在「确定性合并规则 can_merge_*」「Rule 2.1 子串自动合并」与
+# 「LLM 语义裁决」三条通道的**最前面**拦掉确定不属于同一实体的名称对，
+# 命中即判 False（既不合并、也不送 LLM），从源头缩小候选池。
+
+GENERIC_TOKEN_SUFFIXES = (
+    "的房间", "之家", "术式", "咒物", "特级", "形态", "模式", "版本", "系列",
+    "房间", "卧室", "母亲", "父亲", "姐姐", "妹妹", "哥哥", "弟弟", "的", "之",
+)
+
+RELATION_FORM_SUFFIXES = SUBORDINATE_RELATION_SUFFIXES + (
+    "形态", "模式", "版本", "型", "式", "化身",
+)
+
+# 泛称词：仅当较短名是这些「通称」时，才判定「泛称 vs 括号限定名」应拒绝合并
+GENERIC_BASE_TERMS = (
+    "咒物", "咒具", "术式", "领域", "契约", "组织", "家族", "学校", "医院", "公司",
+    "武器", "能力", "物品", "地点", "概念", "角色", "特级", "一级", "二级", "三级", "四级",
+)
+
+DOT_SEPARATORS = ("·", "・", "•")
+
+_NUM_TOKEN_RE = re.compile(r"[0-9０-９]+")
+_DATE_TOKEN_RE = re.compile(r"[0-9０-９]{2,4}\s*[年月日号]")
+_PUNCT_VARIANT_RE = re.compile(r'[\s·・•_—\-－ー\(\)（）\[\]【】「」『』,，.。、:：;；!！?？"\'“”‘’~～]')
+
+
+def _strip_name_noise(name: str) -> str:
+    """去除分隔符与装饰性标点，仅保留实体名的主体字符。"""
+    return _PUNCT_VARIANT_RE.sub("", str(name or ""))
+
+
+def _digit_signature(name: str) -> tuple:
+    """提取名称中的日期/数值签名，用于「数值或日期不同则绝不合并」的硬拒绝。
+
+    含日期时以日期为准，否则取所有数值 token：
+    '2008年' -> ('2008年',)；'数量100' -> ('100',)；'两面宿傩的手指' -> ()。
+    """
+    raw = _strip_name_noise(name)
+    dates = tuple(_DATE_TOKEN_RE.findall(raw))
+    if dates:
+        return dates
+    return tuple(_NUM_TOKEN_RE.findall(raw))
+
+
+def _edit_distance_le1(a: str, b: str) -> bool:
+    """判断两串编辑距离是否 <= 1（用于 'X·A' 与 'X·B' 的异体字豁免）。"""
+    if a == b:
+        return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:
+        return sum(1 for x, y in zip(a, b) if x != y) <= 1
+    short, long_ = (a, b) if la < lb else (b, a)
+    i = j = 0
+    skipped = False
+    while i < len(short) and j < len(long_):
+        if short[i] != long_[j]:
+            if skipped:
+                return False
+            skipped = True
+            j += 1
+            continue
+        i += 1
+        j += 1
+    return True
+
+
+_PINYIN_CACHE: dict = {}
+
+
+def _pinyin_signature(name: str) -> tuple:
+    """取名称的无调拼音签名（用于繁简/异体/形近字豁免）。
+
+    pypinyin 已是项目依赖；不可用时返回空元组，调用方退化为纯字面判定。
+    """
+    key = str(name or "")
+    if not key:
+        return ()
+    if key in _PINYIN_CACHE:
+        return _PINYIN_CACHE[key]
+    try:
+        from pypinyin import lazy_pinyin  # 局部导入：缺失时不影响对齐主流程
+
+        sig = tuple(lazy_pinyin(key))
+    except Exception:  # noqa: BLE001
+        sig = ()
+    _PINYIN_CACHE[key] = sig
+    return sig
+
+
+def _is_homophone_variant(a: str, b: str) -> bool:
+    """繁简/异体/形近字豁免：两侧无调拼音签名相同（如 钉子/釘子、锤子/槌子）。"""
+    sa, sb = _pinyin_signature(a), _pinyin_signature(b)
+    return bool(sa) and sa == sb
+
+
+def _is_subsequence(shorter: str, longer: str) -> bool:
+    """判断 shorter 是否为 longer 的字序子序列（'浮亏' ⊂ '浮动亏损'，但 '手机' ⊄ '手指'）。"""
+    if not shorter or not longer or len(shorter) > len(longer):
+        return False
+    it = iter(longer)
+    return all(ch in it for ch in shorter)
+
+
+def _is_honorific_variant(name1: str, name2: str) -> bool:
+    """尊称/头衔差异（'高木' vs '高木老师'）：属合法别名通道，不适用从属红线。"""
+    for a, b in ((name1, name2), (name2, name1)):
+        for suffix in CHARACTER_TITLE_SUFFIXES:
+            if a.endswith(suffix) and not b.endswith(suffix):
+                prefix = a[: -len(suffix)].rstrip("的の ")
+                if prefix and b == prefix:
+                    return True
+    return False
+
+
+def _dot_segments(name: str) -> list:
+    """按层级分隔符切分名称（'机构·楼栋·房间' -> ['机构','楼栋','房间']）。"""
+    raw = str(name or "")
+    for sep in DOT_SEPARATORS:
+        raw = raw.replace(sep, "\x00")
+    return [seg for seg in raw.split("\x00") if seg]
+
+
+def _has_parenthetical_qualifier(shorter: str, longer: str) -> bool:
+    """判断 longer 是否为 shorter 追加括号/点号限定语（'特级咒物' vs '特级咒物（手指）'）。"""
+    m = re.match(r"^(.*?)[\(（]([^\)）]+)[\)）]\s*$", str(longer or ""))
+    if m:
+        return _strip_name_noise(m.group(1)) == _strip_name_noise(shorter)
+    segs = _dot_segments(longer)
+    if len(segs) >= 2:
+        head = "".join(segs[:-1])
+        return _strip_name_noise(head) == _strip_name_noise(shorter)
+    return False
+
+
+def _strip_generic_tokens(name: str) -> str:
+    """剥离高频泛词/虚词后缀，得到用于重合度计算的核心字（'X的房间' -> 'X'）。"""
+    raw = _strip_name_noise(name)
+    core = raw
+    changed = True
+    while changed and core:
+        changed = False
+        for tok in GENERIC_TOKEN_SUFFIXES:
+            if len(core) > len(tok) and core.endswith(tok):
+                core = core[: -len(tok)]
+                changed = True
+                break
+    return core or raw
+
+
+def hard_reject_pair(category: str, name1: str, name2: str):
+    """硬性拒绝规则：命中返回规则名，未命中返回 None。
+
+    命中语义 = 「确定不是同一实体」：既不合并，也不送 LLM 裁决。
+    以下规则对所有类别生效，且必须先于 can_merge_*、Rule 2.1 自动合并与 LLM 粗筛执行：
+      R1 数值/日期不等        —— '100' vs '200'、'2008年' vs '2009年'
+      R2 'X·A' vs 'X·B'      —— 末级分支不同（A/B 编辑距离 <=1 或仅标点异体差异时豁免，交 LLM）
+      R3 单侧关系/形态词      —— 'X' vs 'X母亲'、'<体系>' vs '<体系>形态'
+      R4 泛称 vs 括号限定名   —— '特级咒物' vs '特级咒物（手指）'
+    """
+    n1 = _strip_name_noise(name1)
+    n2 = _strip_name_noise(name2)
+    if not n1 or not n2 or n1 == n2:
+        return None
+
+    # R1 数值/日期不等
+    d1, d2 = _digit_signature(name1), _digit_signature(name2)
+    if d1 and d2 and d1 != d2:
+        return "R1_numeric_or_date_mismatch"
+
+    # R2 'X·A' vs 'X·B'
+    # R2 'X·A' vs 'X·B'：仅在「体系分支互斥」语义成立的类目生效。
+    # 实测（3013 对缓存回放）：189 次命中里 183 次来自 locations，且其中 9 次是模型判真的
+    # 同一地点同义细分（久留美家·个人房间 vs 久留美家·卧室）；abilities 命中 3 次全部为真拒绝。
+    # 因此把 R2 限定在 abilities/concepts，避免用「末级分支不同」误杀地名同义写法。
+    seg1, seg2 = _dot_segments(name1), _dot_segments(name2)
+    if category in ("abilities", "concepts") and len(seg1) >= 2 and len(seg2) >= 2:
+        head1 = _strip_name_noise("".join(seg1[:-1]))
+        head2 = _strip_name_noise("".join(seg2[:-1]))
+        tail1 = _strip_name_noise(seg1[-1])
+        tail2 = _strip_name_noise(seg2[-1])
+        if head1 == head2 and tail1 != tail2:
+            # 豁免：编辑距离 <=1（须两侧均 >=2 字，否则单字分支「解/捌」会被误当异体字）
+            # 或同音异体（繁简/异体字，如 釘/钉、儸/傩 视拼音而定）
+            if _is_homophone_variant(tail1, tail2):
+                return None
+            if min(len(tail1), len(tail2)) >= 2 and _edit_distance_le1(tail1, tail2):
+                return None
+            return "R2_hierarchical_branch_mismatch"
+
+    # R3 单侧关系/形态词（所有类别）
+    if category == "characters":
+        if is_character_subordinate_or_rel_blocked(name1, name2) and not _is_honorific_variant(name1, name2):
+            return "R3_subordinate_relation"
+    else:
+        for a, b in ((name1, name2), (name2, name1)):
+            for suffix in RELATION_FORM_SUFFIXES:
+                if a.endswith(suffix) and not b.endswith(suffix):
+                    prefix = a[: -len(suffix)].rstrip("的の ")
+                    if prefix and (b == prefix or b.endswith(prefix) or prefix.endswith(b)):
+                        return "R3_subordinate_relation"
+                    break
+
+    # R4 泛称 vs 括号限定名
+    shorter, longer = (name1, name2) if len(n1) <= len(n2) else (name2, name1)
+    if _has_parenthetical_qualifier(shorter, longer):
+        core = _strip_generic_tokens(shorter)
+        if core and any(core == term or core.endswith(term) for term in GENERIC_BASE_TERMS):
+            return "R4_generic_vs_qualified"
+
+    return None
+
+
+def is_judge_candidate(category: str, name1: str, name2: str, threshold: float = 0.40) -> bool:
+    """LLM 粗筛闸门（统一入口）。
+
+    1. 先过硬性拒绝规则（命中直接 False）；
+    2. 剥离泛词后缀后用核心字算重合度；
+    3. 短名保护：核心字最少一侧长度 <= 2 时，禁止使用浮点阈值，
+       必须满足完整子串包含，避免「两面宿傩的手指 || 手机」这类单字碰撞进候选。
+    """
+    if not name1 or not name2 or name1 == name2:
+        return False
+    if hard_reject_pair(category, name1, name2):
+        return False
+    c1 = _strip_generic_tokens(name1)
+    c2 = _strip_generic_tokens(name2)
+    if not c1 or not c2:
+        return False
+    if min(len(c1), len(c2)) <= 2:
+        # 短名保护：不允许用浮点阈值（避免「两面宿傩的手指 ‖ 手机」这类单字碰撞）。
+        # 但保留两条确定性豁免：字序子序列（浮亏 ⊂ 浮动亏损）与同音异体（钉子/釘子）。
+        return _is_subsequence(c1, c2) or _is_subsequence(c2, c1) or _is_homophone_variant(c1, c2)
+    return calculate_char_overlap_ratio(c1, c2) >= threshold
+
 
 def is_character_subordinate_or_rel_blocked(name1: str, name2: str) -> bool:
-    """防从属/亲属跨角色合并安全红线（如“久留美”与“久留美母亲”、“斯科特”与“斯科特的室友”严禁合并）。"""
+    """防从属/亲属跨角色合并安全红线（如“A”与“A母亲”、“B”与“B的室友”严禁合并）。"""
     for s in SUBORDINATE_RELATION_SUFFIXES:
         if name1.endswith(s) and not name2.endswith(s):
             pre = name1[:-len(s)]
@@ -334,11 +490,11 @@ def can_merge_character_names(name1: str, name2: str) -> bool:
     """判断两个角色名称是否允许归并。
 
     规则与安全边界：
-    1. 跨角色安全红线：若其中一个是'X的关系/从属称谓'（如'久留美母亲'/'斯科特室友'），另一个是该角色本身，严禁合并！
-    2. 关系代称自动归并：如 '久留美母亲' / '久留美的母亲' / '母亲' 归并为同一实体。
-    3. 称谓别名自动归并：如 '高木' 与 '高木老师'。
-    4. 全名与简称自动归并：如 '福贺久留美' 与 '久留美'（姓氏长1~2字，后半部分完全一致）。
-    5. 禁止仅凭同姓或部分重合就合并不同角色（如 '虎杖倭助' 与 '虎杖悠仁'）。
+    1. 跨角色安全红线：若其中一个是'X的关系/从属称谓'（如'X母亲'/'X室友'），另一个是该角色本身，严禁合并！
+    2. 关系代称自动归并：如 'X母亲' / 'X的母亲' / '母亲' 归并为同一实体。
+    3. 称谓别名自动归并：如 'X' 与 'X老师'。
+    4. 全名与简称自动归并：如 '姓氏+名' 与 '名'（姓氏长1~2字，后半部分完全一致）。
+    5. 禁止仅凭同姓或部分重合就合并不同角色（共享同一姓氏但名字不同的两个角色）。
     """
     if name1 == name2:
         return True
@@ -359,7 +515,7 @@ def can_merge_character_names(name1: str, name2: str) -> bool:
     base1, rel1 = parse_rel(name1)
     base2, rel2 = parse_rel(name2)
 
-    # 2. 关系代称自动归并（如 久留美母亲 / 久留美的母亲 / 母亲）
+    # 2. 关系代称自动归并（如 X母亲 / X的母亲 / 母亲）
     if rel1 and rel2:
         is_same_rel = (rel1 in ("母亲", "妈妈") and rel2 in ("母亲", "妈妈")) or \
                       (rel1 in ("父亲", "爸爸") and rel2 in ("父亲", "爸爸")) or \
@@ -370,13 +526,13 @@ def can_merge_character_names(name1: str, name2: str) -> bool:
             if base1 == base2 or base1.endswith(base2) or base2.endswith(base1):
                 return True
 
-    # 3. 称谓别名（如 高木 与 高木老师）
+    # 3. 称谓别名（如 X 与 X老师）
     shorter, longer = (name1, name2) if len(name1) <= len(name2) else (name2, name1)
     for suffix in CHARACTER_TITLE_SUFFIXES:
         if longer == shorter + suffix:
             return True
 
-    # 4. 全名与简称自动归并（如 福贺久留美 与 久留美）
+    # 4. 全名与简称自动归并（如 姓氏+名 与 名）
     if not rel1 and not rel2:
         if len(shorter) >= 2 and longer.endswith(shorter):
             surname_len = len(longer) - len(shorter)
@@ -394,9 +550,9 @@ def is_character_name_alias(name1: str, name2: str) -> bool:
 def can_merge_ability_names(name1: str, name2: str) -> bool:
     """判断两个能力名称是否允许归并。
     
-    带有式神/分支后缀的能力，核心名不同禁止合并：
-    - '十种影法术·玉犬' 和 '十种影法术·蟾蜍' -> 禁止合并 (玉犬 != 蟾蜍)
-    - '十种影法术·玉犬' 和 '十种影法术·玉犬（黑）' -> 允许合并 (核心名均为玉犬)
+    带有分支后缀的能力，核心名不同禁止合并：
+    - '<体系>·<分支A>' 和 '<体系>·<分支B>' -> 禁止合并 (分支名不同)
+    - '<体系>·<分支>' 和 '<体系>·<分支>（黑）' -> 允许合并 (核心名一致)
     """
     if name1 == name2:
         return True
@@ -411,9 +567,9 @@ def can_merge_location_names(name1: str, name2: str) -> bool:
     """判断两个地点名称是否允许归并。
     
     包含层级分隔符 · 的地点，必须比较最末级具体位置名称，禁止仅凭上级机构名重合就合并：
-    - '杉泽第三高中·操场' 和 '杉泽第三高中·连接走廊天台' -> 禁止合并 (末级名称不同)
-    - '杉泽第三高中·教学楼走廊' 和 '杉泽第三高中·教学楼4楼走廊' -> 允许合并 (末级名称高度相似 >= 60%)
-    - '杉泽医院' 和 '杉泽第三高中·连接走廊天台' -> 禁止合并 (上级机构不同)
+    - '<机构>·<地点A>' 和 '<机构>·<地点B>' -> 禁止合并 (末级名称不同)
+    - '<机构>·<楼栋>走廊' 和 '<机构>·<楼栋>4楼走廊' -> 允许合并 (末级名称高度相似 >= 60%)
+    - '<机构A>' 和 '<机构B>·<地点>' -> 禁止合并 (上级机构不同)
     """
     if name1 == name2:
         return True
@@ -445,26 +601,6 @@ def can_merge_item_names(name1: str, name2: str) -> bool:
     return False
 
 
-_CONCEPT_SEMANTIC_GROUPS = {
-    'time': {'关键时间', '时间点', '时间', '年份', '日期', '历史事件'},
-    'money': {'关键金额', '金额', '债务', '欠款', '资金', '损益'},
-    'mechanism': {'金融交易', '交易机制', '金融概念', '金融术语', '交易规则', '机制', '规则设定'},
-    'psychology': {'心理状态', '心理', '精神状态', '情绪'},
-    'society': {'社会现象', '社会问题', '现象'},
-}
-
-
-def get_concept_semantic_type(t: str | None) -> str:
-    """归一化概念语义类型。"""
-    if not t:
-        return ''
-    t_str = str(t).strip()
-    for grp, members in _CONCEPT_SEMANTIC_GROUPS.items():
-        if t_str in members or any(m in t_str for m in members):
-            return grp
-    return t_str
-
-
 def can_merge_concept_names(name1: str, name2: str, type1: str = '', type2: str = '') -> bool:
     """判断两个概念是否允许归并（仅保留确定性规则）。
 
@@ -483,110 +619,91 @@ def can_merge_concept_names(name1: str, name2: str, type1: str = '', type2: str 
     return False
 
 
-def _resolve_llm_judge_cache_file() -> str:
-    """动态解析 LLM 裁决缓存文件路径，优先存放在项目根目录或其父级工作区。"""
+def _resolve_llm_judge_cache_dir() -> str:
+    """解析 LLM 裁决缓存目录：优先父级工作区（历史缓存所在地），否则使用仓库根目录。"""
     # derived.py 位于 src/backend_v2/insight/derived.py -> parents[3] 即为 Saber-Translator-main 根目录
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     parent_workspace = os.path.dirname(repo_root)
-    # 优先检查父级工作区是否有历史缓存，若有则沿用，否则默认保存在项目根目录下
-    parent_cache = os.path.join(parent_workspace, "llm_entity_judge_cache.json")
-    if os.path.exists(parent_cache):
-        return parent_cache
-    repo_cache = os.path.join(repo_root, "llm_entity_judge_cache.json")
-    if os.path.exists(repo_cache):
-        return repo_cache
-    return parent_cache
+    legacy_parent = os.path.join(parent_workspace, "llm_entity_judge_cache.json")
+    legacy_repo = os.path.join(repo_root, "llm_entity_judge_cache.json")
+    if os.path.exists(legacy_parent) or os.path.isdir(parent_workspace):
+        return parent_workspace
+    if os.path.exists(legacy_repo):
+        return repo_root
+    return parent_workspace
 
 
-LLM_JUDGE_CACHE_FILE = _resolve_llm_judge_cache_file()
+LLM_JUDGE_CACHE_DIR = _resolve_llm_judge_cache_dir()
 
 
-class LLMBatchJudge:
-    """LLM 实体对齐语义裁决器：三层架构（粗筛规则 + 批量LLM + 单项仲裁）与本地缓存持久化。"""
+def resolve_llm_judge_cache_file(book_id: str | None = None) -> str:
+    """按书隔离裁决缓存文件：llm_entity_judge_cache.<book_id>.json。
 
-    def __init__(self, base_url: str = "http://8.216.18.224:8317/v1", api_key: str = "123456", model: str = "gemini-3.8-flash-high"):
-        from src.core.manga_insight.embedding_client import ChatClient, ChatLLMConfig
-        cfg = ChatLLMConfig(
-            provider="gemini",
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-        )
-        self.client = ChatClient(cfg)
-        self.cache: dict[str, dict[str, Any]] = {}
-        self.cache_hits: int = 0
-        self.llm_calls: int = 0
-        self.load_cache()
+    不同作品的语境不同（同名通用词能否合并的标准也不同），因此严禁跨书共享缓存。
+    未提供 book_id 时退回旧的无命名空间文件（仅供离线回放/兼容读取）。
+    """
+    if book_id:
+        safe = re.sub(r"[^0-9A-Za-z_.-]", "_", str(book_id))
+        return os.path.join(LLM_JUDGE_CACHE_DIR, f"llm_entity_judge_cache.{safe}.json")
+    return os.path.join(LLM_JUDGE_CACHE_DIR, "llm_entity_judge_cache.json")
 
-    @staticmethod
-    def make_key(category: str, name1: str, name2: str) -> str:
-        s1, s2 = sorted([name1, name2])
-        return f"{category}::{s1}::{s2}"
 
-    def load_cache(self) -> None:
-        if os.path.exists(LLM_JUDGE_CACHE_FILE):
-            try:
-                with open(LLM_JUDGE_CACHE_FILE, "r", encoding="utf-8") as f:
-                    self.cache = json.load(f)
-            except Exception:
-                self.cache = {}
+# 兼容旧引用（无 book_id 的全局缓存路径）
+LLM_JUDGE_CACHE_FILE = resolve_llm_judge_cache_file(None)
 
-    def save_cache(self) -> None:
+# 裁决批大小与并发度（方案5：扩大 batch 并轻度并发，避免长列表尾部注意力衰减）
+JUDGE_BATCH_SIZE = max(1, min(35, int(os.environ.get("INSIGHT_JUDGE_BATCH_SIZE", "30") or 30)))
+JUDGE_PARALLEL = max(1, min(8, int(os.environ.get("INSIGHT_JUDGE_PARALLEL", "3") or 3)))
+JUDGE_MAX_ATTEMPTS = max(1, int(os.environ.get("INSIGHT_JUDGE_MAX_ATTEMPTS", "3") or 3))
+
+
+def _judge_backoff_seconds(attempt: int) -> float:
+    """指数退避：1s / 2s / 4s（上限 8s）。"""
+    return min(8.0, 2.0 ** (attempt - 1))
+
+
+def _parse_judge_response(resp: Any, chunk: list) -> dict:
+    """按 id 解析裁决响应并校验索引对齐。
+
+    只接受 1..len(chunk) 范围内的整数 id；越界、非整数、重复 id 一律丢弃，
+    避免模型漏项/错位时把判定错配到别的候选对上。
+    """
+    answered: dict = {}
+    if not isinstance(resp, dict):
+        return answered
+    raw_results = resp.get("results", [])
+    if not isinstance(raw_results, list):
+        return answered
+    for r in raw_results:
+        if not isinstance(r, dict):
+            continue
         try:
-            with open(LLM_JUDGE_CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.cache, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+            rid = int(r.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if not (1 <= rid <= len(chunk)) or rid in answered:
+            continue
+        answered[rid] = r
+    return answered
 
-    async def judge_batch(self, candidate_pairs: list[tuple[str, str, str]]) -> dict[str, bool]:
-        results: dict[str, bool] = {}
-        to_query: list[dict[str, Any]] = []
 
-        for cat, n1, n2 in candidate_pairs:
-            key = self.make_key(cat, n1, n2)
-            if key in self.cache:
-                self.cache_hits += 1
-                results[key] = self.cache[key].get("same", False)
-            else:
-                if key not in [item["key"] for item in to_query]:
-                    to_query.append({
-                        "key": key,
-                        "category": cat,
-                        "name1": n1,
-                        "name2": n2,
-                    })
-
-        if not to_query:
-            return results
-
-        batch_size = 15
-        for i in range(0, len(to_query), batch_size):
-            chunk = to_query[i:i + batch_size]
-            chunk_pairs = []
-            for idx, item in enumerate(chunk, 1):
-                chunk_pairs.append({
-                    "id": idx,
-                    "category": item["category"],
-                    "name1": item["name1"],
-                    "name2": item["name2"]
-                })
-
-            prompt = f"""你是一个漫画知识库实体对齐裁决专家。
+def _build_judge_prompt(chunk_pairs: list) -> str:
+    return f"""你是一个漫画知识库实体对齐裁决专家。
 请逐一判断以下同一类别下的两个实体名称在漫画设定中是否指代同一个核心实体（即名称2是否为名称1的别名、简称、同义修饰变体、繁简异构，或不同汉化译名音译/意译）。
 
 判定规则：
 1. 同一实体的不同译名/简称/OCR变体 → 必须合并 (true)。
-   - 例如角色不同汉化译名（斯科特·皮尔格林 与 斯科特·朝圣者，华莱士·威尔士 与 华莱士·富尔斯/华莱士·威尔斯，奈芙丝·周 与 奈夫斯·周/赵小刀/小刀·周/小刀·赵，斯蒂芬·斯蒂尔斯 与 史蒂芬·斯蒂尔斯，年轻尼尔 与 小尼尔）；
-   - 例如物品不同译名或规格（电脑 与 笔记本电脑，电贝斯 与 Rickenbacker电贝斯，直排轮滑鞋 与 轮滑鞋）；
-   - 例如繁简异构（保证金维持率 与 保證金維持率，爆仓 与 強制平倉）。
-2. 同类不同物（不同式神、不同具体地点、不同金额数值、不同日期） → 绝对不能合并 (false)。
-   - 式神/能力分支（十种影法术·玉犬 与 十种影法术·蟾蜍，玉犬 与 鵺）绝不是同一实体；
-   - 机构内不同子地点（操场 与 天台/连接走廊天台，操场 与 百叶箱）绝不是同一实体；
-   - 金额数值不同（2000万 与 1000万/300万/30万，或正负损益不同）绝不是同一实体；同一金额的不同表述（2000万日元 与 2000万日元欠款）是同一实体；
+   - 例如角色不同汉化译名（同一外文名的不同音译/意译写法，如 'A·B' 与 'A·C'，或同一角色名的不同简称）；
+   - 例如物品不同译名或规格（电脑 与 笔记本电脑，某品牌乐器 与 该乐器通称）；
+   - 例如繁简异构（简体字形 与 繁體字形，如「咒术」与「咒術」）。
+2. 同类不同物（不同分支招式、不同具体地点、不同数量数值、不同日期） → 绝对不能合并 (false)。
+   - 同一体系下的不同分支（'<体系>·<分支A>' 与 '<体系>·<分支B>'）绝不是同一实体；
+   - 机构内不同子地点（'<机构>·<地点A>' 与 '<机构>·<地点B>'）绝不是同一实体；
+   - 数量或数值不同（100 与 200，或正负相反）绝不是同一实体；同一数值的不同表述（100 与 数量100）是同一实体；
    - 日期时间不同（2008年 与 2009年）绝不是同一实体。
 3. 从属关系/亲属关系/角色关系（XX的母亲、XX的室友、XX的朋友、XX的同学） → 绝对不能合并 (false)。
-   - 例如：久留美 与 久留美母亲，赵小刀 与 赵小刀的母亲，斯科特 与 斯科特的室友，虎杖悠仁 与 虎杖倭助，绝不是同一实体。
-4. 物品核心概念不同（如 书包 与 FX超入门指导书）绝不是同一实体。
+   - 例如：'X' 与 'X母亲'，'X' 与 'X的室友'，共享同一姓氏但名字不同的两个角色，绝不是同一实体。
+4. 物品核心概念不同（如 书包 与 某专业入门书籍）绝不是同一实体。
 
 待判定对列表：
 {json.dumps(chunk_pairs, ensure_ascii=False, indent=2)}
@@ -597,37 +714,201 @@ class LLMBatchJudge:
     {{"id": 1, "same": true, "reason": "..."}}
   ]
 }}
+要求：必须为列表中的**每一个 id 恰好返回一条结果**，id 必须原样回填（禁止遗漏、重复或重新编号）。
 如果某个实体对难以确切断定，"same" 可填 "ambiguous"（我们将对其进行单独二次仲裁）。"""
 
-            try:
-                self.llm_calls += 1
-                resp = await self.client.generate_json(prompt=prompt, system="输出合法的JSON格式。")
-                ret_results = resp.get("results", []) if isinstance(resp, dict) else []
-                for r in ret_results:
-                    rid = r.get("id")
-                    if rid is not None and 1 <= rid <= len(chunk):
-                        target_item = chunk[rid - 1]
-                        same_val = r.get("same")
-                        reason = r.get("reason", "")
 
-                        if str(same_val).lower() == "ambiguous":
-                            arb_same, arb_reason = await self._arbitrate_single(target_item["category"], target_item["name1"], target_item["name2"])
-                            self.cache[target_item["key"]] = {"same": arb_same, "reason": arb_reason}
-                            results[target_item["key"]] = arb_same
-                        else:
-                            is_same = bool(same_val is True or str(same_val).lower() == "true")
-                            self.cache[target_item["key"]] = {"same": is_same, "reason": reason}
-                            results[target_item["key"]] = is_same
-            except Exception as e:
-                print(f"[LLMBatchJudge Error] {e}")
-                for target_item in chunk:
-                    if target_item["key"] not in results:
-                        results[target_item["key"]] = False
+class LLMBatchJudge:
+    """LLM 实体对齐语义裁决器：三层架构（粗筛规则 + 批量LLM + 单项仲裁）与本地缓存持久化。
+
+    失败语义（方案4）：
+    - 异常**绝不写入缓存**（避免把网关故障固化成 same=false 的脏判定）；
+    - 不引入 inconclusive 第三态，保持布尔二态：失败只计数，下次重跑自然重判；
+    - 失败/漏答的候选对本次调用返回 False，但不落盘。
+    """
+
+    def __init__(
+        self,
+        base_url: str = "http://8.216.18.224:8317/v1",
+        api_key: str = "123456",
+        model: str = "gemini-3.8-flash-high",
+        provider: str = "gemini",
+        book_id: str | None = None,
+        cache_file: str | None = None,
+        batch_size: int | None = None,
+        parallel: int | None = None,
+    ):
+        from src.core.manga_insight.embedding_client import ChatClient, ChatLLMConfig
+        cfg = ChatLLMConfig(
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+        )
+        self.client = ChatClient(cfg)
+        self.book_id = book_id
+        self.cache_file = cache_file or resolve_llm_judge_cache_file(book_id)
+        self.batch_size = max(1, min(35, int(batch_size or JUDGE_BATCH_SIZE)))
+        self.parallel = max(1, min(8, int(parallel or JUDGE_PARALLEL)))
+        self.cache: dict[str, dict[str, Any]] = {}
+        self.cache_hits: int = 0
+        self.llm_calls: int = 0
+        self.failures: int = 0
+        self.unanswered: int = 0
+        self.dropped_entries: int = 0
+        self.load_cache()
+
+    @staticmethod
+    def make_key(category: str, name1: str, name2: str) -> str:
+        s1, s2 = sorted([name1, name2])
+        return f"{category}::{s1}::{s2}"
+
+    def stats(self) -> dict:
+        """裁决统计（用于日志与离线回放汇报）。"""
+        return {
+            "book_id": self.book_id,
+            "cache_file": self.cache_file,
+            "cache_entries": len(self.cache),
+            "cache_hits": self.cache_hits,
+            "llm_calls": self.llm_calls,
+            "failures": self.failures,
+            "unanswered": self.unanswered,
+            "dropped_entries": self.dropped_entries,
+            "batch_size": self.batch_size,
+            "parallel": self.parallel,
+        }
+
+    def load_cache(self) -> None:
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    self.cache = loaded
+            except Exception:
+                self.cache = {}
+
+    def save_cache(self) -> None:
+        try:
+            tmp_path = self.cache_file + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self.cache, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self.cache_file)
+        except Exception:
+            pass
+
+    async def judge_batch(self, candidate_pairs: list[tuple[str, str, str]]) -> dict[str, bool]:
+        """批量裁决入口：缓存优先，未命中者按 batch_size 切块并轻度并发送 LLM。"""
+        results: dict[str, bool] = {}
+        to_query: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+
+        for cat, n1, n2 in candidate_pairs:
+            key = self.make_key(cat, n1, n2)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            if key in self.cache:
+                self.cache_hits += 1
+                results[key] = bool(self.cache[key].get("same", False))
+            else:
+                to_query.append({
+                    "key": key,
+                    "category": cat,
+                    "name1": n1,
+                    "name2": n2,
+                })
+
+        if not to_query:
+            return results
+
+        chunks = [to_query[i:i + self.batch_size] for i in range(0, len(to_query), self.batch_size)]
+        semaphore = asyncio.Semaphore(self.parallel)
+
+        async def _run_chunk(chunk: list[dict[str, Any]]) -> dict[str, bool]:
+            async with semaphore:
+                return await self._judge_chunk(chunk)
+
+        outcomes = await asyncio.gather(
+            *[_run_chunk(chunk) for chunk in chunks], return_exceptions=True
+        )
+        for outcome in outcomes:
+            if isinstance(outcome, Exception):
+                self.failures += 1
+                print(f"[LLMBatchJudge Error] batch failed: {outcome}")
+                continue
+            results.update(outcome)
 
         self.save_cache()
         return results
 
-    async def _arbitrate_single(self, category: str, name1: str, name2: str) -> tuple[bool, str]:
+    async def _judge_chunk(self, chunk: list[dict[str, Any]]) -> dict[str, bool]:
+        """判定单个批次：带指数退避重试；任何异常都不写缓存。"""
+        chunk_pairs = [{
+            "id": idx,
+            "category": item["category"],
+            "name1": item["name1"],
+            "name2": item["name2"],
+        } for idx, item in enumerate(chunk, 1)]
+        prompt = _build_judge_prompt(chunk_pairs)
+
+        answered: dict = {}
+        last_error: Exception | None = None
+        for attempt in range(1, JUDGE_MAX_ATTEMPTS + 1):
+            try:
+                self.llm_calls += 1
+                resp = await self.client.generate_json(prompt=prompt, system="输出合法的JSON格式。")
+                parsed = _parse_judge_response(resp, chunk)
+                if parsed:
+                    answered = parsed
+                    last_error = None
+                    break
+                last_error = ValueError("裁决响应未包含任何有效 id（索引对齐校验失败）")
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+            if attempt < JUDGE_MAX_ATTEMPTS:
+                delay = _judge_backoff_seconds(attempt)
+                print(f"[LLMBatchJudge] 第 {attempt}/{JUDGE_MAX_ATTEMPTS} 次裁决失败（{last_error}），{delay:.0f}s 后重试")
+                await asyncio.sleep(delay)
+
+        results: dict[str, bool] = {}
+        if last_error is not None:
+            # 失败：不写缓存（避免脏判定落盘），本轮统一返回 False 交由下次重跑重判
+            self.failures += 1
+            print(f"[LLMBatchJudge Error] {last_error}")
+            for item in chunk:
+                results[item["key"]] = False
+            return results
+
+        if len(answered) < len(chunk):
+            self.dropped_entries += len(chunk) - len(answered)
+
+        for rid, payload in answered.items():
+            item = chunk[rid - 1]
+            same_val = payload.get("same")
+            if str(same_val).lower() == "ambiguous":
+                arb = await self._arbitrate_single(item["category"], item["name1"], item["name2"])
+                if arb is None:
+                    # 仲裁失败：不写缓存
+                    results[item["key"]] = False
+                    continue
+                arb_same, arb_reason = arb
+                self.cache[item["key"]] = {"same": arb_same, "reason": arb_reason}
+                results[item["key"]] = arb_same
+            else:
+                is_same = bool(same_val is True or str(same_val).lower() == "true")
+                self.cache[item["key"]] = {"same": is_same, "reason": payload.get("reason", "")}
+                results[item["key"]] = is_same
+
+        # 模型漏答的候选对：不写缓存，下次重跑重判
+        for item in chunk:
+            if item["key"] not in results:
+                self.unanswered += 1
+                results[item["key"]] = False
+        return results
+
+    async def _arbitrate_single(self, category: str, name1: str, name2: str):
+        """单项二次仲裁。返回 None 表示裁决失败（调用方不得写入缓存）。"""
         prompt = f"""请深入裁决以下漫画实体对在剧情中是否指代同一个核心实体。
 类别: {category}
 名称1: {name1}
@@ -636,12 +917,20 @@ class LLMBatchJudge:
 请权衡漫画连载中的别名、设定和剧情一致性。
 最终只能二选一：true 代表应合并，false 代表应作为两个独立实体。
 返回 JSON: {{"same": true/false, "reason": "..."}}"""
-        try:
-            resp = await self.client.generate_json(prompt=prompt, system="输出合法的JSON格式。")
-            same = bool(resp.get("same") is True or str(resp.get("same")).lower() == "true")
-            return same, f"[Arbitrated] {resp.get('reason', '')}"
-        except Exception as e:
-            return False, f"[Arbitration failed: {e}]"
+        last_error: Exception | None = None
+        for attempt in range(1, JUDGE_MAX_ATTEMPTS + 1):
+            try:
+                self.llm_calls += 1
+                resp = await self.client.generate_json(prompt=prompt, system="输出合法的JSON格式。")
+                same = bool(resp.get("same") is True or str(resp.get("same")).lower() == "true")
+                return same, f"[Arbitrated] {resp.get('reason', '')}"
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+            if attempt < JUDGE_MAX_ATTEMPTS:
+                await asyncio.sleep(_judge_backoff_seconds(attempt))
+        self.failures += 1
+        print(f"[LLMBatchJudge Error] 仲裁失败（不写缓存）: {last_error}")
+        return None
 
     def judge_pair_sync(self, category: str, name1: str, name2: str) -> bool:
         """同步查询或调用 LLM 进行单对判定。"""
@@ -674,6 +963,64 @@ def get_default_llm_judge() -> LLMBatchJudge:
     if _GLOBAL_LLM_JUDGE is None:
         _GLOBAL_LLM_JUDGE = LLMBatchJudge()
     return _GLOBAL_LLM_JUDGE
+
+
+def _alignment_ability_core(name: str) -> str:
+    """取能力名的核心名（末级分支 + 去括号），用于「核心名不同禁止进入 LLM」的一致性判断。"""
+    core = name.split("·")[-1] if "·" in name else name
+    return re.sub(r'[\(（].*?[\)）]', '', core).strip()
+
+
+def prefetch_alignment_judgements(
+    llm_judge: "LLMBatchJudge",
+    raw_stats: dict,
+    canonical_by_id: dict,
+    max_pairs: int | None = None,
+) -> dict:
+    """方案5：在归并主循环之前，把通过粗筛闸门的候选对批量送 LLM 裁决并落缓存。
+
+    - 候选面与主循环的判定条件保持一致（硬性拒绝规则 + 核心字重合度 + 短名保护；
+      abilities 额外要求核心名一致）；
+    - 只写缓存，不改变归并语义：主循环随后命中缓存，不再逐对发起请求；
+    - 缓存已命中/已在候选集内的对会被去重，避免重复计费。
+    """
+    pairs: list = []
+    seen: set = set()
+    for cat, raw_dict in raw_stats.items():
+        for name in raw_dict.keys():
+            for ent in canonical_by_id.values():
+                if ent.get("category") != cat:
+                    continue
+                candidates = [ent.get("canonical_name")] + list(ent.get("aliases", []))
+                for other in candidates:
+                    if not other or other == name:
+                        continue
+                    key = LLMBatchJudge.make_key(cat, name, other)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if cat == "abilities":
+                        core1 = _alignment_ability_core(name)
+                        core2 = _alignment_ability_core(other)
+                        if core1 and core2 and core1 != core2:
+                            continue
+                    if is_judge_candidate(cat, name, other):
+                        pairs.append((cat, name, other))
+
+    if max_pairs is not None and max_pairs > 0:
+        pairs = pairs[:max_pairs]
+    if not pairs:
+        return {"candidates": 0, "judged": 0}
+
+    try:
+        results = asyncio.run(llm_judge.judge_batch(pairs))
+    except RuntimeError:
+        # 已处于事件循环中（同步归并路径通常不会发生）：回退逐对判定
+        results = {}
+        for cat, n1, n2 in pairs:
+            llm_judge.judge_pair_sync(cat, n1, n2)
+            results[llm_judge.make_key(cat, n1, n2)] = True
+    return {"candidates": len(pairs), "judged": len(results)}
 
 
 def check_model_entity_similarity(
@@ -3371,16 +3718,27 @@ class InsightDerivedRepository:
         alias_seed_config: Mapping[str, Any] | None = None,
         entity_slug_map_config: Mapping[str, Mapping[str, str]] | None = None,
         llm_callable: Callable[[str], str] | None = None,
+        llm_judge: "LLMBatchJudge | None" = None,
         run_id: str | None = None,
         slug_mode: str | None = None,
+        staged: bool = False,
+        dependency_fingerprint: str | None = None,
     ) -> dict[str, Any]:
         """Align entities extracted from chapter pages with existing canonical entities,
 
         supporting incremental updates, transactional locking, auto merge rules (frequency, substring overlap, model assisted),
         auto_merge_log auditing, and seed overrides.
+
+        staged=True 时写入 status="building" / is_active=False 的暂存产物，交由所属
+        analysis run 的 publish_run（finalize_run）统一激活；独立 job 调用时保持
+        staged=False，直接停用旧 revision 并激活新 revision。
+
+        dependency_fingerprint 为所属 run 的输入指纹：暂存产物必须与同一 run 的其他
+        产物使用同一指纹（否则 finalize_run 判定 staged generations 不一致），因此
+        staged 调用必须显式传入；未传时退化为产物内容哈希（仅适用于独立 job）。
         """
-        # 加载 entity_slug_map 配置
-        slug_map = dict(entity_slug_map_config) if entity_slug_map_config else load_entity_slug_map()
+        # entity_slug_map 只接受调用方显式注入，缺失时退化为纯拼音（不再隐式读盘）
+        slug_map = dict(entity_slug_map_config) if entity_slug_map_config else {}
 
         with self.engine.begin() as connection:
             self._assert_book_owned(connection, book_id)
@@ -3529,122 +3887,28 @@ class InsightDerivedRepository:
                     "timestamp": utcnow().isoformat(),
                 })
 
-            # 4. 执行增量对齐与自动归并
-            # 已知的聚类规则（跨话通用）
-            clusters_by_cat = {
-                "items": [
-                    {
-                        "canonical_hint": "宿傩之指",
-                        "matches": ["宿傩之指", "两面宿傩的手指", "特级咒物（两面宿傩之指）"],
-                        "slug": "sukuna_finger"
-                    }
-                ],
-                "characters": [
-                    {
-                        "canonical_hint": "高木",
-                        "matches": ["高木", "高木老师"],
-                        "slug": "takagi"
-                    }
-                ],
-                "locations": [
-                    {
-                        "canonical_hint": "杉泽第三高中·连接走廊天台",
-                        "matches": ["杉泽第三高中·连接走廊天台", "杉泽第三高中·教学楼连接天台"],
-                        "slug": "sugisawa_third_high_connecting_corridor_rooftop"
-                    },
-                    {
-                        "canonical_hint": "杉泽第三高中·家庭科准备室",
-                        "matches": ["杉泽第三高中·家庭科准备室", "杉泽第三高中·灵研会活动室"],
-                        "slug": "sugisawa_third_high_home_economics_room"
-                    },
-                    {
-                        "canonical_hint": "杉泽第三高中·教学楼走廊",
-                        "matches": ["杉泽第三高中·教学楼走廊", "杉泽第三高中·教学楼4楼走廊", "杉泽第三高中·走廊"],
-                        "slug": "sugisawa_third_high_classroom_building_corridor"
-                    }
-                ],
-                "abilities": [],
-            }
-
-            for cat, raw_dict in raw_stats.items():
-                processed_names = set()
-                clusters = clusters_by_cat.get(cat, [])
-
-                # 先处理已知聚类簇
-                for cl in clusters:
-                    members = [m for m in cl["matches"] if m in raw_dict]
-                    if not members:
-                        continue
-                    for m in members:
-                        processed_names.add(m)
-
-                    members_sorted = sorted(members, key=lambda m: raw_dict[m]["count"], reverse=True)
-                    canonical_name = members_sorted[0]
-                    best_freq = raw_dict[canonical_name]["count"]
-                    other_freqs = [raw_dict[m]["count"] for m in members_sorted[1:]]
-
-                    confidence = calculate_confidence(best_freq, other_freqs)
-                    aliases = [m for m in members if m != canonical_name]
-                    slug = cl.get("slug") or to_romanized_slug(cat, canonical_name, slug_map=slug_map, slug_mode=effective_slug_mode)
-                    expected_id = f"{CATEGORY_PREFIX[cat]}_{slug}"
-
-                    existing_id = canonical_by_name.get((cat, canonical_name)) or (
-                        expected_id if expected_id in canonical_by_id else None
+            # 3.5 方案5：把通过粗筛闸门的候选对一次性批量送裁决（默认 30/批 + 轻度并发）并写入缓存；
+            # 主循环随后只命中缓存，不再逐对发起单请求（原实现「每对一次 LLM 调用」是主要耗时来源）。
+            if llm_judge is not None and canonical_by_id:
+                try:
+                    prefetch = prefetch_alignment_judgements(llm_judge, raw_stats, canonical_by_id)
+                    print(
+                        f"[align_entities] 预取裁决候选 {prefetch['candidates']} 对："
+                        f"缓存命中 {llm_judge.cache_hits}，LLM 调用 {llm_judge.llm_calls}，"
+                        f"失败 {llm_judge.failures}，漏答 {llm_judge.unanswered}"
                     )
+                except Exception as _prefetch_err:  # noqa: BLE001
+                    print(f"[align_entities] 预取裁决失败，回退逐对判定: {_prefetch_err}")
 
-                    this_pages = sorted(list(set(sum([raw_dict[m]["pages"] for m in members], []))))
-                    this_freq = sum(raw_dict[m]["count"] for m in members)
-
-                    if existing_id and existing_id in canonical_by_id:
-                        ent = canonical_by_id[existing_id]
-                        ent["total_frequency"] += this_freq
-                        ent["pages"] = sorted(list(set(ent.get("pages", []) + this_pages)))
-                        valid_ch = ent.setdefault("valid_chapters", [])
-                        if chapter_id not in valid_ch:
-                            valid_ch.append(chapter_id)
-                        for a in aliases:
-                            if a not in ent["aliases"]:
-                                ent["aliases"].append(a)
-                                record_merge_log(a, ent["canonical_name"], "cluster_predefined", confidence)
-                        orig = ent.setdefault("original_names", [])
-                        for m in members:
-                            if m not in orig:
-                                orig.append(m)
-                        alias_det = ent.setdefault("alias_details", {})
-                        for m in members:
-                            if m != ent["canonical_name"]:
-                                alias_det[m] = alias_det.get(m, 0) + raw_dict[m]["count"]
-                        updated_alias_map[canonical_name] = existing_id
-                        for a in aliases:
-                            updated_alias_map[a] = existing_id
-                    else:
-                        ent = {
-                            "entity_id": expected_id,
-                            "category": cat,
-                            "canonical_name": canonical_name,
-                            "confidence": confidence,
-                            "total_frequency": this_freq,
-                            "pages": this_pages,
-                            "valid_chapters": [chapter_id],
-                            "aliases": aliases,
-                            "original_names": members,
-                            "alias_details": {m: raw_dict[m]["count"] for m in members if m != canonical_name}
-                        }
-                        canonical_by_id[expected_id] = ent
-                        canonical_by_name[(cat, canonical_name)] = expected_id
-                        for a in aliases:
-                            canonical_by_alias[(cat, a)] = expected_id
-                            record_merge_log(a, canonical_name, "cluster_predefined", confidence)
-                        updated_alias_map[canonical_name] = expected_id
-                        for a in aliases:
-                            updated_alias_map[a] = expected_id
-
-                # 处理非聚类的独立实体，引入类别特定的受控自动归并规则
+            # 4. 执行增量对齐与自动归并
+            # 说明：历史上这里内嵌了一份作品专属的“已知聚类簇”（宿傩之指 / 高木 /
+            # 杉泽第三高中各场景），只对特定作品生效，已移除。需要人工指定的跨名合并
+            # 应走 global_terms / chapter_overrides 种子通道，而不是写死在代码里。
+            for cat, raw_dict in raw_stats.items():
+                # 处理独立实体，引入类别特定的受控自动归并规则
                 # 按频次从高到低排序处理，确保高频标准名称优先成为 canonical 实体
                 sorted_raw_items = sorted(raw_dict.items(), key=lambda it: it[1]["count"], reverse=True)
                 for name, info in sorted_raw_items:
-                    if name in processed_names:
-                        continue
 
                     # 1) 精确命中已存在的 canonical_name 或 alias
                     target_id = canonical_by_name.get((cat, name)) or canonical_by_alias.get((cat, name))
@@ -3659,6 +3923,12 @@ class InsightDerivedRepository:
                             c_name = existing_ent["canonical_name"]
                             c_freq = existing_ent["total_frequency"]
                             c_aliases = existing_ent.get("aliases", [])
+
+                            # 硬性拒绝规则前置：所有类别的确定性合并规则、Rule 2.1 自动合并
+                            # 与 LLM 粗筛之前先拦一道，命中即判 False（不合并、不送 LLM）。
+                            rejected_rule = hard_reject_pair(cat, name, c_name)
+                            if rejected_rule:
+                                continue
 
                             # 分类别定制归并判定：
                             if cat == "characters":
@@ -3678,18 +3948,17 @@ class InsightDerivedRepository:
                                 if target_id:
                                     break
 
-                                # LLM 语义裁决（重合度 >= 40% 且严守亲属/从属防跨角色红线）
-                                overlap = calculate_char_overlap_ratio(name, c_name)
-                                if overlap >= 0.40 and not is_character_subordinate_or_rel_blocked(name, c_name):
-                                    judge = get_default_llm_judge()
+                                # LLM 语义裁决（统一粗筛闸门：硬性拒绝 + 核心字重合度 + 短名保护）
+                                if is_judge_candidate(cat, name, c_name):
+                                    judge = llm_judge if llm_judge is not None else get_default_llm_judge()
                                     if judge.judge_pair_sync(cat, name, c_name):
                                         target_id = existing_ent["entity_id"]
                                         merge_rule_hit = "llm_semantic_judge"
                                         merge_confidence = "high"
                                         break
                                 for ex_alias in c_aliases:
-                                    if calculate_char_overlap_ratio(name, ex_alias) >= 0.40 and not is_character_subordinate_or_rel_blocked(name, ex_alias):
-                                        judge = get_default_llm_judge()
+                                    if is_judge_candidate(cat, name, ex_alias):
+                                        judge = llm_judge if llm_judge is not None else get_default_llm_judge()
                                         if judge.judge_pair_sync(cat, name, ex_alias):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
@@ -3720,14 +3989,13 @@ class InsightDerivedRepository:
                                 if target_id:
                                     break
 
-                                # 专属规则没命中时：若两者的核心名确实不同（如 玉犬 != 蟾蜍），绝对禁止合并，不走 LLM
+                                # 核心名不同时（如 '<体系>·<分支A>' 与 '<体系>·<分支B>'），绝对禁止合并，不走 LLM
                                 if clean_core1 and clean_core2 and clean_core1 != clean_core2:
                                     pass
                                 else:
-                                    # LLM 语义裁决（重合度 >= 40% 粗筛）
-                                    overlap = calculate_char_overlap_ratio(name, c_name)
-                                    if overlap >= 0.40:
-                                        judge = get_default_llm_judge()
+                                    # LLM 语义裁决（统一粗筛闸门：硬性拒绝 + 核心字重合度 + 短名保护）
+                                    if is_judge_candidate(cat, name, c_name):
+                                        judge = llm_judge if llm_judge is not None else get_default_llm_judge()
                                         if judge.judge_pair_sync(cat, name, c_name):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
@@ -3738,8 +4006,8 @@ class InsightDerivedRepository:
                                         clean_alias_core = re.sub(r'[\(（].*?[\)）]', '', alias_core).strip()
                                         if clean_core1 and clean_alias_core and clean_core1 != clean_alias_core:
                                             continue
-                                        if calculate_char_overlap_ratio(name, ex_alias) >= 0.40:
-                                            judge = get_default_llm_judge()
+                                        if is_judge_candidate(cat, name, ex_alias):
+                                            judge = llm_judge if llm_judge is not None else get_default_llm_judge()
                                             if judge.judge_pair_sync(cat, name, ex_alias):
                                                 target_id = existing_ent["entity_id"]
                                                 merge_rule_hit = "llm_semantic_judge"
@@ -3774,9 +4042,8 @@ class InsightDerivedRepository:
 
                                 # 若层级路径校验未通过（不同末级设施如操场与天台），绝对禁止合并，不走 LLM
                                 if not is_loc_blocked:
-                                    overlap = calculate_char_overlap_ratio(name, c_name)
-                                    if overlap >= 0.40:
-                                        judge = get_default_llm_judge()
+                                    if is_judge_candidate(cat, name, c_name):
+                                        judge = llm_judge if llm_judge is not None else get_default_llm_judge()
                                         if judge.judge_pair_sync(cat, name, c_name):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
@@ -3790,8 +4057,8 @@ class InsightDerivedRepository:
                                             o2, d2 = "·".join(p2[:-1]), p2[-1]
                                             if o1 != o2 or calculate_char_overlap_ratio(d1, d2) < 0.40:
                                                 alias_blocked = True
-                                        if not alias_blocked and calculate_char_overlap_ratio(name, ex_alias) >= 0.40:
-                                            judge = get_default_llm_judge()
+                                        if not alias_blocked and is_judge_candidate(cat, name, ex_alias):
+                                            judge = llm_judge if llm_judge is not None else get_default_llm_judge()
                                             if judge.judge_pair_sync(cat, name, ex_alias):
                                                 target_id = existing_ent["entity_id"]
                                                 merge_rule_hit = "llm_semantic_judge"
@@ -3817,17 +4084,16 @@ class InsightDerivedRepository:
                                     break
 
                                 # LLM 语义裁决（字符重合度 >= 40% 粗筛）
-                                overlap = calculate_char_overlap_ratio(name, c_name)
-                                if overlap >= 0.40:
-                                    judge = get_default_llm_judge()
+                                if is_judge_candidate(cat, name, c_name):
+                                    judge = llm_judge if llm_judge is not None else get_default_llm_judge()
                                     if judge.judge_pair_sync(cat, name, c_name):
                                         target_id = existing_ent["entity_id"]
                                         merge_rule_hit = "llm_semantic_judge"
                                         merge_confidence = "high"
                                         break
                                 for ex_alias in c_aliases:
-                                    if calculate_char_overlap_ratio(name, ex_alias) >= 0.40:
-                                        judge = get_default_llm_judge()
+                                    if is_judge_candidate(cat, name, ex_alias):
+                                        judge = llm_judge if llm_judge is not None else get_default_llm_judge()
                                         if judge.judge_pair_sync(cat, name, ex_alias):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
@@ -3857,17 +4123,16 @@ class InsightDerivedRepository:
                                     break
 
                                 # LLM 语义裁决（字符重合度 >= 40% 粗筛）
-                                overlap = calculate_char_overlap_ratio(name, c_name)
-                                if overlap >= 0.40:
-                                    judge = get_default_llm_judge()
+                                if is_judge_candidate(cat, name, c_name):
+                                    judge = llm_judge if llm_judge is not None else get_default_llm_judge()
                                     if judge.judge_pair_sync(cat, name, c_name):
                                         target_id = existing_ent["entity_id"]
                                         merge_rule_hit = "llm_semantic_judge"
                                         merge_confidence = "high"
                                         break
                                 for ex_alias in c_aliases:
-                                    if calculate_char_overlap_ratio(name, ex_alias) >= 0.40:
-                                        judge = get_default_llm_judge()
+                                    if is_judge_candidate(cat, name, ex_alias):
+                                        judge = llm_judge if llm_judge is not None else get_default_llm_judge()
                                         if judge.judge_pair_sync(cat, name, ex_alias):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
@@ -3878,9 +4143,8 @@ class InsightDerivedRepository:
 
                             else:
                                 # 其他类别（通用兜底规则）：
-                                # 规则 2.1: 子串重合（同类别内两个名称共享 60% 以上字符）
-                                overlap = calculate_char_overlap_ratio(name, c_name)
-                                if overlap >= 0.60:
+                                # 规则 2.1: 子串重合（统一粗筛闸门，60% 阈值；硬性拒绝规则已在迭代入口拦截）
+                                if is_judge_candidate(cat, name, c_name, threshold=0.60):
                                     target_id = existing_ent["entity_id"]
                                     merge_rule_hit = "substring_overlap"
                                     merge_confidence = "high"
@@ -3888,7 +4152,7 @@ class InsightDerivedRepository:
 
                                 # 检查是否与该实体的现有别名达到 60% 重合
                                 for ex_alias in c_aliases:
-                                    if calculate_char_overlap_ratio(name, ex_alias) >= 0.60:
+                                    if is_judge_candidate(cat, name, ex_alias, threshold=0.60):
                                         target_id = existing_ent["entity_id"]
                                         merge_rule_hit = "substring_overlap"
                                         merge_confidence = "high"
@@ -3896,8 +4160,13 @@ class InsightDerivedRepository:
                                 if target_id:
                                     break
 
-                                # 规则 2.2: 模糊重合度在 40%-60% 之间，调用模型辅助判定
-                                if 0.40 <= overlap < 0.60 and llm_callable is not None:
+                                # 规则 2.2: 模糊重合度在 40%-60% 之间，调用模型辅助判定（统一粗筛闸门 + 核心字重合度）
+                                core_overlap = calculate_char_overlap_ratio(
+                                    _strip_generic_tokens(name), _strip_generic_tokens(c_name)
+                                )
+                                if 0.40 <= core_overlap < 0.60 and is_judge_candidate(
+                                    cat, name, c_name, threshold=0.40
+                                ) and llm_callable is not None:
                                     if check_model_entity_similarity(name, c_name, cat, llm_callable=llm_callable):
                                         target_id = existing_ent["entity_id"]
                                         merge_rule_hit = "model_assisted"
@@ -3905,7 +4174,7 @@ class InsightDerivedRepository:
                                         break
 
                                 # 规则 2.3: 频次主导（高频名称自动当 canonical_name，低频挂 aliases；频次差异 >= 2倍且包含核心字）
-                                if overlap >= 0.35 and c_freq >= 2 * info["count"]:
+                                if is_judge_candidate(cat, name, c_name, threshold=0.35) and c_freq >= 2 * info["count"]:
                                     target_id = existing_ent["entity_id"]
                                     merge_rule_hit = "frequency_dominant"
                                     merge_confidence = "high"
@@ -4055,16 +4324,17 @@ class InsightDerivedRepository:
             new_revision = current_revision + 1
             artifact_id = str(uuid.uuid4())
 
-            connection.execute(
-                update(analysis_artifacts)
-                .where(
-                    analysis_artifacts.c.book_id == book_id,
-                    analysis_artifacts.c.kind == "entity_alignment",
-                    analysis_artifacts.c.template == "default",
-                    analysis_artifacts.c.is_active.is_(True),
+            if not staged:
+                connection.execute(
+                    update(analysis_artifacts)
+                    .where(
+                        analysis_artifacts.c.book_id == book_id,
+                        analysis_artifacts.c.kind == "entity_alignment",
+                        analysis_artifacts.c.template == "default",
+                        analysis_artifacts.c.is_active.is_(True),
+                    )
+                    .values(is_active=False, updated_at=now)
                 )
-                .values(is_active=False, updated_at=now)
-            )
 
             connection.execute(
                 insert(analysis_artifacts).values(
@@ -4073,10 +4343,13 @@ class InsightDerivedRepository:
                     run_id=run_id,
                     kind="entity_alignment",
                     template="default",
-                    status="ready",
+                    status="building" if staged else "ready",
                     revision=new_revision,
-                    is_active=True,
-                    dependency_fingerprint=hashlib.sha256(_json(final_payload).encode("utf-8")).hexdigest(),
+                    is_active=not staged,
+                    dependency_fingerprint=dependency_fingerprint
+                    or hashlib.sha256(
+                        _json(final_payload).encode("utf-8")
+                    ).hexdigest(),
                     payload_json=_json(final_payload),
                     asset_id=None,
                     created_at=now,
@@ -4091,6 +4364,7 @@ class InsightDerivedRepository:
                 "entityCount": len(final_canonical_entities),
                 "aliasCount": len(updated_alias_map),
                 "autoMergeCount": len(auto_merge_log),
+                "staged": staged,
                 "payload": final_payload,
             }
 
@@ -5368,6 +5642,19 @@ class InsightDerivedRepository:
         return result
 
 
+def _slug_mode_from_config(config: Mapping[str, Any]) -> str | None:
+    """从冻结的 Insight 配置中读取 slug 模式（analysis.slugMode 为权威，根层为兼容别名）。"""
+    analysis_config = config.get("analysis")
+    if isinstance(analysis_config, Mapping):
+        mode = analysis_config.get("slugMode") or analysis_config.get("slug_mode")
+        if isinstance(mode, str) and mode.strip():
+            return mode.strip().lower()
+    mode = config.get("slugMode") or config.get("slug_mode")
+    if isinstance(mode, str) and mode.strip():
+        return mode.strip().lower()
+    return None
+
+
 class InsightDerivedCommandService:
     def __init__(self, engine: Engine) -> None:
         self.jobs = JobQueueRepository(engine)
@@ -5421,6 +5708,7 @@ class InsightDerivedCommandService:
             "compressed_context": "insight_build_compressed_context",
             "timeline": "insight_build_timeline",
             "vector": "insight_build_vectors",
+            "entity_alignment": "insight_build_entity_alignment",
         }[kind]
         job_kind = "vector_rebuild" if kind == "vector" else "derived_rebuild"
         return self.jobs.create_batch(
@@ -5471,6 +5759,7 @@ class InsightDerivedWorkerService:
         self.credentials = SettingsRepository(engine)
         self.algorithms = algorithms or ProviderDerivedAlgorithms()
         self.vector_store = vector_store or InsightVectorStore(data_root)
+        self.entity_slug_map = load_entity_slug_map(data_root / ENTITY_SLUG_MAP_FILENAME)
 
     def handle(
         self,
@@ -5500,6 +5789,7 @@ class InsightDerivedWorkerService:
                 "insight_stage_compressed_context",
                 "insight_build_timeline",
                 "insight_stage_timeline",
+                "insight_build_entity_alignment",
             }
         ):
             credential_sections = ("chat",)
@@ -5743,6 +6033,37 @@ class InsightDerivedWorkerService:
                             activate=not staging_run,
                         )
                     )
+            elif kind == "insight_build_entity_alignment":
+                # 实体图谱独立构建：align_entities 自带独立事务并自行激活新 revision
+                align_result = self.repository.align_entities(
+                    book_id=frozen.book_id,
+                    chapter_id="",
+                    pages_analysis=frozen.pages,
+                    entity_slug_map_config=self.entity_slug_map,
+                    run_id=None,
+                    slug_mode=_slug_mode_from_config(config),
+                    dependency_fingerprint=frozen.fingerprint,
+                    llm_judge=self._alignment_judge(config, book_id=frozen.book_id),
+                )
+                checkpoint = {
+                    "artifactId": align_result.get("artifactId"),
+                    "revision": align_result.get("revision"),
+                    "entityCount": align_result.get("entityCount"),
+                    "aliasCount": align_result.get("aliasCount"),
+                    "autoMergeCount": align_result.get("autoMergeCount"),
+                }
+                log_result(
+                    "实体知识网络对齐完成",
+                    (
+                        f"实体总数：{checkpoint['entityCount']}",
+                        f"别名总数：{checkpoint['aliasCount']}",
+                        f"版本：{checkpoint['revision']}",
+                    ),
+                )
+
+                def publish(connection: Connection) -> None:
+                    return None
+
             elif kind in {
                 "insight_build_timeline",
                 "insight_stage_timeline",
@@ -5832,7 +6153,11 @@ class InsightDerivedWorkerService:
                         book_id=frozen.book_id,
                         chapter_id="",
                         pages_analysis=frozen.pages,
+                        entity_slug_map_config=self.entity_slug_map,
                         run_id=run_id,
+                        staged=staging_run,
+                        dependency_fingerprint=frozen.fingerprint,
+                        llm_judge=self._alignment_judge(config, book_id=frozen.book_id),
                     )
                     log_result(
                         "实体知识网络对齐完成",
@@ -5846,6 +6171,24 @@ class InsightDerivedWorkerService:
             return {**checkpoint, "__already_published__": True}
         except AttemptFenced:
             raise
+
+    def _alignment_judge(self, config: Mapping[str, Any], book_id: str | None = None) -> "LLMBatchJudge | None":
+        """按当前 Insight chat 配置构建实体对齐语义裁决器；解析失败回退默认裁决器。
+
+        book_id 用于按书隔离裁决缓存（llm_entity_judge_cache.<book_id>.json）。
+        """
+        try:
+            chat_config = frozen_chat_config(config)
+            return LLMBatchJudge(
+                base_url=chat_config.base_url or "",
+                api_key=chat_config.api_key,
+                model=chat_config.model,
+                provider=chat_config.provider,
+                book_id=book_id,
+            )
+        except Exception:
+            LOGGER.warning("实体对齐裁决器配置解析失败，回退默认裁决器", exc_info=True)
+            return None
 
     def _build_vectors(
         self,
