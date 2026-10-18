@@ -23,7 +23,6 @@ import {
 import { jobsApi } from '@/api/v2/jobs'
 import { triggerUrlDownload } from '@/utils/browserDownload'
 import { showToast } from '@/utils/toast'
-import { releaseWorkerModelCache } from '@/api/v2/system'
 import type { V2InsightAnalysisJobAccepted } from '@/api/v2/insight'
 import { confirmProductAction } from '@/composables/useProductConfirm'
 import { useBodyScrollLock } from '@/composables/useBodyScrollLock'
@@ -43,7 +42,6 @@ const tab = ref<'queue' | 'history'>('queue')
 const expanded = ref(new Set<string>())
 const downloading = ref(new Set<string>())
 const analysisModalOpen = ref(false)
-const releasingModels = ref(false)
 const queueControlBusy = ref(false)
 const panelRef = ref<HTMLElement | null>(null)
 const canControlQueue = computed(
@@ -411,28 +409,6 @@ async function downloadArtifact(job: V2Job) {
   }
 }
 
-async function releaseModels() {
-  if (releasingModels.value) return
-  releasingModels.value = true
-  try {
-    await releaseWorkerModelCache()
-    showToast('已提交显存释放命令，Worker 将在安全点立即执行', 'success')
-  } catch (error) {
-    const status =
-      error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0
-    showToast(
-      status === 409
-        ? '本地模型正在推理，请等待当前模型步骤完成后再试'
-        : error instanceof Error
-          ? error.message
-          : '释放显存失败',
-      status === 409 ? 'warning' : 'error'
-    )
-  } finally {
-    releasingModels.value = false
-  }
-}
-
 function analysisCreated(result: V2InsightAnalysisJobAccepted) {
   for (const jobId of result.jobIds) store.trackJob(jobId)
   store.open({
@@ -463,9 +439,6 @@ function analysisCreated(result: V2InsightAnalysisJobAccepted) {
           <div class="task-center__header-actions">
             <UiButton size="xs" variant="secondary" @click="analysisModalOpen = true">
               新建批量分析
-            </UiButton>
-            <UiButton size="xs" variant="ghost" :disabled="releasingModels" @click="releaseModels">
-              {{ releasingModels ? '提交中…' : '释放显存' }}
             </UiButton>
             <UiButton size="sm" variant="ghost" class="task-center__close" @click="store.close">
               关闭
