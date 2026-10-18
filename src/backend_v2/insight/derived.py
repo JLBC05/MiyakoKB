@@ -6478,23 +6478,57 @@ class InsightDerivedWorkerService:
         if not frozen.source_run_id:
             return []
         with self.engine.connect() as connection:
-            layers = list(
-                connection.execute(
-                    select(
-                        analysis_layer_results.c.id,
-                        analysis_layer_results.c.content_json,
-                    )
-                    .where(
-                        analysis_layer_results.c.run_id
-                        == frozen.source_run_id,
-                        analysis_layer_results.c.layer_index == 0,
-                        analysis_layer_results.c.status.in_(
-                            ("staging", "published")
-                        ),
-                    )
-                    .order_by(analysis_layer_results.c.unit_index)
-                ).mappings()
-            )
+
+            def query_layers(run_id: str) -> list[Mapping[str, Any]]:
+                return list(
+                    connection.execute(
+                        select(
+                            analysis_layer_results.c.id,
+                            analysis_layer_results.c.content_json,
+                        )
+                        .where(
+                            analysis_layer_results.c.run_id == run_id,
+                            analysis_layer_results.c.layer_index == 0,
+                            analysis_layer_results.c.status.in_(
+                                ("staging", "published")
+                            ),
+                        )
+                        .order_by(analysis_layer_results.c.unit_index)
+                    ).mappings()
+                )
+
+            layers = query_layers(frozen.source_run_id)
+            if not layers:
+                # 局部重跑（retry-failed 复用已发布页面）产生的新 run 自身没有 layer 结果，
+                # 此时回退到本书最近一次产出 layer 结果的 run；否则向量索引会静默按 0 条事件发布。
+                fallback_run_ids = [
+                    _required_string(row["run_id"], "fallback layer run id")
+                    for row in connection.execute(
+                        select(analysis_layer_results.c.run_id)
+                        .join(
+                            analysis_runs,
+                            analysis_runs.c.id
+                            == analysis_layer_results.c.run_id,
+                        )
+                        .where(
+                            analysis_runs.c.book_id == frozen.book_id,
+                            analysis_layer_results.c.layer_index == 0,
+                            analysis_layer_results.c.status.in_(
+                                ("staging", "published")
+                            ),
+                            analysis_layer_results.c.run_id
+                            != frozen.source_run_id,
+                        )
+                        .group_by(analysis_layer_results.c.run_id)
+                        .order_by(
+                            func.max(analysis_layer_results.c.created_at).desc()
+                        )
+                    ).mappings()
+                ]
+                for fallback_run_id in fallback_run_ids:
+                    layers = query_layers(fallback_run_id)
+                    if layers:
+                        break
             page_rows = list(
                 connection.execute(
                     select(
