@@ -79,7 +79,7 @@
 - [x] 验收点 3：关系图谱轻量化、丝滑无卡顿，故事梗概合并打通实体。
 - [x] 验收点 4：问答引用消除冗余括号章节号，优先显示真实话数。
 - [x] 验收点 5：统一启动器拉起双进程稳定运行。
-- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#27）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）。
+- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#28）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；
@@ -115,6 +115,18 @@
 - **决策 8：`total_frequency` 是「去重后的出现页数」，不是跨修订累加计数**（2026-10-19 用户拍板）
   - *否决方案*：保留累加语义，只在增量范围（新增章节）时累加、同页重析时替换。
   - *理由*：产物是「实体 → 出现页集合」的事实快照，同页重跑不应计两次；累加语义在多次 `retry-failed` 后数值会随重跑次数漂移（实测 146 → 292 → 448），而前端图谱频次排序、问答上下文都读这个值，必须与 `pages` 严格同源。实现上强制 `total_frequency == len(pages)`（两处归一，含纠正历史产物的第二处），并把该等式作为产物不变量（分析器 [7] 检查 + 建议纳入发布前校验）。
+- **决策 9：问答的 `exact` / `global` 双模式合并为单一「通用」模式（`generic`）**（2026-10-19 用户拍板）
+  - *背景*：原双通道互斥——`exact` 只走页面/向量检索（拿不到全局脉络），`global` 只喂全库产物（发现 #20：问「少年院」召回不到第 6–8 话）。产物齐备后两者信息互补。
+  - *否决方案*：保留两个模式、只在前端做自动选择；或让 `global` 也走向量检索。
+  - *实现*：`qa.py` 新增 `DEFAULT_QA_MODE="generic"` / `QA_MODES` / `GENERIC_GLOBAL_CANDIDATE_LIMIT=2`，`_retrieve` 拆出 `_page_candidates` 与 `_global_artifact_candidates`（`generic` = 全库材料 ≤2 条 + 页面候选）；`derived.qa_status` 与 `GET /qa/status` 接受 `generic` 并默认之；`routes.py` 的 SSE 前置重排只作用于页面候选、全库候选固定前置（否则被挤出 `topK`）。
+  - *理由*：单次回答同时具备细粒度证据（页码引用）与全局脉络（人物状态/时间线/未解伏笔）；旧值 `exact`/`global` 仍被接受（走原通道）故不破坏旧客户端。实测同一次回答引用到全库材料「资料 1、2」，生成 7.88s、端到端 11.8s（报告 §5.5）。
+- **决策 10：派生产物 `status` 只按「本次 run 的目标页」判定，「只覆盖全书一部分」不算失败**（2026-10-19 用户拍板）
+  - *背景*：见坑 10 / 发现 #28——前 10 话 run 自身 `status=completed`、目标 234/234 全部成功，却因与全书 2998 页比较而被判成「有失败」，产物永久 `degraded`，手动重建也无法转 ready。
+  - *否决方案*：保留旧语义（`degraded` ＝ 派生输入只覆盖全书一部分），由 UI 说明并显式展示 `coverage`。
+  - *实现*：①`derived.py` 删除快照里「全书页数当分母」的改写（现直接采信 run 自身状态：`source_run_status = active_run_status`，derived.py:3046）；②`repository.py:1946` 的 `derived_status` 只看本次 run 的 `final_status`（`completed_with_errors` 已由本 run 的失败页/后处理失败在 `finalize_run` 判定，repository.py:1462-1464）。
+  - *覆盖范围*：不再折算成状态，改由 `snapshot.pages`、`compressed_context` 的 `source_coverage`、`GET /qa/status` 的 `coverage {pages, events}` 与 run 的 `target_count` 表达。
+  - *验证*：重启栈后重建三个产物（job `d7ba340e` / `ddb49c59` / `a13510df`，均 completed 1/1）→ `compressed_context`、`overview(no_spoiler)`、`overview(story_summary)` 全部 rev3 `status=ready`、active=True；`entity_alignment/default` rev5 保持 ready。测试期望同步 3 处并删除 1 条过期断言（报告 §5.6）。
+  - *已知取舍*：`entity_alignment` 独立重建路径仍硬编码 `status="ready"`（derived.py:4354-4361）——其产物 `run_id` 为 NULL（发现 #26），没有 run 可判定。
 
 ---
 
@@ -148,6 +160,11 @@
   - *现象*：`retry-failed` 只补失败页，但 `align_entities` 以**已激活产物为基底**做增量归并（`existing_canonical_entities`，derived.py:3788-3799），而归并统计按 `analysis_page_results` **行**累加（`total_frequency += info["count"]`，derived.py:4186/4237/4254），`pages` 却是去重并集 → 同一页被重析两次即计两次。实测虎杖悠仁 146 → 292 → 448，`pages` 仍是 156；**252/257 个实体的频次与页数不一致**，图谱频次排序与问答上下文随之失真。
   - *解法*（决策 8）：`total_frequency` 语义定为**去重后的出现页数**，在两处强制对齐——①统计累积循环后（约 3858 行）过滤非法页号并 `pages=sorted(set(...))`、`count=len(pages)`；②最终归一化循环（约 4312-4326 行、`final_payload` 组装前）再算一次，**这一步不可省**，否则历史产物里被撑大的值不会被纠正。复验：违例 252/257 → **0/257**（虎杖悠仁 156、伏黑惠 123、钉崎野蔷薇 60、五条悟 58、两面宿傩 53）。
 
+- **坑 10：局部范围 run 的派生产物「永远 degraded」，手动重建无法转 ready**
+  - *现象*：前 10 话（234 页 / 全书 2998 页）跑出的 run 自身 `status=completed`、目标 234/234 全部成功，但 `compressed_context` / `overview(no_spoiler)` / `overview(story_summary)` 三个端点各重建一次后，新 rev2 仍为 `degraded`。
+  - *根因*（发现 #28）：派生状态把**全书页数**当分母 —— ①`derived.py:3044-3051` 用全书页数算产物快照的 `source_run_status`（234 < 2998 → `completed_with_errors`），再由 `_publication_status`（derived.py:6650-6658）记为 degraded；②`repository.py:1944-1952` 的 `derived_status` 同样比较 `success_count < 全书页数`。另有一致性缺口：`entity_alignment` 生成点硬编码 `status="ready"`（derived.py:4354-4361），同一批产物里只有它「干净」；`tests_backend/v2/test_stage5_insight.py:5474-5495` 还把 degraded 当期望行为。
+  - *现状*：**已于 2026-10-19 按方案②落地（决策 10）**——状态只按本次 run 的目标页判定：①删除 `derived.py` 快照里「全书页数当分母」的改写（现为 `source_run_status = active_run_status`，derived.py:3046）；②`repository.py:1946` 的 `derived_status` 只按本次 run 的 `final_status`。重建三产物 → 全部 rev3 `ready`（此前 rev2 仍 degraded）；覆盖范围改由 `snapshot.pages` / `source_coverage` / `qa/status.coverage` 表达。测试同步 `tests_backend/v2/test_stage5_insight.py` 三处期望由 degraded 改 ready（含更名 `test_partial_analysis_publishes_ready_global_artifacts`），并删除过期断言 `'"characters"' not in payload`（`knowledgeMode` 下页面产物规范携带五个实体数组）。*残留取舍*：`entity_alignment` 独立重建仍硬编码 ready（其产物无 run 可判定）。
+
 ---
 
 ## 6. 新会话先读
@@ -157,8 +174,8 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#27、裁决候选对离线回放数据、附录里的分析脚本清单）。
-8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" --mode exact|global`）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#28、裁决候选对离线回放数据、附录里的分析脚本清单）。
+8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
 9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）。
 
 ---
@@ -190,6 +207,6 @@
 1. 实际启动服务（运行 `python run.py`）后，在浏览器中测试点击问答引用气泡，确认弹窗预览真实图片与章节话数展示完全符合预期。
 2. 如需接入其它第三方模型（非 Gemini），可在 `/settings` 页面中配置对应的 API Key 与自定义 Base URL。
 3. **对齐裁决第二阶段**（报告 §4.3-4.4、发现 #13-#17）：方案 4→1→5 已落地；方案 3（给裁决器注入频次/出现页/描述上下文）与方案 2（改提议通道 + 向量召回）待评估，量化基线已离线算出。
-4. ~~本轮构建的衍生缺口补跑（job `091d72b7`）~~：**已于 2026-10-19 完成**（补跑 job `8431eb87` 20/20 成功）——概览 no_spoiler/story_summary 已发布、时间线升级为 enhanced（人物条目 6）、向量事件数 160；仍需产品侧确认的是「产物 `status=degraded` 是否应随补跑成功自动转 ready」（现需手动重建，见报告发现 #27）。
+4. ~~本轮构建的衍生缺口补跑（job `091d72b7`）~~：**已于 2026-10-19 完成**（补跑 job `8431eb87` 20/20 成功）——概览 no_spoiler/story_summary 已发布、时间线升级为 enhanced（人物条目 6）、向量事件数 160；仍需产品侧拍板的是**产物 `status=degraded` 的语义**：局部范围 run 的派生产物必然 degraded，且**重建不能转 ready**（真实分母是全书页数，见报告发现 #28 与坑 10），需在「保留语义 + UI 显示 coverage」与「按本次 run 的目标页判定状态」之间选择。**已于 2026-10-19 拍板为「按本次 run 的目标页判定状态」并落地**：`derived.py` 快照不再用全书页数改写状态、`repository.py` 的 `derived_status` 只看本次 run 的 `final_status`；重建后 compressed_context / overview(no_spoiler) / overview(story_summary) 均 rev3 `ready`（见报告 §5.6、决策 10、坑 10 解法）。
 5. global 问答召回异常（报告发现 #20）待复现定位（exact 模式已复验正常：7 条引用 + 结构化答案）。
 6. 旧全局裁决缓存 `llm_entity_judge_cache.json`（3013 对、父工作区）里可能残留被上游异常写成 `false` 的真合并对——已被新的按书缓存取代，建议直接归档删除，不要迁移进新缓存。

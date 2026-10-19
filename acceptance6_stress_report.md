@@ -225,6 +225,37 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 
 **同时完成的回归验证**：`tests_backend/v2/test_stage5_insight.py` = **4 failed / 148 passed**（178s，与改动前基线一致，无新增回归；4 条失败为既有期望漂移，明细见 `tmp_pytest_insight_dedupe.txt`）。
 
+### 5.5 问答双模式合并为单一「通用」模式（2026-10-19，用户要求）
+
+原实现把问答分成 `exact`（页面/向量检索，前端显示为「精确」）与 `global`（只喂全库产物）两条互斥通道：前者拿不到全局脉络，后者拿不到页面证据（发现 #20 即 global 未召回后段章节）。产物齐备后二者信息互补，故合并为一个通用模式。
+
+**后端改动（3 文件）**
+- `qa.py`：新增 `DEFAULT_QA_MODE="generic"`、`QA_MODES={generic,exact,global}`、`GENERIC_GLOBAL_CANDIDATE_LIMIT=2`；`_retrieve` 拆为 `_page_candidates`（向量检索 + 页面分析回退 + 父子上下文 + 抽取率监控）与 `_global_artifact_candidates`（只取全库产物），`generic = 全库材料(≤2) + 页面候选`，`_global_context` 退化为「全库或回退 20 页」的旧入口；`create` 对 `generic` 不再硬性要求「exact 可用」（只有 `exact` 保留旧报错），`mode` 默认 `generic`。
+- `derived.py::qa_status`：接受 `generic`，与 `exact` 共用页面/向量可用性判定。
+- `routes.py`：`GET /qa/status` 的 `mode` 允许 `generic` 且默认 `generic`；SSE 前置的重排只对页面候选执行，`type=global` 的候选**不参与重排并固定前置**，否则会被重排挤出 `topK`（实测重排输入 31 条 = 候选总数 33 − 2 条全库）。
+
+**端到端实测**（13:33，栈内新代码，问题「虎杖悠仁为什么能压制宿傩？」，`--mode generic`）
+- 检索步骤返回 `mode=generic`，候选首位即 `compressed_context:default` 与 `overview:story_summary`（`type=global`、`hybridScore=1.0`），其后才是向量召回的 event/page 候选。
+- 重排 31 条 → 取 8 条；最终「参考资料 10 条」= 2 条全库材料 + 8 条页面证据，答案正文引用到「资料 1、2、10」——即全局脉络与页面证据被同一次回答使用。
+- 生成 7.88s、端到端 11.8s / 8 chunks，答案保持「事实依据 / 证据不足说明」结构；`/qa/status?mode=generic` 返回 `available=true`、`generation=3`、`coverage={events:160, pages:234}`。
+- 兼容：旧客户端继续传 `exact` / `global` 仍被接受（走各自旧通道），`generic` 为新的默认值。
+
+
+### 5.6 产物 `degraded` 语义拆分：状态只按本次 run 的目标页判定（2026-10-19，用户拍板）
+
+发现 #28 的根因是「用全书页数当分母」，于是只要分析范围小于整本书，派生产物就永远 `degraded`、重建也无法转 ready（实测 rev2 仍 degraded）。用户拍板采用拆分方案：**状态只按本次 run 的目标页判定，「只覆盖全书一部分」不再折算成失败**。
+
+**代码改动（2 文件）**
+- `derived.py`（原 3044-3051）：删除用全书页数比较并改写快照 `source_run_status` 的代码，快照直接采信 run 自身的 status 列（`source_run_status = active_run_status`，derived.py:3046）。
+- `repository.py`（1944-1952）：`derived_status` 只看本次 run 的 `final_status`——`completed_with_errors` 已由本 run 的失败页数/后处理失败在 `finalize_run` 中判定（repository.py:1462-1464），不再与全书页数比较。
+- 覆盖范围不再折算为「失败」，改由 `snapshot.pages`、`compressed_context` 的 `source_coverage`、`GET /qa/status` 的 `coverage {pages, events}` 与 run 的 `target_count` 表达。
+- 已知取舍：`entity_alignment` 独立重建路径仍硬编码 `status="ready"`（derived.py:4354-4361）——其产物 `run_id` 为 NULL（发现 #26），没有 run 可判定；run 内 staged 路径由 `finalize_run` 按同一规则赋状态。
+
+**测试同步（`tests_backend/v2/test_stage5_insight.py`）**
+- 期望由 degraded 改为 ready：只分析 1 页时的 compressed_context（约 :688）、新页尚未分析时的衍生重建（约 :2147）、部分范围全局产物重建（用例更名 `test_partial_analysis_publishes_ready_global_artifacts`，约 :5476）。
+- 删除一条过期断言 `'"characters"' not in payload`（约 :1093）：`analysis.knowledgeMode` 开启时页面产物会按 `page_schema._extra_entity_keys` 规范携带 characters/locations/abilities/items/concepts 五个实体数组，属规范字段而非原始模型字段。
+
+**验证**：重启栈后对三个产物各触发一次重建（job `d7ba340e-9ca0-4045-910b-f23346ed335a` / `ddb49c59-3a57-4cf7-9ad7-741471920001` / `a13510df-373e-466b-9bf6-5204f48a8197`，均 completed 1/1）→ `compressed_context/default`、`overview/no_spoiler`、`overview/story_summary` 全部 **rev3 `status=ready`、active=True**（rev1/rev2 已停用）；`entity_alignment/default` rev5 保持 ready。此后 `degraded` 只表示该 run 自身确有失败页或后处理失败，补跑成功后重建即可转 ready。
 
 ## 6. 发现与建议汇总（滚动）
 
@@ -256,7 +287,8 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 | 24 | 高 | **局部重跑（retry-failed）后向量索引静默按 0 条事件发布**：新 run 自身没有 layer 结果，`_layer_zero_event_records(frozen)` 只查 `frozen.source_run_id` → `eventTotal=0`，而 `coverage` 仍报 1.0；同一现象使 `qa/status` 的 `coverage.events` 从 152 掉到 0（`vector_generations.event_count`，derived.py:5622-5631）。实测：原始 run 45 条 layer-0 / 224 页，重试 run 0 条 | **已修复**：源 run 无 layer-0 时回退到本书最近产出 layer-0 的 run（实测重试 run 恢复 152 条事件）；后续应把「向量覆盖率为 1.0 但事件数 0」列为发布前校验项 |
 | 25 | 中 | 同一批页面被重跑后，对齐产物 `total_frequency` 翻倍（虎杖悠仁 146 → 292 → 448，`pages` 仍 146）：归并以已有产物为基底**累加**计数（`total_frequency += info["count"]`，derived.py:4186/4237/4254），而 `pages` 是去重并集 | **已实施（§4.7，按页去重）**：统计累积后与最终归一化各做一次 `pages=sorted(set(...))` + `total_frequency=len(pages)`（后者必需，才能纠正历史产物里被撑大的值）；复验 252/257 违例 → **0/257**。建议后续把「频次 == 去重页数」纳入产物发布前校验 |
 | 26 | 低 | 手动重建（`POST /books/<id>/entity-alignment/rebuild`）产出的对齐产物 `run_id` 为 **NULL**，于是所有依赖「产物 run → 页 → 章」映射的展示（分析器/前端章覆盖）失去依据 | 重建时写入源 run（或按 `pages → analysis_page_results` 反查）；下游读者应容忍 NULL 并回退到最近 run（分析器已如此实现） |
-| 27 | 低 | 产物 `status=degraded` 的判据是「source_run_status 含 `completed_with_errors`」（`_publication_status`，derived.py:6650-6658），且**不会因后来补跑成功而自动变绿**：`entity_alignment` 手动重建后转 ready，而 compressed_context/overviews 仍 degraded（其 layer 结果源自旧失败 run） | UI 应说明 degraded 的含义与消除方式（重建对应产物）；或让补跑成功后自动使下游衍生产物失效并排队重建 |
+| 27 | 低 | 产物 `status=degraded` 的判据是「source_run_status 含 `completed_with_errors`」（`_publication_status`，derived.py:6650-6658），且**不会因后来补跑成功而自动变绿**：`entity_alignment` 手动重建后转 ready，而 compressed_context/overviews 仍 degraded（其 layer 结果源自旧失败 run）（真实分母见 #28） | UI 应说明 degraded 的含义与消除方式（重建对应产物）；或让补跑成功后自动使下游衍生产物失效并排队重建。**已于 2026-10-19 按 #28 拆分语义：`degraded` 现仅表示本次 run 自身有失败（见 §5.6 / 决策 10）** |
+| 28 | 高 | **产物「永远 degraded」的真实根因：派生状态把「全书页数」当分母**。局部范围 run（前 10 话 234 页，全书 2998 页）即使自身目标 234/234 全部成功，仍被判为「有失败」：①`derived.py:3044-3051` 用全书页数算 `source_run_status`（234 < 2998）→ 快照写 `completed_with_errors` → 经 `_publication_status`（derived.py:6650-6658）令产物 degraded；②`repository.py:1944-1952` 的 `derived_status` 同样用 `success_count < 全书页数`。因此**手动重建不可能转 ready**：2026-10-19 对 compressed_context / overview(no_spoiler) / overview(story_summary) 三个端点各重建一次，新 rev2 仍为 degraded（源 run `2c9d40c2` 运行状态确为 `completed`、目标 234/234 成功、`analysis_heads` 全部指向它）。口径也不一致：`entity_alignment` 的生成点硬编码 `status="ready"`（derived.py:4354-4361），同一批产物里只有它「干净」。测试 `test_stage5_insight.py:5474-5495` 把 degraded 当作期望行为 | 二选一：①**保留语义**（degraded ＝ 派生输入只覆盖全书一部分，信息量为真），由 UI 说明并在产物上显式展示 coverage；②**拆分「失败」与「覆盖不全」**：状态只按本次 run 的目标页判定（干净 run → ready），另在快照/payload 记录 coverage 与 partial 标志，同时统一 `entity_alignment` 口径并改那条测试。若不动代码，唯一能让产物真变 ready 的路径是跑完整本 2998 页。**已修复（2026-10-19，用户选方案②，见 §5.6 / 决策 10）**：删除 `derived.py` 快照里「全书页数当分母」的改写（改为采信 run 自身 status），`repository.py` 的 `derived_status` 只按本次 run 的 `final_status`；重建三个产物均 rev3 `status=ready`；测试期望同步 3 处、删除 1 条过期断言。保留取舍：`entity_alignment` 独立重建仍硬编码 ready（其产物无 run 可判定） |
 
 ## 7. 附录
 - 监控手段：job_items 状态分布查询（tmp_job_status.py）、worker 日志（data-v2/logs/saber-worker.log）、守护脚本（tmp_guard_job.py，空闲 360s 触发 reconcile+continue）。
