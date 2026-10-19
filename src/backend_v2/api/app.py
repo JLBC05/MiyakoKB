@@ -149,7 +149,6 @@ def _create_v2_blueprint(settings: ApiSettings) -> Blueprint:
                     "maxDeepLearningConcurrency": load_scheduling_limit(),
                 },
                 "features": {
-                    "plugins": settings.profile.allow_plugins,
                     "webImport": settings.profile.allow_web_import,
                     "localProviders": settings.profile.allow_local_providers,
                 },

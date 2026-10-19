@@ -35,7 +35,7 @@ const LOCAL_CAPABILITIES: RuntimeCapabilities = {
     },
   },
   scheduling: { maxDeepLearningConcurrency: null },
-  features: { plugins: true, webImport: true, localProviders: true },
+  features: { webImport: true, localProviders: true },
 }
 
 export const useRuntimeStore = defineStore('runtime', () => {

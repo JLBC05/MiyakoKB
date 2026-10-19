@@ -74,7 +74,6 @@ export interface RuntimeCapabilities {
     maxDeepLearningConcurrency: number | null
   }
   features: {
-    plugins: boolean
     webImport: boolean
     localProviders: boolean
   }
