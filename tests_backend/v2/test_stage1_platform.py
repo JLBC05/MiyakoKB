@@ -32,7 +32,9 @@ from src.backend_v2.storage.defaults import (
     DEFAULT_BROWSER_DOM_AGENT,
     DEFAULT_INSIGHT_SETTINGS,
     DEFAULT_WEB_IMPORT_SETTINGS,
-    default_translation_settings,
+)
+from tests_backend.v2.legacy_translation_defaults import (
+    legacy_translation_settings as default_translation_settings,
 )
 from src.backend_v2.storage.epochs import (
     EpochRegistration,
@@ -133,40 +135,7 @@ def platform(tmp_path: Path):
         engine.dispose()
 
 
-def test_provider_parameters_have_one_persistent_owner(platform) -> None:
-    _root, engine = platform
-    repository = SettingsRepository(engine)
-    payload = default_translation_settings()
-    payload["translation"]["provider"] = "custom"
-    repository.save_transaction(
-        settings=(SettingMutation("translation", payload, 0),),
-        providers=(ProviderSettingMutation(
-            domain="translation", provider="custom", base_revision=0,
-            payload={"modelName": "first-model", "customBaseUrl": "https://example.com/v1"},
-        ),),
-    )
-    with engine.connect() as connection:
-        stored = json.loads(connection.execute(
-            select(app_settings.c.payload_json).where(app_settings.c.domain == "translation")
-        ).scalar_one())
-    assert stored["translation"]["provider"] == "custom"
-    assert "modelName" not in stored["translation"]
-    repository.save_transaction(providers=(ProviderSettingMutation(
-        domain="translation", provider="custom", base_revision=1,
-        payload={"modelName": "second-model", "customBaseUrl": "https://example.com/v1"},
-    ),))
-    document = repository.load(domains=("translation",))
-    selected = document["settings"][0]
-    assert selected["revision"] == 1
-    assert selected["payload"]["translation"]["modelName"] == "second-model"
-    assert document["providerSettings"][0]["revision"] == 2
-
-
 @pytest.mark.parametrize("domain,editable,section,provider_domain", [
-    ("translation", default_translation_settings(), "translation", "translation"),
-    ("translation", default_translation_settings(), "hqTranslation", "hq"),
-    ("translation", default_translation_settings(), "pluginAgent", "plugin_agent"),
-    ("translation", default_translation_settings(), "aiVisionOcr", "ai_vision_ocr"),
     ("browser_dom_agent", DEFAULT_BROWSER_DOM_AGENT, None, "browser_dom_agent"),
     ("web_import", DEFAULT_WEB_IMPORT_SETTINGS, "agent", "web_import_agent"),
 ])
@@ -824,28 +793,14 @@ def test_provider_timeouts_accept_fractional_seconds() -> None:
         ) == payload
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
-        ("auxYoloConfThreshold", 1.01, "must be from 0 to 1"),
-        ("auxYoloOverlapThreshold", -0.01, "must be from 0 to 1"),
-        (
-            "saberYoloRefineOverlapThreshold",
-            101,
-            "must be from 0 to 100",
-        ),
-    ],
-)
-def test_translation_detection_thresholds_use_one_current_unit(
-    field: str,
-    value: float,
-    message: str,
-) -> None:
+def test_translation_payload_is_stored_exactly_as_submitted() -> None:
+    """The translation domain is decoupled, so its validator accepts any object."""
     payload = default_translation_settings()
-    payload[field] = value
+    payload["auxYoloConfThreshold"] = 1.01
+    payload["parallel"]["deepLearningLockSize"] = 8
+    payload["proofreading"]["maxRetries"] = 2
 
-    with pytest.raises(ValueError, match=message):
-        validate_setting_payload("translation", payload)
+    assert validate_setting_payload("translation", payload) == payload
 
 
 def test_translation_detection_percentages_accept_decimal_values() -> None:
@@ -870,15 +825,6 @@ def test_translation_detection_percentages_accept_decimal_values() -> None:
     ) == payload
 
 
-def test_translation_settings_validate_paddleocr_vl_prompt_language() -> None:
-    payload = default_translation_settings()
-    assert payload["paddleOcrVl"] == {"sourceLanguage": "japanese"}
-
-    payload["paddleOcrVl"]["sourceLanguage"] = "unsupported"
-    with pytest.raises(ValueError, match="paddleOcrVl.sourceLanguage"):
-        validate_setting_payload("translation", payload)
-
-
 def test_factory_translation_defaults_match_algorithm_prompt_protocols() -> None:
     payload = default_translation_settings()
     translation = payload["translation"]
@@ -901,44 +847,6 @@ def test_factory_translation_defaults_match_algorithm_prompt_protocols() -> None
     )
 
 
-def test_translation_settings_reject_nullable_browser_temperature() -> None:
-    payload = default_translation_settings()
-    payload["translation"]["openaiOptions"]["request"]["temperature"] = None
-
-    with pytest.raises(ValueError, match="temperature must be from 0 to 2"):
-        validate_setting_payload("translation", payload)
-
-
-@pytest.mark.parametrize(('requested', 'expected'), [(1, 1), (4, 4), (8, 4)])
-def test_parallel_deep_learning_concurrency_is_bounded_by_four_pools(requested, expected) -> None:
-    payload = default_translation_settings()
-    payload["parallel"]["deepLearningLockSize"] = requested
-
-    validated = validate_setting_payload("translation", payload)
-
-    assert validated["parallel"]["deepLearningLockSize"] == expected
-    assert payload["parallel"]["deepLearningLockSize"] == requested
-
-
-def test_old_parallel_setting_loads_without_resetting_other_fields(platform) -> None:
-    _root, engine = platform
-    repository = SettingsRepository(engine)
-    payload = default_translation_settings()
-    payload["targetLanguage"] = "zh"
-    repository.save_transaction(settings=(SettingMutation("translation", payload, 0),))
-    with engine.begin() as connection:
-        stored = json.loads(connection.execute(select(app_settings.c.payload_json).where(app_settings.c.domain == "translation")).scalar_one())
-        stored["parallel"]["deepLearningLockSize"] = 8
-        connection.execute(update(app_settings).where(app_settings.c.domain == "translation").values(payload_json=json.dumps(stored)))
-    loaded = repository.load(domains=("translation",))["settings"][0]
-    assert loaded["payload"]["parallel"]["deepLearningLockSize"] == 4
-    assert loaded["payload"]["targetLanguage"] == "zh"
-    repository.save_transaction(settings=(SettingMutation("translation", loaded["payload"], loaded["revision"]),))
-    with engine.connect() as connection:
-        saved = json.loads(connection.execute(select(app_settings.c.payload_json).where(app_settings.c.domain == "translation")).scalar_one())
-    assert saved["parallel"]["deepLearningLockSize"] == 4
-
-
 def test_ai_translation_batch_sizes_have_no_fixed_upper_bound() -> None:
     payload = default_translation_settings()
     payload["hqTranslation"]["batchSize"] = 128
@@ -955,30 +863,6 @@ def test_ai_translation_batch_sizes_have_no_fixed_upper_bound() -> None:
 
     assert validated["hqTranslation"]["batchSize"] == 128
     assert validated["proofreading"]["rounds"][0]["batchSize"] == 256
-
-
-def test_translation_settings_require_unique_proofreading_round_ids() -> None:
-    payload = default_translation_settings()
-    round_id = "11111111-1111-4111-8111-111111111111"
-    payload["proofreading"]["rounds"] = [
-        {**payload["hqTranslation"], "id": round_id, "name": "第1轮"},
-        {**payload["hqTranslation"], "id": round_id, "name": "第2轮"},
-    ]
-
-    with pytest.raises(ValueError, match="unique IDs"):
-        validate_setting_payload("translation", payload)
-
-
-def test_translation_settings_drop_the_unused_global_proofreading_retry() -> None:
-    payload = default_translation_settings()
-
-    assert set(payload["proofreading"]) == {"enabled", "rounds"}
-
-    retired = deepcopy(payload)
-    retired["proofreading"]["maxRetries"] = 2
-    with pytest.raises(ValueError, match="invalid fields"):
-        validate_setting_payload("translation", retired)
-
 
 
 def test_removing_middle_proofreading_round_prunes_only_current_provider_setting(
@@ -1786,54 +1670,6 @@ def test_worker_maintenance_continues_after_failed_action(
 
     assert maintenance.run_if_due(force=True) is True
     assert completed == ["vector_gc"]
-
-
-def test_worker_maintenance_prunes_only_old_inactive_plugin_worktrees(
-    platform,
-) -> None:
-    data_root, engine = platform
-    with engine.begin() as connection:
-        connection.execute(
-            insert(jobs),
-            [
-                {
-                    "id": "active-plugin-job",
-                    "kind": "plugin_agent",
-                    "status": "paused",
-                    "config_json": "{}",
-                    "latest_progress_json": _stored_job_progress("paused"),
-                },
-                {
-                    "id": "terminal-plugin-job",
-                    "kind": "plugin_agent",
-                    "status": "completed",
-                    "config_json": "{}",
-                    "latest_progress_json": _stored_job_progress("completed"),
-                },
-            ],
-        )
-    root = data_root / "temp" / "jobs"
-    worktrees = {
-        name: root / name / "plugin-worktree"
-        for name in (
-            "active-plugin-job",
-            "terminal-plugin-job",
-            "missing-plugin-job",
-        )
-    }
-    for worktree in worktrees.values():
-        worktree.mkdir(parents=True)
-        os.utime(worktree, (1, 1))
-
-    removed = WorkerMaintenance(
-        data_root=data_root,
-        engine=engine,
-    )._prune_plugin_worktrees()
-
-    assert removed == 2
-    assert worktrees["active-plugin-job"].is_dir()
-    assert not worktrees["terminal-plugin-job"].exists()
-    assert not worktrees["missing-plugin-job"].exists()
 
 
 def test_settings_credentials_plugins_fonts_and_shared_limiter(platform) -> None:

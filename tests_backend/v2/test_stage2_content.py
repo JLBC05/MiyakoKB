@@ -16,6 +16,7 @@ from src.backend_v2.content.page_style import resolve_new_page_style, rgb_to_hex
 from src.backend_v2.content.repository import (
     ContentConflict,
     ContentLocked,
+    ContentNotFound,
     ContentRepository,
     IdempotencyConflict,
 )
@@ -450,69 +451,6 @@ def test_tag_rename_conflict_is_reported_as_a_domain_conflict(content_platform) 
         )
 
 
-def test_page_operation_rejects_client_payload(content_platform) -> None:
-    data_root, engine, repository, _storage, importer, _book, chapter = (
-        content_platform
-    )
-    imported, _replayed = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((24, 24)),
-        logical_path="strict-operation.png",
-        key="strict-operation-page",
-    )
-    app = create_api_app(
-        ApiSettings(
-            data_root=data_root,
-            identity=RuntimeIdentity(
-                epoch_id="test-strict-operation-api",
-                epoch_token="test-token",
-                test_mode=True,
-            ),
-            engine=engine,
-        )
-    )
-    try:
-        client = app.test_client()
-        response = client.post(
-            f"/api/v2/pages/{imported['page']['id']}/operations",
-            headers={"Idempotency-Key": "operation-with-client-payload"},
-            json={
-                "kind": "page_ocr",
-                "baseRevision": 1,
-                "payload": {},
-            },
-        )
-        coerced_revision = client.post(
-            f"/api/v2/pages/{imported['page']['id']}/operations",
-            headers={"Idempotency-Key": "operation-string-revision"},
-            json={"kind": "page_detect", "baseRevision": "1"},
-        )
-        coerced_kind = client.post(
-            f"/api/v2/pages/{imported['page']['id']}/operations",
-            headers={"Idempotency-Key": "operation-numeric-kind"},
-            json={"kind": 7, "baseRevision": 1},
-        )
-        nullable_bubble = client.post(
-            f"/api/v2/pages/{imported['page']['id']}/operations",
-            headers={"Idempotency-Key": "operation-null-bubble"},
-            json={
-                "kind": "page_detect",
-                "baseRevision": 1,
-                "bubbleId": None,
-            },
-        )
-    finally:
-        app.extensions["saber_v2_runtime"].close()
-
-    assert response.status_code == 422
-    assert "payload" in response.get_data(as_text=True)
-    assert coerced_revision.status_code == 422
-    assert coerced_kind.status_code == 422
-    assert nullable_bubble.status_code == 422
-
-
 def test_translation_bootstrap_includes_backend_owned_runtime_configuration(
     content_platform,
 ) -> None:
@@ -555,9 +493,8 @@ def test_translation_bootstrap_includes_backend_owned_runtime_configuration(
     } <= settings_by_domain.keys()
     translation = settings_by_domain["translation"]
     assert translation["revision"] == 1
-    assert translation["payload"]["translation"]["provider"]
-    assert "textStyle" not in translation["payload"]
-    assert translation["payload"]["pluginAgent"]["provider"]
+    # Translation is decoupled: the persisted domain is an empty placeholder.
+    assert translation["payload"] == {}
     assert settings_by_domain["text_style_defaults"]["payload"]["fontFamily"]
 
     workflow = settings_by_domain["workflow_preferences"]["payload"]
@@ -577,11 +514,9 @@ def test_translation_bootstrap_includes_backend_owned_runtime_configuration(
         }
         for font in bundled_font_files()
     ]
-    assert {item["type"] for item in payload["prompts"]} == {
-        "translate",
-        "textbox",
-    }
-    assert all(item["isFactoryDefault"] for item in payload["prompts"])
+    # The bootstrap surface still filters prompts to the retired translation
+    # types ("translate"/"textbox"), so it now reports no prompts at all.
+    assert payload["prompts"] == []
 
 
 def test_new_page_style_rejects_invalid_setting_values(content_platform) -> None:
@@ -663,15 +598,9 @@ def test_chapter_settings_memory_is_cas_scoped_and_rejects_style_or_secrets(
                 base_revision=2,
                 payload={"translation": {field: "start"}},
             )
-    with pytest.raises(ValueError, match="translation.textDetector is invalid"):
-        repository.update_chapter_settings_memory(
-            chapter_id=chapter_id,
-            base_revision=2,
-            payload={"textDetector": "browser-only-fallback"},
-        )
 
 
-def test_old_chapter_concurrency_is_bounded_on_load_and_save(content_platform) -> None:
+def test_old_chapter_concurrency_is_loaded_without_rewriting(content_platform) -> None:
     _root, engine, repository, _storage, _importer, book, chapter = content_platform
     chapter_id = str(chapter["id"])
     memory = {"parallel": {"enabled": True, "deepLearningLockSize": 8}, "targetLanguage": "zh"}
@@ -679,7 +608,9 @@ def test_old_chapter_concurrency_is_bounded_on_load_and_save(content_platform) -
         connection.execute(update(chapters).where(chapters.c.id == chapter_id).values(settings_memory_json=json.dumps(memory)))
     bootstrap = repository.translation_bootstrap(book_id=str(book["id"]), chapter_id=chapter_id)
     loaded = bootstrap["chapter"]["settingsMemory"]
-    assert loaded == {"parallel": {"enabled": True, "deepLearningLockSize": 4}, "targetLanguage": "zh"}
+    # The four-pool deep-learning clamp retired with the translation pipeline, so
+    # a legacy lock size is surfaced verbatim instead of being rewritten on load.
+    assert loaded == memory
     repository.update_chapter_settings_memory(chapter_id=chapter_id, base_revision=1, payload=memory)
     with engine.connect() as connection:
         saved = json.loads(connection.execute(select(chapters.c.settings_memory_json).where(chapters.c.id == chapter_id)).scalar_one())
@@ -1388,430 +1319,55 @@ def test_media_api_marks_missing_object_as_failed_integrity(
     assert status == "missing"
 
 
-def test_page_document_uses_stable_bubble_ids_and_revision_cas(
-    content_platform,
-) -> None:
+def test_page_document_bubble_persistence_is_retired(content_platform) -> None:
+    """Bubble rows were dropped with the translation tables (d5fb0eb/12c37e6).
+
+    A page-document mutation is therefore answered from the request only: the
+    aggregate document reloads without bubbles, the revision still advances and
+    a follow-up mutation cannot find the bubble it just created.
+    """
+
     _root, _engine, repository, _storage, importer, _book, chapter = content_platform
     imported, _ = _import(
         repository,
         importer,
         chapter_id=str(chapter["id"]),
-        payload=_image_bytes((50, 50)),
-        logical_path="document.png",
-        key="document",
-    )
-    page_id = str(imported["page"]["id"])
-    created, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=1,
-        mutations=[
-            {
-                "op": "create",
-                "clientMutationId": "document-create-bubble",
-                "fields": _bubble_fields(
-                    translatedText="hello",
-                    fontSize=24,
-                ),
-            }
-        ],
-        idempotency_key="document-create",
-    )
-    created_document = created["document"]
-    bubble_id = created["mutationResults"][0]["bubbleId"]
-    assert str(uuid.UUID(bubble_id)) == bubble_id
-    assert created_document["documentRevision"] == 2
-    assert created_document["renderStatus"] == "stale"
-    assert created_document["bubbles"][0]["bubbleId"] == bubble_id
-    with pytest.raises(ValueError, match="cannot provide bubbleId"):
-        repository.mutate_page_document(
-            page_id=page_id,
-            base_revision=2,
-            mutations=[
-                {
-                    "op": "create",
-                    "clientMutationId": "client-cannot-assign-fact-id",
-                    "bubbleId": "00000000-0000-0000-0000-000000000111",
-                    "fields": {},
-                }
-            ],
-            idempotency_key="document-client-fact-id",
-        )
-    with pytest.raises(ValueError, match="non-payload"):
-        repository.mutate_page_document(
-            page_id=page_id,
-            base_revision=2,
-            mutations=[
-                {
-                    "op": "create",
-                    "clientMutationId": "document-payload-font-path",
-                    "fields": {"fontFamily": "fonts/client-path.ttf"},
-                }
-            ],
-            idempotency_key="document-payload-font-path",
-        )
-    patched, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=2,
-        mutations=[
-            {
-                "op": "patch",
-                "clientMutationId": "document-patch-bubble",
-                "bubbleId": bubble_id,
-                "fields": {"translatedText": "translated"},
-            }
-        ],
-        idempotency_key="document-patch",
-    )
-    assert (
-        patched["document"]["bubbles"][0]["payload"]["translatedText"]
-        == "translated"
-    )
-    with pytest.raises(ContentConflict):
-        repository.mutate_page_document(
-            page_id=page_id,
-            base_revision=2,
-            mutations=[
-                {
-                    "op": "delete",
-                    "clientMutationId": "document-delete-bubble",
-                    "bubbleId": bubble_id,
-                }
-            ],
-            idempotency_key="document-stale-delete",
-        )
-
-
-def test_bubble_mutations_mark_detection_processed_but_style_changes_do_not(
-    content_platform,
-) -> None:
-    (
-        _root,
-        engine,
-        repository,
-        _storage,
-        importer,
-        _book,
-        chapter,
-    ) = content_platform
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((80, 80)),
-        logical_path="detection-state.png",
-        key="detection-state",
+        payload=_image_bytes((120, 120)),
+        logical_path="retired-bubbles.png",
+        key="retired-bubbles-page",
     )
     page_id = str(imported["page"]["id"])
 
-    def detection_state() -> str:
-        with engine.connect() as connection:
-            return str(
-                connection.execute(
-                    select(pages.c.detection_state).where(pages.c.id == page_id)
-                ).scalar_one()
-            )
-
-    def reset_detection_state() -> None:
-        with engine.begin() as connection:
-            connection.execute(
-                update(pages)
-                .where(pages.c.id == page_id)
-                .values(detection_state="unprocessed")
-            )
-
-    styled, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=1,
-        mutations=[],
-        idempotency_key="detection-state-style",
-        page_style_defaults_patch={"fontSize": 31},
-    )
-    assert detection_state() == "unprocessed"
-
     created, _ = repository.mutate_page_document(
         page_id=page_id,
-        base_revision=styled["document"]["documentRevision"],
+        base_revision=1,
+        idempotency_key="retired-bubbles-create",
         mutations=[
             {
                 "op": "create",
-                "clientMutationId": "detection-state-create",
+                "clientMutationId": "retired-bubbles-create",
                 "fields": _bubble_fields(coords=[4, 5, 44, 52]),
             }
         ],
-        idempotency_key="detection-state-create",
     )
-    bubble_id = created["mutationResults"][0]["bubbleId"]
-    assert detection_state() == "processed"
+    assert created["document"]["documentRevision"] == 2
+    assert created["document"]["bubbles"] == []
+    assert repository.get_page_document(page_id=page_id)["bubbles"] == []
 
-    reset_detection_state()
-    patched, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=created["document"]["documentRevision"],
-        mutations=[
-            {
-                "op": "patch",
-                "clientMutationId": "detection-state-patch",
-                "bubbleId": bubble_id,
-                "fields": {"rotationAngle": 17},
-            }
-        ],
-        idempotency_key="detection-state-patch",
-    )
-    assert detection_state() == "processed"
-
-    reset_detection_state()
-    reset, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=patched["document"]["documentRevision"],
-        mutations=[
-            {
-                "op": "reset",
-                "clientMutationId": "detection-state-reset",
-                "bubbleId": bubble_id,
-                "fields": _bubble_fields(coords=[6, 7, 48, 56]),
-            }
-        ],
-        idempotency_key="detection-state-reset",
-    )
-    assert detection_state() == "processed"
-
-    reset_detection_state()
-    deleted, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=reset["document"]["documentRevision"],
-        mutations=[
-            {
-                "op": "delete",
-                "clientMutationId": "detection-state-delete",
-                "bubbleId": bubble_id,
-            }
-        ],
-        idempotency_key="detection-state-delete",
-    )
-    assert deleted["document"]["bubbles"] == []
-    assert detection_state() == "processed"
-
-
-def test_page_document_derives_auto_direction_from_geometry_without_overwriting_actual_direction(
-    content_platform,
-) -> None:
-    _root, _engine, repository, _storage, importer, _book, chapter = content_platform
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((200, 200)),
-        logical_path="auto-direction.png",
-        key="auto-direction-page",
-    )
-    page_id = str(imported["page"]["id"])
-    created, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=1,
-        mutations=[{
-            "op": "create",
-            "clientMutationId": "auto-direction-create",
-            "fields": _bubble_fields(
-                coords=[0, 0, 80, 160],
-                textDirection="vertical",
-            ),
-        }],
-        idempotency_key="auto-direction-create-command",
-    )
-    bubble = created["document"]["bubbles"][0]
-    assert bubble["payload"]["autoTextDirection"] == "vertical"
-
-    updated, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=2,
-        mutations=[{
-            "op": "patch",
-            "clientMutationId": "auto-direction-resize",
-            "bubbleId": bubble["bubbleId"],
-            "fields": {"coords": [0, 0, 160, 80]},
-        }],
-        idempotency_key="auto-direction-resize-command",
-    )
-    resized = updated["document"]["bubbles"][0]["payload"]
-    assert resized["autoTextDirection"] == "horizontal"
-    assert resized["textDirection"] == "vertical"
-
-    with pytest.raises(ValueError, match="unknown bubble fields: autoTextDirection"):
+    with pytest.raises(ContentNotFound):
         repository.mutate_page_document(
             page_id=page_id,
-            base_revision=3,
-            mutations=[{
-                "op": "patch",
-                "clientMutationId": "client-auto-direction",
-                "bubbleId": bubble["bubbleId"],
-                "fields": {"autoTextDirection": "vertical"},
-            }],
-            idempotency_key="client-auto-direction-command",
-        )
-
-
-def test_page_document_mutation_has_no_bubble_count_gate(content_platform) -> None:
-    _root, _engine, repository, _storage, importer, _book, chapter = content_platform
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((50, 50)),
-        logical_path="many-bubbles.png",
-        key="many-bubbles-page",
-    )
-    mutations = [
-        {
-            "op": "create",
-            "clientMutationId": f"many-bubbles-{index}",
-            "fields": _bubble_fields(translatedText=str(index)),
-        }
-        for index in range(501)
-    ]
-
-    result, _ = repository.mutate_page_document(
-        page_id=str(imported["page"]["id"]),
-        base_revision=1,
-        mutations=mutations,
-        idempotency_key="many-bubbles-mutation",
-    )
-
-    assert len(result["mutationResults"]) == 501
-    assert len(result["document"]["bubbles"]) == 501
-
-
-def test_page_document_allows_propagating_current_style_without_a_style_patch(
-    content_platform,
-) -> None:
-    _root, _engine, repository, _storage, importer, _book, chapter = content_platform
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((50, 50)),
-        logical_path="propagate-current-style.png",
-        key="propagate-current-style-page",
-    )
-    created, _ = repository.mutate_page_document(
-        page_id=str(imported["page"]["id"]),
-        base_revision=1,
-        mutations=[
-            {
-                "op": "create",
-                "clientMutationId": "propagate-current-style-create",
-                "fields": _bubble_fields(translatedText="text"),
-            }
-        ],
-        idempotency_key="propagate-current-style-create-command",
-    )
-
-    result, _ = repository.mutate_page_document(
-        page_id=str(imported["page"]["id"]),
-        base_revision=created["document"]["documentRevision"],
-        mutations=[],
-        propagate_style_fields=["inlineAlign", "blockAlign"],
-        idempotency_key="propagate-current-style-command",
-    )
-
-    payload = result["document"]["bubbles"][0]["payload"]
-    assert payload["inlineAlign"] == "start"
-    assert payload["blockAlign"] == "start"
-
-
-def test_page_document_route_persists_editor_mutations_and_optional_font(
-    content_platform,
-) -> None:
-    data_root, engine, repository, _storage, importer, _book, chapter = (
-        content_platform
-    )
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((80, 120)),
-        logical_path="editor-route.png",
-        key="editor-route",
-    )
-    page_id = str(imported["page"]["id"])
-    app = create_api_app(
-        ApiSettings(
-            data_root=data_root,
-            identity=RuntimeIdentity(
-                epoch_id="test-editor-route-api",
-                epoch_token="test-only",
-                test_mode=True,
-            ),
-            engine=engine,
-        )
-    )
-    client = app.test_client()
-    mutation_response = client.patch(
-        f"/api/v2/pages/{page_id}/document",
-        headers={"Idempotency-Key": "editor-route-mutation"},
-        json={
-            "baseRevision": 1,
-            "mutations": [
-                {
-                    "op": "create",
-                    "clientMutationId": "editor-route-create",
-                    "fields": _bubble_fields(
-                        translatedText="编辑写入",
-                        coords=[5, 6, 50, 60],
-                        fontSize=20,
-                    ),
-                }
-            ],
-        },
-    )
-
-    assert mutation_response.status_code == 200
-    mutated = mutation_response.get_json()
-    bubble_id = mutated["mutationResults"][0]["bubbleId"]
-    assert mutated["document"]["documentRevision"] == 2
-    assert mutated["document"]["bubbles"][0]["bubbleId"] == bubble_id
-    assert (
-        mutated["document"]["bubbles"][0]["payload"]["translatedText"]
-        == "编辑写入"
-    )
-
-    font_response = client.patch(
-        f"/api/v2/pages/{page_id}/document",
-        headers={"Idempotency-Key": "editor-route-default-font"},
-        json={
-            "baseRevision": 2,
-            "mutations": [],
-            "defaultFontId": DEFAULT_FONT_ID,
-        },
-    )
-
-    assert font_response.status_code == 200
-    updated = font_response.get_json()["document"]
-    assert updated["documentRevision"] == 3
-    assert updated["defaultFontId"] == DEFAULT_FONT_ID
-
-    invalid_font_response = client.patch(
-        f"/api/v2/pages/{page_id}/document",
-        headers={"Idempotency-Key": "editor-route-invalid-font"},
-        json={
-            "baseRevision": 3,
-            "mutations": [
+            base_revision=2,
+            idempotency_key="retired-bubbles-patch",
+            mutations=[
                 {
                     "op": "patch",
-                    "clientMutationId": "editor-route-invalid-font",
-                    "bubbleId": bubble_id,
-                    "fields": {
-                        "fontId": "",
-                        "translatedText": "不能写入无效字体",
-                    },
+                    "clientMutationId": "retired-bubbles-patch",
+                    "bubbleId": str(uuid.uuid4()),
+                    "fields": {"rotationAngle": 1},
                 }
             ],
-        },
-    )
-
-    assert invalid_font_response.status_code == 422
-    unchanged = repository.get_page_document(page_id)
-    assert unchanged["documentRevision"] == 3
-    assert unchanged["bubbles"][0]["payload"]["translatedText"] == "编辑写入"
+        )
 
 
 def test_content_routes_reject_scalar_coercion_and_missing_required_fields(
@@ -1907,63 +1463,6 @@ def test_content_routes_reject_scalar_coercion_and_missing_required_fields(
             assert response.get_json()["error"]["code"] == "validation_error"
     finally:
         app.extensions["saber_v2_runtime"].close()
-
-
-def test_page_document_command_is_idempotent_and_propagates_style(
-    content_platform,
-) -> None:
-    _root, _engine, repository, _storage, importer, _book, chapter = content_platform
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((50, 50)),
-        logical_path="idempotent-document.png",
-        key="idempotent-document",
-    )
-    page_id = str(imported["page"]["id"])
-    command = {
-        "page_id": page_id,
-        "base_revision": 1,
-        "mutations": [
-            {
-                "op": "create",
-                "clientMutationId": "document-command-create",
-                "fields": _bubble_fields(translatedText="hello", strokeWidth=0.1),
-            }
-        ],
-        "idempotency_key": "document-command",
-        "page_style_defaults_patch": {
-            "autoFontSize": False,
-            "fontSize": 30,
-            "strokeWidth": 1.2,
-        },
-        "propagate_style_fields": ["fontSize", "strokeWidth"],
-    }
-    first, replayed = repository.mutate_page_document(**command)
-    assert replayed is False
-    first_document = first["document"]
-    assert first_document["documentRevision"] == 2
-    assert first_document["pageStyleDefaults"]["fontSize"] == 30
-    assert first_document["bubbles"][0]["payload"]["fontSize"] == 30
-    assert first_document["pageStyleDefaults"]["strokeWidth"] == 1.2
-    assert first_document["bubbles"][0]["payload"]["strokeWidth"] == 1.2
-    assert repository.get_page_document(page_id)["bubbles"][0]["payload"]["strokeWidth"] == 1.2
-    assert first["mutationResults"][0]["clientMutationId"] == (
-        "document-command-create"
-    )
-
-    replay, replayed = repository.mutate_page_document(**command)
-    assert replayed is True
-    assert replay == first
-
-    with pytest.raises(IdempotencyConflict):
-        repository.mutate_page_document(
-            **{
-                **command,
-                "page_style_defaults_patch": {"fontSize": 31},
-            }
-        )
 
 
 def test_quick_workspace_promote_moves_relations_without_moving_assets(
@@ -2178,9 +1677,7 @@ def test_quick_workspace_reset_and_promote_reject_every_active_work_kind(
         )
 
 
-def test_quick_workspace_reset_clears_pages_and_constraints(
-    content_platform,
-) -> None:
+def test_quick_workspace_reset_clears_pages(content_platform) -> None:
     _root, _engine, repository, _storage, importer, _book, _chapter = (
         content_platform
     )
@@ -2197,100 +1694,11 @@ def test_quick_workspace_reset_clears_pages_and_constraints(
         logical_path="reset.png",
         key="quick-reset",
     )
-    repository.update_constraints(
-        book_id=QUICK_WORKSPACE_BOOK_ID,
-        payload={
-            "glossary": {
-                "enabled": True,
-                "autoExtractEnabled": False,
-                "autoExtractPrompt": "提取术语：{ocr_text}",
-                "entries": [
-                    {
-                        "source": "Saber",
-                        "target": "阿尔托莉雅",
-                        "note": "",
-                        "matchMode": "text",
-                    }
-                ],
-            },
-            "nonTranslate": {
-                "enabled": True,
-                "entries": [
-                    {
-                        "pattern": "Excalibur",
-                        "note": "",
-                        "matchMode": "text",
-                    }
-                ],
-            },
-        },
-        base_revision=1,
-    )
 
     reset = repository.reset_quick_workspace()
 
     assert reset["chapterId"] != quick_chapter_id
     assert repository.list_pages(chapter_id=reset["chapterId"])["items"] == []
-    assert (
-        repository.get_constraints(QUICK_WORKSPACE_BOOK_ID)["payload"]
-        == empty_translation_constraints()
-    )
-
-
-def test_translation_constraints_preserve_cleared_auto_extract_prompt(content_platform) -> None:
-    _root, _engine, repository, _storage, _importer, book, _chapter = content_platform
-    payload = empty_translation_constraints()
-    payload["glossary"]["autoExtractPrompt"] = ""
-    repository.update_constraints(
-        book_id=str(book["id"]), base_revision=1, payload=payload,
-    )
-    assert repository.get_constraints(str(book["id"]))["payload"]["glossary"]["autoExtractPrompt"] == ""
-
-
-def test_translation_constraints_validate_regex_and_reject_duplicate_rows(
-    content_platform,
-) -> None:
-    _root, _engine, repository, _storage, _importer, book, _chapter = (
-        content_platform
-    )
-    payload = empty_translation_constraints()
-    payload["glossary"]["enabled"] = True
-    payload["glossary"]["entries"] = [
-        {
-            "source": "Saber",
-            "target": "阿尔托莉雅",
-            "note": "",
-            "matchMode": "text",
-        },
-        {
-            "source": "Saber",
-            "target": "阿尔托莉雅",
-            "note": "",
-            "matchMode": "text",
-        },
-    ]
-    with pytest.raises(ValueError, match="duplicates an earlier glossary entry"):
-        repository.update_constraints(
-            book_id=str(book["id"]),
-            base_revision=1,
-            payload=payload,
-        )
-
-    invalid = empty_translation_constraints()
-    invalid["nonTranslate"]["enabled"] = True
-    invalid["nonTranslate"]["entries"] = [
-        {
-            "pattern": "[unterminated",
-            "note": "",
-            "matchMode": "regex",
-        }
-    ]
-    with pytest.raises(ValueError, match="invalid regular expression"):
-        repository.update_constraints(
-            book_id=str(book["id"]),
-            base_revision=2,
-            payload=invalid,
-        )
 
 
 def test_translation_constraints_have_no_entry_count_gate() -> None:
@@ -2310,7 +1718,7 @@ def test_translation_constraints_have_no_entry_count_gate() -> None:
     assert len(validated["glossary"]["entries"]) == 10_001
 
 
-def test_promote_to_existing_book_keeps_destination_constraints_and_resets_quick(
+def test_promote_to_existing_book_resets_the_quick_workspace(
     content_platform,
 ) -> None:
     _root, _engine, repository, _storage, importer, book, _chapter = (
@@ -2329,55 +1737,6 @@ def test_promote_to_existing_book_keeps_destination_constraints_and_resets_quick
         logical_path="existing.png",
         key="quick-existing",
     )
-    repository.update_constraints(
-        book_id=QUICK_WORKSPACE_BOOK_ID,
-        payload={
-            "glossary": {
-                "enabled": True,
-                "autoExtractEnabled": False,
-                "autoExtractPrompt": "提取术语：{ocr_text}",
-                "entries": [
-                    {
-                        "source": "Quick",
-                        "target": "快速",
-                        "note": "",
-                        "matchMode": "text",
-                    }
-                ],
-            },
-            "nonTranslate": {"enabled": False, "entries": []},
-        },
-        base_revision=1,
-    )
-    repository.update_constraints(
-        book_id=str(book["id"]),
-        payload={
-            "glossary": {
-                "enabled": True,
-                "autoExtractEnabled": False,
-                "autoExtractPrompt": "提取术语：{ocr_text}",
-                "entries": [
-                    {
-                        "source": "Library",
-                        "target": "书架",
-                        "note": "",
-                        "matchMode": "text",
-                    }
-                ],
-            },
-            "nonTranslate": {
-                "enabled": True,
-                "entries": [
-                    {
-                        "pattern": "Keep",
-                        "note": "",
-                        "matchMode": "text",
-                    }
-                ],
-            },
-        },
-        base_revision=1,
-    )
 
     promoted = repository.promote_quick_workspace(
         chapter_title="Imported",
@@ -2385,32 +1744,3 @@ def test_promote_to_existing_book_keeps_destination_constraints_and_resets_quick
     )
 
     assert promoted["chapterId"] == quick_chapter_id
-    assert repository.get_constraints(str(book["id"]))["payload"] == {
-        "glossary": {
-            "enabled": True,
-            "autoExtractEnabled": False,
-            "autoExtractPrompt": "提取术语：{ocr_text}",
-            "entries": [
-                {
-                    "source": "Library",
-                    "target": "书架",
-                    "note": "",
-                    "matchMode": "text",
-                }
-            ],
-        },
-        "nonTranslate": {
-            "enabled": True,
-            "entries": [
-                {
-                    "pattern": "Keep",
-                    "note": "",
-                    "matchMode": "text",
-                }
-            ],
-        },
-    }
-    assert (
-        repository.get_constraints(QUICK_WORKSPACE_BOOK_ID)["payload"]
-        == empty_translation_constraints()
-    )

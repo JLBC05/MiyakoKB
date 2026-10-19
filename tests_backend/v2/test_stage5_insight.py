@@ -2477,13 +2477,15 @@ def test_derived_artifacts_timeline_and_vectors_publish_as_generations(
             )
             .values(status="stale")
         )
+    # QA availability is decoupled from derivation freshness (commit 9c5051e):
+    # a stale artifact no longer blocks global retrieval; the request falls back
+    # to page candidates when no global artifact is usable.
     assert repository.qa_status(
         book_id=str(platform["book"]["id"]),
         mode="global",
     ) == {
-        "available": False,
-        "reason": "compressed_context_stale",
-        "repairAction": "compressed_context_rebuild",
+        "available": True,
+        "reason": None,
     }
     commands.create_job(
         book_id=str(platform["book"]["id"]),

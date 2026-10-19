@@ -55,7 +55,13 @@ def responses(monkeypatch):
 
 
 def _page(number):
-    return {"page_number": number, "page_summary": f"Page {number}", "key_events": [], "continuity_notes": "", "warnings": []}
+    # knowledge mode canonicalises the extra entity categories even when the
+    # model omits them (src/backend_v2/insight/page_schema.py:193-195), so the
+    # expected page carries the same empty defaults.
+    page = {"page_number": number, "page_summary": f"Page {number}", "key_events": [], "continuity_notes": "", "warnings": []}
+    for entity in ("characters", "locations", "abilities", "items", "concepts"):
+        page[entity] = []
+    return page
 
 
 @pytest.mark.parametrize("outcome", ["recovered", "exhausted", "transport-error", "memory-error"])

@@ -36,6 +36,7 @@ from src.backend_v2.runtime_identity import (
 )
 from src.backend_v2.public_policy import (
     DEFAULT_PUBLIC_USER_POLICY,
+    PublicPolicyDenied,
     PublicUserPolicyAccess,
 )
 from src.backend_v2.runtime_profile import (
@@ -241,9 +242,8 @@ def test_local_profile_does_not_mount_public_account_or_scheduler_controls(
         assert client.get("/api/v2/auth/me").status_code == 404
         assert client.get("/api/v2/admin/scheduling-policy").status_code == 404
 
-        cpu_executor = app.extensions["saber_v2_runtime"].executors[0]
-        assert cpu_executor.max_workers == 4
-        assert cpu_executor.concurrency_limit is None
+        # The durable-operations domain is retired, so the API runs no executors.
+        assert app.extensions["saber_v2_runtime"].executors == ()
     finally:
         app.extensions["saber_v2_runtime"].close()
         engine.dispose()
@@ -322,7 +322,6 @@ def test_public_capabilities_host_filter_and_security_headers(public_platform) -
             ]
         },
         "features": {
-            "plugins": False,
             "webImport": False,
             "localProviders": False,
         },
@@ -331,9 +330,8 @@ def test_public_capabilities_host_filter_and_security_headers(public_platform) -
     assert response.headers["Strict-Transport-Security"].startswith("max-age=")
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Cache-Control"] == "no-store"
-    cpu_executor = app.extensions["saber_v2_runtime"].executors[0]
-    assert cpu_executor.max_workers == 8
-    assert cpu_executor.concurrency_limit is not None
+    # The durable-operations domain is retired, so the API runs no executors.
+    assert app.extensions["saber_v2_runtime"].executors == ()
     with public_platform["engine"].connect() as connection:
         assert connection.execute(
             select(users.c.id).where(users.c.id == LOCAL_USER_ID)
@@ -695,18 +693,6 @@ def test_body_supplied_book_ids_cannot_cross_owners(public_platform) -> None:
     book_id = str(created.get_json()["id"])
 
     bob_client, bob_csrf = _login(app, "bob", BOB_PASSWORD)
-    translation = bob_client.post(
-        "/api/v2/translation-batches",
-        base_url=PUBLIC_BASE,
-        headers={
-            "Idempotency-Key": "bob-cross-owner-translation",
-            "X-CSRF-Token": bob_csrf,
-        },
-        json={"bookIds": [book_id], "config": {}},
-    )
-    assert translation.status_code == 422
-    assert "library books" in translation.get_json()["error"]["message"]
-
     analysis = bob_client.post(
         "/api/v2/insight/analysis-jobs",
         base_url=PUBLIC_BASE,
@@ -1000,15 +986,7 @@ def test_admin_can_control_public_user_features_and_admin_is_unrestricted(
 
     blocked_requests = (
         alice_client.get(
-            f"/api/v2/chapters/{chapter_id}/text-export",
-            base_url=PUBLIC_BASE,
-        ),
-        alice_client.get(
             "/api/v2/insight/bootstrap",
-            base_url=PUBLIC_BASE,
-        ),
-        alice_client.get(
-            f"/api/v2/studio/books/{book_id}/index",
             base_url=PUBLIC_BASE,
         ),
         alice_client.patch(
@@ -1065,7 +1043,6 @@ def test_public_policy_forces_locked_settings_on_read_and_write(
     submitted = deepcopy(translation["payload"])
     submitted["lamaDisableResize"] = False
     submitted["parallel"]["enabled"] = True
-    submitted["parallel"]["deepLearningLockSize"] = 9
     saved = alice_client.put(
         "/api/v2/settings/transactions",
         base_url=PUBLIC_BASE,
@@ -1096,7 +1073,8 @@ def test_public_policy_forces_locked_settings_on_read_and_write(
     saved_translation = saved_document["settings"][0]["payload"]
     assert saved_translation["lamaDisableResize"] is True
     assert saved_translation["parallel"]["enabled"] is False
-    assert saved_translation["parallel"]["deepLearningLockSize"] == 4
+    # The four-pool deep-learning clamp retired with the translation pipeline,
+    # so a submitted lock size is no longer rewritten on its way to storage.
 
 
 @pytest.mark.parametrize(
@@ -1125,7 +1103,13 @@ def test_non_default_detector_policy_requires_default_mask_model(
 
 def test_disabled_local_model_is_rejected_before_job_creation(
     public_platform,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Detector / OCR / inpainting work is no longer reachable over HTTP.
+
+    The administrator model policy still gates those models, so the rejection is
+    asserted directly on the policy access object that backed those surfaces.
+    """
     app = public_platform["app"]
     admin_client, admin_csrf = _login(app, "admin", ADMIN_PASSWORD)
     alice_client, alice_csrf = _login(app, "alice", ALICE_PASSWORD)
@@ -1204,66 +1188,23 @@ def test_disabled_local_model_is_rejected_before_job_creation(
     )
     assert page.status_code == 201, page.get_data(as_text=True)
 
-    blocked = alice_client.post(
-        f"/api/v2/chapters/{chapter.get_json()['id']}/detect-jobs",
-        base_url=PUBLIC_BASE,
-        headers={
-            "Idempotency-Key": "policy-model-detect",
-            "X-CSRF-Token": alice_csrf,
-        },
-        json={"pageIds": [page.get_json()["page"]["id"]]},
+    # The policy applies to ordinary public users; outside a request there is no
+    # request-scoped identity, so the role is pinned for this assertion.
+    monkeypatch.setattr(
+        "src.backend_v2.public_policy.current_user_role", lambda: "user"
     )
-    assert blocked.status_code == 403
-    assert blocked.get_json()["error"]["code"] == "model_disabled"
-
-    blocked_page_detect = alice_client.post(
-        f"/api/v2/pages/{page.get_json()['page']['id']}/operations",
-        base_url=PUBLIC_BASE,
-        headers={
-            "Idempotency-Key": "policy-model-page-detect",
-            "X-CSRF-Token": alice_csrf,
-        },
-        json={
-            "kind": "page_detect",
-            "baseRevision": 1,
-        },
+    access = PublicUserPolicyAccess(
+        public_platform["engine"], resolve_runtime_profile("public")
     )
-    assert blocked_page_detect.status_code == 403
-    assert blocked_page_detect.get_json()["error"]["code"] == "model_disabled"
-
-    blocked_ocr = alice_client.post(
-        f"/api/v2/pages/{page.get_json()['page']['id']}/operations",
-        base_url=PUBLIC_BASE,
-        headers={
-            "Idempotency-Key": "policy-model-ocr",
-            "X-CSRF-Token": alice_csrf,
-        },
-        json={
-            "kind": "bubble_ocr",
-            "baseRevision": 1,
-            "bubbleId": "missing-bubble",
-        },
-    )
-    assert blocked_ocr.status_code == 403
-    assert blocked_ocr.get_json()["error"]["code"] == "model_disabled"
-
-    blocked_repair = alice_client.post(
-        f"/api/v2/pages/{page.get_json()['page']['id']}/repairs",
-        base_url=PUBLIC_BASE,
-        headers={
-            "Idempotency-Key": "policy-model-lama",
-            "X-CSRF-Token": alice_csrf,
-        },
-        data={
-            "target": "mask",
-            "base_revision": "1",
-            "method": "lama_mpe",
-            "mask": (BytesIO(_png_bytes()), "mask.png"),
-        },
-        content_type="multipart/form-data",
-    )
-    assert blocked_repair.status_code == 403
-    assert blocked_repair.get_json()["error"]["code"] == "model_disabled"
+    with pytest.raises(PublicPolicyDenied) as detector:
+        access.require_page_operation("page_detect", {"detector_type": "ctd"})
+    assert detector.value.code == "model_disabled"
+    with pytest.raises(PublicPolicyDenied) as ocr:
+        access.require_page_operation("bubble_ocr", {"ocr_engine": "manga_ocr"})
+    assert ocr.value.code == "model_disabled"
+    with pytest.raises(PublicPolicyDenied) as repair:
+        access.require_inpaint_method("lama_mpe")
+    assert repair.value.code == "model_disabled"
     with public_platform["engine"].connect() as connection:
         assert connection.execute(
             select(func.count()).select_from(jobs).where(

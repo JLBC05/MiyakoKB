@@ -28,6 +28,7 @@ UNKEYED_STATE_COMMANDS = frozenset(
         "cancelQueuedJobs",
         "clearChapterPages",
         "clearJobHistory",
+        "confirmLocalImport",
         "continueInterruptedJob",
         "continueJobBatchMembers",
         "createBook",
@@ -37,6 +38,7 @@ UNKEYED_STATE_COMMANDS = frozenset(
         "deleteChapter",
         "deletePage",
         "deleteTag",
+        "importVeneraComics",
         "pauseRunningJob",
         "pauseJobQueue",
         "prioritizeQueuedJobBatchMembers",
@@ -242,24 +244,21 @@ def test_public_operations_do_not_use_an_untyped_generic_object() -> None:
 def test_required_backend_first_commands_are_explicit() -> None:
     document = _document()
     paths = document["paths"]
+    # The operations/repairs and studio chat domains were removed from
+    # src/** by the cleanup commit (src/backend_v2/operations/* is gone and
+    # the runtime exposes neither route set), so they are no longer
+    # backend-first commands that the contract must pin.
     assert {
         "/pages/{page_id}",
         "/pages/{page_id}/document",
-        "/pages/{page_id}/repairs",
-        "/operations/{operation_id}",
         "/jobs/{job_id}/resume",
         "/jobs/{job_id}/continue",
-        "/studio/chat/sessions/{session_id}/messages",
     } <= set(paths)
     assert "/jobs/{job_id}/download" not in paths
     assert "/job-batches/{batch_id}" not in paths
 
     schemas = document["components"]["schemas"]
     assert schemas["JobStatus"]["enum"]
-    assert schemas["OperationStatus"]["enum"]
-    assert set(schemas["StudioMessageCommand"]["required"]) >= {
-        "baseSessionRevision",
-    }
     assert schemas["JobCommandResult"]["required"] == ["jobId", "status"]
     assert schemas["BatchContinueResult"]["required"] == ["continued"]
     list_scope = paths["/jobs"]["get"]["parameters"][0]["schema"]["enum"]

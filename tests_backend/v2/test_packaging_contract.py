@@ -4,15 +4,17 @@ import ast
 import importlib.util
 from pathlib import Path
 
+from packaging.requirements import Requirement
+
 from src.backend_v2.dispatch import _parser
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_packaged_entrypoint_defaults_to_desktop_shell() -> None:
+def test_packaged_entrypoint_defaults_to_the_backend_launcher() -> None:
     defaults = _parser().parse_args([])
-    assert defaults.role == "desktop"
+    assert defaults.role == "launcher"
     assert defaults.host == "127.0.0.1"
 
 
@@ -25,8 +27,6 @@ def test_production_spec_uses_only_the_backend_first_entrypoint() -> None:
     assert "'src.backend_v2.worker.entrypoint'" in spec
     assert "'src.backend_v2.launcher.entrypoint'" in spec
     assert "'PySide6'" not in spec.split("excludes =", 1)[1].split("]", 1)[0]
-    assert "'desktop', 'assets'" in spec
-    assert "'desktop', 'assets', 'app-icon.ico'" in spec
     assert "console=False" in spec
     assert "hide_console=" not in spec
     assert "'openapi', 'v2.yaml'" in spec
@@ -135,21 +135,12 @@ def test_direct_runtime_dependencies_are_declared() -> None:
         "reportlab": "reportlab",
     }
     for filename in ("requirements-cpu.txt", "requirements-gpu.txt"):
-        requirements = {
-            line.strip().split("#", 1)[0].strip().lower()
-            for line in (PROJECT_ROOT / filename).read_text(encoding="utf-8").splitlines()
-        }
+        requirements = set()
+        for line in (PROJECT_ROOT / filename).read_text(encoding="utf-8").splitlines():
+            entry = line.split("#", 1)[0].strip()
+            if entry:
+                requirements.add(Requirement(entry).name.lower())
         assert direct_dependencies.keys() <= requirements
 
     for import_name in direct_dependencies.values():
         assert importlib.util.find_spec(import_name) is not None
-
-
-def test_manga_ocr_is_pinned_to_the_transformers_5_compatible_release() -> None:
-    for filename in ("requirements-cpu.txt", "requirements-gpu.txt"):
-        requirements = {
-            line.strip().split("#", 1)[0].strip().lower()
-            for line in (PROJECT_ROOT / filename).read_text(encoding="utf-8").splitlines()
-        }
-        assert "manga-ocr==0.1.16" in requirements
-        assert "transformers==5.15.0" in requirements
