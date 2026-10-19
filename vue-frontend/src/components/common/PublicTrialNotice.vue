@@ -47,7 +47,7 @@ const emit = defineEmits<{
       </a>
       <a
         class="public-trial-notice__link"
-        href="https://github.com/MashiroSaber03/Saber-Translator"
+        href="https://github.com/JLBC05/MiyakoKB"
         target="_blank"
         rel="noopener noreferrer"
       >

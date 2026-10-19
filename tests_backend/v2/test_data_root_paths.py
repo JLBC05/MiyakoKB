@@ -27,7 +27,7 @@ def test_packaged_default_stays_beside_exe_despite_cwd_and_legacy_data(tmp_path,
     else:
         monkeypatch.delenv("LOCALAPPDATA", raising=False)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(bundle / "Saber-Translator.exe"))
+    monkeypatch.setattr(sys, "executable", str(bundle / "MiyakoKB.exe"))
     root = resolve_data_root()
     assert root == bundle / "data-v2"
     assert control_root(root) == bundle / ".data-v2.saber-storage"

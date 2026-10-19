@@ -1,5 +1,5 @@
 # ============================================================================
-# Saber-Translator 自动构建与发布工作流
+# MiyakoKB 自动构建与发布工作流
 # ============================================================================
 # 触发方式:
 #   1. 在要发布的提交上推送版本标签:
@@ -103,7 +103,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.TAG_NAME }}
           name: v${{ steps.version.outputs.VERSION }}
           body: |
-            ## Saber-Translator v${{ steps.version.outputs.VERSION }}
+            ## MiyakoKB v${{ steps.version.outputs.VERSION }}
             
             > ⚠️ **构建中...请等待 CPU 和 GPU 版本上传完成后再发布。**
             
@@ -116,8 +116,8 @@ jobs:
             ### 下载说明
             
             📦 **普通用户（开箱即用）：**
-            - CPU 版本：下载所有 `Saber-Translator-${{ steps.version.outputs.VERSION }}-cpu.7z*` 文件
-            - GPU 版本：下载所有 `Saber-Translator-${{ steps.version.outputs.VERSION }}-gpu.7z*` 文件
+            - CPU 版本：下载所有 `MiyakoKB-${{ steps.version.outputs.VERSION }}-cpu.7z*` 文件
+            - GPU 版本：下载所有 `MiyakoKB-${{ steps.version.outputs.VERSION }}-gpu.7z*` 文件
             - 将所有分卷放在同一目录，使用 **7-Zip** 或 **Bandzip** 解压 `.7z.001` 文件即可
             
             🔧 **源码部署用户：**
@@ -248,7 +248,7 @@ jobs:
           Get-ChildItem -Path dist/ | Select-Object Name
 
       - name: Probe packaged runtime
-        run: python .github/scripts/probe_package.py dist/Saber-Translator/Saber-Translator.exe
+        run: python .github/scripts/probe_package.py dist/MiyakoKB/MiyakoKB.exe
 
       # --------------------------------------------------
       # 10. 7z 分卷压缩（最高压缩率）
@@ -258,7 +258,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $version = "${{ needs.prepare.outputs.version }}"
           $variant = "${{ matrix.variant }}"
-          $outputName = "Saber-Translator-$version-$variant"
+          $outputName = "MiyakoKB-$version-$variant"
           
           Write-Host "Compressing with 7z format... Output: $outputName.7z (split at 1900MB)"
           
@@ -268,7 +268,7 @@ jobs:
           # -mx=9: Maximum compression level
           # -mfb=258: Maximum FastBytes
           # -v1900m: Split at 1900MB
-          7z a -t7z -mx=9 -mfb=258 -v1900m "../$outputName.7z" "Saber-Translator/*"
+          7z a -t7z -mx=9 -mfb=258 -v1900m "../$outputName.7z" "MiyakoKB/*"
           
           Pop-Location
           
@@ -283,7 +283,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $version = "${{ needs.prepare.outputs.version }}"
           $variant = "${{ matrix.variant }}"
-          $baseName = "Saber-Translator-$version-$variant"
+          $baseName = "MiyakoKB-$version-$variant"
           
           Write-Host "Verifying compressed archives..."
           
@@ -306,7 +306,7 @@ jobs:
       - name: Upload to Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python .github/scripts/upload_release_assets.py "${{ needs.prepare.outputs.tag_name }}" . "Saber-Translator-${{ needs.prepare.outputs.version }}-${{ matrix.variant }}.7z*"
+        run: python .github/scripts/upload_release_assets.py "${{ needs.prepare.outputs.tag_name }}" . "MiyakoKB-${{ needs.prepare.outputs.version }}-${{ matrix.variant }}.7z*"
 
   # ============================================================================
   # 完成 Job - 输出结果

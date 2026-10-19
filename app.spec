@@ -164,7 +164,7 @@ exe = EXE(
     # Frozen Python ignores encoding environment variables; child pipes use UTF-8.
     [('X utf8', None, 'OPTION')],
     exclude_binaries=True,
-    name='Saber-Translator',
+    name='MiyakoKB',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -186,7 +186,7 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name='Saber-Translator',
+    name='MiyakoKB',
 )
 
 bundle_plugins_path = os.path.join(coll.name, 'plugins')

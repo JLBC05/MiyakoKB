@@ -15,7 +15,7 @@ spec.loader.exec_module(release_assets)
 
 
 @pytest.mark.parametrize('pattern,old,other', [
-    ('Saber-Translator-9-cpu.7z*', 'Saber-Translator-9-cpu.7z.003', 'Saber-Translator-9-gpu.7z.003'),
+    ('MiyakoKB-9-cpu.7z*', 'MiyakoKB-9-cpu.7z.003', 'MiyakoKB-9-gpu.7z.003'),
     ('models.z*', 'models.z03', 'README.txt'),
     ('saber-translator-*.zip*', 'saber-translator-browser-extension-v0.zip', 'models.zip'),
 ])

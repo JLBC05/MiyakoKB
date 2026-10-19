@@ -944,7 +944,7 @@ class WebImportWorkerService:
         accept: str,
     ) -> dict[str, str]:
         headers = {
-            "User-Agent": "Saber-Translator/2",
+            "User-Agent": "MiyakoKB/2",
             "Accept": accept,
         }
         if options.get("referer"):

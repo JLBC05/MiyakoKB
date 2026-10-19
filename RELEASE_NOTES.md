@@ -34,10 +34,11 @@
 - **修复打包缺陷：产物此前缺少存储契约 SQL**（`app.spec` 未收集 `src/storage_migrator/schemas`），打包版在全新数据目录上无法初始化存储；现已补入，并把 `LICENSE`、`THIRD_PARTY_LICENSES.md`、`RELEASE_NOTES.md` 一并打进产物。
 - 依赖清单移除 torch / torchvision / onnxruntime / 本地模型推理栈；CI 不再安装这些包，并移除已失效的模型搬运开关。
 - 打包字体目录只保留三款自由许可字体（思源黑体、NotoSans-Medium、ChisugaShotai），其余 25 个无自由再分发许可的字体不再随仓库分发；第三方许可清单见 `THIRD_PARTY_LICENSES.md`。
+- README 重写为 MiyakoKB 定位（导入 / 分析 / 实体对齐 / 图谱 / 问答 / 部署），移除作者个人赞赏码图片与翻译时代的过时截图、重复 logo；品牌名在对外可见层（窗口标题、打包产物名与入口、发行资产名、日志文件、环境变量）统一为 MiyakoKB（后端 Python 包路径保持不变）。
 - 后端测试套件 **937 passed**；前端 `vitest` / `vue-tsc` / `eslint` / `stylelint` / UI 架构审计全部通过；打包后按 `probe_package.py` 逐角色（launcher / api / worker / storage-migrator）验证通过。
+- 前端单测清理：随翻译/OCR 域退休而失效的用例（`promptMode.property.ts`、`settings.defaults.test.ts`、`settings.current-schema.test.ts`）已删除，`router.property.ts`、`settingsStore.property.ts` 按当前路由与 store 面重写，新增 `settings.backend-loading.test.ts` 覆盖后端优先加载与事务保存；全量 vitest **88 files / 642 tests** 全绿（此前的分目录运行掩盖了这批失败）。
 
 ### 已知遗留（不阻塞发布）
 
 - **退休域的接缝**：`/pages/{page_id}/bubbles` 等路由仍注册、契约仍有条目，但已不再落库（调用会得到 200 与空结果）。是否把这些接缝一并裁剪（或改为明确的 410）待产品拍板。
 - `plugin_agent` 作业类型、`page_repair` 操作类型等「半删除域」：数据库 CHECK 约束与既有行仍保留，前端设置界面是否彻底移除待一并决定。
-- README 中的作者个人赞赏码图片（`pic/wechat_qrcode.png`、`pic/alipay_qrcode.png`）仍随仓库分发，如需公开仓库建议替换或删除。

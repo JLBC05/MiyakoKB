@@ -1020,7 +1020,7 @@ def run_launcher(args: object) -> int:
     )
     user_log(
         "system",
-        f"Saber-Translator 正在启动｜Python {sys.version.split()[0]}",
+        f"MiyakoKB 正在启动｜Python {sys.version.split()[0]}",
     )
     LOGGER.debug(
         "运行参数：profile=%s，data_root=%s，监听=%s:%s，日志=%s",

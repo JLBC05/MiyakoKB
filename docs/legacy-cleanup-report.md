@@ -83,13 +83,13 @@
 | 前端类型检查 | `vue-tsc -b --pretty false` | **0 条错误**（25 → 23 → 0：图标名/按钮变体白名单与 `stores/settings` 事务类型漂移均已修） |
 | 未定义全局名扫描 | `python tmp_scan_undefined.py`（symtable 静态扫描 `src/`） | 空结果（修掉 `jobs/retry.py` 的 `job_plugin_snapshots`、`insight/routes.py` 的 `LOGGER` 之后） |
 | 失败项局部重跑链路 | `POST /api/v2/jobs/<id>/retry-failed`（需 Idempotency-Key） | 补跑 **20/20 全部发布**（含 10 失败页、5 失败衍生、5 取消衍生），`degraded` 产物全部转 `ready`，详见 `acceptance6_stress_report.md` §5.3-§5.4 |
-| 前端六项门禁 | `vitest run` / `vue-tsc -b` / `eslint .` / `stylelint 'src/**/*.{vue,css}'` / `check-ui-architecture.mjs` / `… --audit` | **全部 exit 0**（vitest：75 files / 587 tests passed） |
+| 前端六项门禁 | `vitest run` / `vue-tsc -b` / `eslint .` / `stylelint 'src/**/*.{vue,css}'` / `check-ui-architecture.mjs` / `… --audit` | **全部 exit 0**（vitest：88 files / 642 tests passed）。注意：本轮早期只按目录跑 `tests/unit`，漏掉了 `src/**/*.test.ts` 与 `tests/property/**`，其中 3 个文件仍是翻译/OCR 时代用例（`promptMode.property.ts`、`settings.defaults.test.ts`、`settings.current-schema.test.ts`）→ 已删除，`router.property.ts` / `settingsStore.property.ts` 按当前路由与 store 面重写，并新增 `settings.backend-loading.test.ts` |
 | 打包产物实跑 | `python -m PyInstaller app.spec --clean` + `.github/scripts/probe_package.py` | 首次探测失败（产物缺存储契约 SQL，见发现 #33）→ 修复 spec 后 **launcher/api/worker/storage-migrator upgrade+check 全部 ready，exit 0** |
 
 未做 / 待补：
 
-- **品牌定稿**（唯一未完成的产品决策项）：`app.spec` 产物名、数据目录/库文件名（`saber.sqlite3`）、日志前缀、前端若干字符串仍为 `Saber-Translator` / `saber`（tracked 文件 `-i saber` 共 431 处：tests_backend 159、src 121、其他 90、vue-frontend 39、.github 11、docs 11）。改名会牵动发行资产名（`Saber-Translator-<version>-<variant>.7z`）、打包契约测试与既有用户的数据目录，需单独拍板。
-- README 内两张作者个人赞赏码（`pic/wechat_qrcode.png`、`pic/alipay_qrcode.png`，README 第 441/447/451 行）未处理——属个人信息，需作者决定删除或替换。
+- **品牌定稿（已完成）**：对外可见层统一为 MiyakoKB——`app.spec` 产物名/入口、发行资产名、日志文件名与环境变量、窗口/页面标题、README 与发布文案；按用户拍板**只改对外可见层**，后端 Python 包路径（`src.*`）、数据目录与库文件名（`saber.sqlite3`）、内部模块名保持原样，以免破坏既有用户数据与全部 import。
+- README 内两张作者个人赞赏码（`pic/wechat_qrcode.png`、`pic/alipay_qrcode.png`）已按用户拍板删除，同时清理翻译时代的过时截图（`before*/after*/Editor/interface/global-mode`）、重复 `logo1.png` 与未引用生成图。
 - `docs/legacy-cleanup-report.md`、`docs/insight-cleanup-plan.md` 原先被 `.gitignore` 的 `docs/*` 规则排除；本轮已加白名单使其可入库。
 
 ## 10. 未处理 / 后续建议

@@ -122,7 +122,7 @@ const modelControls: Array<{
   { key: 'detector_ctd', label: 'CTD 检测' },
   { key: 'detector_yolo', label: 'YOLO 检测' },
   { key: 'aux_ysg_yolo', label: 'YSG YOLO 辅助检测' },
-  { key: 'saber_yolo', label: 'Saber YOLO 精修' },
+  { key: 'saber_yolo', label: 'YOLO 精修' },
   { key: 'ocr_48px', label: '48px OCR' },
   { key: 'paddle_ocr', label: 'Paddle OCR' },
   { key: 'paddleocr_vl', label: 'PaddleOCR-VL' },
