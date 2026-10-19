@@ -2288,7 +2288,7 @@ def test_settings_http_transaction_updates_prompts_idempotently(platform) -> Non
 def test_settings_http_accepts_true_type_collections(platform) -> None:
     data_root, engine = platform
     source_path = next(
-        font.path for font in bundled_font_files() if font.path.name == "ALGER.TTF"
+        font.path for font in bundled_font_files() if font.path.name == "NotoSans-Medium.ttf"
     )
     source_font = TTFont(source_path)
     collection = TTCollection()

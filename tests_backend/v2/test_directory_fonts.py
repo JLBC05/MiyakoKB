@@ -29,7 +29,7 @@ from src.version import STORAGE_VERSION
 
 @pytest.fixture
 def directory_fonts(tmp_path, monkeypatch):
-    source = next(f.path for f in font_files.bundled_font_files() if f.path.name == 'ALGER.TTF')
+    source = next(f.path for f in font_files.bundled_font_files() if f.path.name == 'NotoSans-Medium.ttf')
     bundled = tmp_path / 'bundle'
     bundled.mkdir()
     shutil.copyfile(source, bundled / 'Alpha.ttf')
@@ -212,7 +212,7 @@ def test_private_font_usage_remains_quota_limited(directory_fonts):
 def test_350_upgrade_preserves_font_ids_page_references_and_bytes(tmp_path, display_name):
     root = tmp_path / 'old'
     root.mkdir()
-    payload = next(f.path for f in font_files.bundled_font_files() if f.path.name == 'ALGER.TTF').read_bytes()
+    payload = next(f.path for f in font_files.bundled_font_files() if f.path.name == 'NotoSans-Medium.ttf').read_bytes()
     relative = 'objects/old/custom.ttf'
     (root / relative).parent.mkdir(parents=True)
     (root / relative).write_bytes(payload)
