@@ -724,28 +724,42 @@ class LLMBatchJudge:
     失败语义（方案4）：
     - 异常**绝不写入缓存**（避免把网关故障固化成 same=false 的脏判定）；
     - 不引入 inconclusive 第三态，保持布尔二态：失败只计数，下次重跑自然重判；
-    - 失败/漏答的候选对本次调用返回 False，但不落盘。
+    - 失败/漏答的候选对本次调用返回 False，但不落盘；
+    - **不内置任何网关地址与默认密钥**：未配置时直接判 False（`skipped_unconfigured` 计数），
+      既不发起请求也不写缓存，语义等同「网关不可达」。
     """
 
     def __init__(
         self,
-        base_url: str = "http://8.216.18.224:8317/v1",
-        api_key: str = "123456",
-        model: str = "gemini-3.8-flash-high",
+        base_url: str | None = None,
+        api_key: str | None = None,
+        model: str | None = None,
         provider: str = "gemini",
         book_id: str | None = None,
         cache_file: str | None = None,
         batch_size: int | None = None,
         parallel: int | None = None,
     ):
-        from src.core.manga_insight.embedding_client import ChatClient, ChatLLMConfig
-        cfg = ChatLLMConfig(
-            provider=provider,
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-        )
-        self.client = ChatClient(cfg)
+        resolved_base_url = (base_url or "").strip()
+        resolved_api_key = (api_key or "").strip()
+        resolved_model = (model or "").strip()
+        # 绝不内置网关地址或默认密钥（发布版安全要求）：缺任一关键项即视为「未配置裁决器」。
+        self.enabled = bool(resolved_base_url and resolved_api_key and resolved_model)
+        if self.enabled:
+            from src.core.manga_insight.embedding_client import ChatClient, ChatLLMConfig
+            cfg = ChatLLMConfig(
+                provider=provider,
+                api_key=resolved_api_key,
+                model=resolved_model,
+                base_url=resolved_base_url,
+            )
+            self.client: Any = ChatClient(cfg)
+        else:
+            # 未配置：语义与「网关不可达」一致——本轮全部判 False、不写缓存，下次重跑自然重判。
+            self.client = None
+            LOGGER.warning(
+                "实体对齐语义裁决器未配置（缺少 base_url/api_key/model），本轮跳过 LLM 语义裁决"
+            )
         self.book_id = book_id
         self.cache_file = cache_file or resolve_llm_judge_cache_file(book_id)
         self.batch_size = max(1, min(35, int(batch_size or JUDGE_BATCH_SIZE)))
@@ -756,6 +770,7 @@ class LLMBatchJudge:
         self.failures: int = 0
         self.unanswered: int = 0
         self.dropped_entries: int = 0
+        self.skipped_unconfigured: int = 0
         self.load_cache()
 
     @staticmethod
@@ -776,6 +791,8 @@ class LLMBatchJudge:
             "dropped_entries": self.dropped_entries,
             "batch_size": self.batch_size,
             "parallel": self.parallel,
+            "enabled": self.enabled,
+            "skipped_unconfigured": self.skipped_unconfigured,
         }
 
     def load_cache(self) -> None:
@@ -820,6 +837,13 @@ class LLMBatchJudge:
                 })
 
         if not to_query:
+            return results
+
+        if not self.enabled:
+            # 未配置裁决器：不发任何网络请求，全部判 False 且不写缓存。
+            self.skipped_unconfigured += len(to_query)
+            for item in to_query:
+                results[item["key"]] = False
             return results
 
         chunks = [to_query[i:i + self.batch_size] for i in range(0, len(to_query), self.batch_size)]
