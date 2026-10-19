@@ -3044,11 +3044,10 @@ class InsightDerivedRepository:
             if selected_run_ids == {active_run_id}:
                 source_run_id = active_run_id
                 source_run_status = active_run_status
-                book_page_count = connection.execute(
-                    select(func.count()).select_from(numbered_pages)
-                ).scalar_one()
-                if len(pages_payload) < book_page_count:
-                    source_run_status = "completed_with_errors"
+                # 状态只按本次 run 的目标页判定：run 的 status 列已由 finalize_run 依据
+                # 该 run 自身的 failed_count / postprocess 结果写明（repository.finalize_run），
+                # 「只覆盖全书一部分」不再折算成 completed_with_errors —— 覆盖范围由产物
+                # 自带的 coverage 元数据表达（发现 #28）。
         return AnalysisInputSnapshot(
             book_id=book_id,
             source_run_id=source_run_id,
@@ -5592,8 +5591,8 @@ class InsightDerivedRepository:
         book_id: str,
         mode: str = "exact",
     ) -> dict[str, Any]:
-        if mode not in {"exact", "global"}:
-            raise ValueError("mode must be exact or global")
+        if mode not in {"generic", "exact", "global"}:
+            raise ValueError("mode must be generic, exact or global")
         with self.engine.connect() as connection:
             self._assert_book_owned(connection, book_id)
             try:
@@ -5609,6 +5608,7 @@ class InsightDerivedRepository:
                 "available": True,
                 "reason": None,
             }
+        # generic 与 exact 共用同一套页面/向量可用性判定。
         with self.engine.connect() as connection:
             vector = connection.execute(
                 select(vector_generations).where(

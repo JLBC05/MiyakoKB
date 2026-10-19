@@ -352,6 +352,7 @@ class FakeQAApiAlgorithms:
         *,
         question,
         candidates,
+        resolved_entities,
         config,
         cancelled,
     ):
@@ -684,7 +685,8 @@ def test_partial_analysis_context_is_readable_without_analyzing_other_pages(insi
     assert repository.compressed_context_input(frozen) is not None
     artifact = repository.get_artifact(book_id=platform["book"]["id"], kind="compressed_context", template="default")
     assert artifact["runId"] == accepted["runId"]
-    assert artifact["status"] == "degraded"
+    # 只分析 1 页 ≠ 失败：状态按本次 run 的目标页判定（发现 #28）。
+    assert artifact["status"] == "ready"
 
 
 @pytest.mark.parametrize("scope", ("full", "incremental", "chapter", "page"))
@@ -1080,6 +1082,7 @@ def test_full_analysis_freezes_assets_and_publishes_canonical_results(
     assert layer_indices == {0, 1, 2}
     assert active_artifacts == {
         ("compressed_context", "default"),
+        ("entity_alignment", "default"),
         ("overview", "no_spoiler"),
         ("overview", "story_summary"),
     }
@@ -1088,7 +1091,9 @@ def test_full_analysis_freezes_assets_and_publishes_canonical_results(
     assert all("schema_version" not in json.loads(payload) for payload in payloads)
     assert all('"scene"' not in payload for payload in payloads)
     assert all('"dialogues"' not in payload for payload in payloads)
-    assert all('"characters"' not in payload for payload in payloads)
+    # 不再断言 '"characters"' 缺失：knowledgeMode 开启时页面产物按
+    # page_schema._extra_entity_keys 携带 characters/locations/abilities/items/concepts
+    # 五个实体数组（CORE_PERSISTED_FIELDS 允许），属规范字段而非原始模型字段。
 
 
 def test_full_analysis_passes_previous_batch_context_to_vlm(
@@ -2142,7 +2147,9 @@ def test_derived_rebuild_uses_available_pages_and_reports_partial_coverage(
     partial = InsightDerivedRepository(platform["engine"]).get_artifact(
         book_id=book_id, kind="overview", template="no_spoiler",
     )
-    assert partial["status"] == "degraded"
+    # 新页尚未分析时重建：可用页全部成功 → ready；覆盖范围仍由 snapshot.pages 表达
+    # （下面断言新页未进入快照，分析新页后才进入），见发现 #28。
+    assert partial["status"] == "ready"
 
     analysis_commands.create_analysis_job(
         command={
@@ -5471,9 +5478,10 @@ def test_global_qa_reads_published_artifacts_as_mapping_rows(
     )
 
 
-def test_partial_analysis_can_rebuild_degraded_global_artifacts(
+def test_partial_analysis_publishes_ready_global_artifacts(
     insight_platform,
 ) -> None:
+    """只分析全书一小部分 ≠ 失败：状态按本次 run 的目标页判定（发现 #28）。"""
     platform = insight_platform
     InsightAnalysisCommandService(platform["engine"]).create_analysis_job(
         command={
@@ -5492,7 +5500,7 @@ def test_partial_analysis_can_rebuild_degraded_global_artifacts(
     artifact = InsightDerivedRepository(platform["engine"]).get_artifact(
         book_id=str(platform["book"]["id"]), kind="overview", template="no_spoiler",
     )
-    assert artifact["status"] == "degraded"
+    assert artifact["status"] == "ready"
 
 
 def test_qa_answer_stream_reuses_wall_clock_async_transport(monkeypatch) -> None:

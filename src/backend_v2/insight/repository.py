@@ -1941,14 +1941,10 @@ class InsightRepository:
             run_id=run_id,
             now=now,
         )
+        # 派生状态只跟随本次 run 自身的成败（final_status 已由本 run 的 failed_count /
+        # postprocess 结果决定）；「只覆盖全书一部分」不是失败，不折算成 degraded。
         derived_status = (
-            "degraded"
-            if final_status == "completed_with_errors" or success_count < connection.execute(
-                select(func.count(pages.c.id))
-                .join(chapters, chapters.c.id == pages.c.chapter_id)
-                .where(chapters.c.book_id == book_id)
-            ).scalar_one()
-            else "ready"
+            "degraded" if final_status == "completed_with_errors" else "ready"
         )
         connection.execute(
             update(analysis_layer_results)
