@@ -1,6 +1,6 @@
 # MiyakoKB 验收点6 压测报告
 
-> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #25。
+> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #29。
 > 目标：生产环境大体量漫画（50+ 话）端到端压力测试与跨章节实体消歧观察。
 
 ## 1. 测试范围与环境
@@ -257,6 +257,17 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 
 **验证**：重启栈后对三个产物各触发一次重建（job `d7ba340e-9ca0-4045-910b-f23346ed335a` / `ddb49c59-3a57-4cf7-9ad7-741471920001` / `a13510df-373e-466b-9bf6-5204f48a8197`，均 completed 1/1）→ `compressed_context/default`、`overview/no_spoiler`、`overview/story_summary` 全部 **rev3 `status=ready`、active=True**（rev1/rev2 已停用）；`entity_alignment/default` rev5 保持 ready。此后 `degraded` 只表示该 run 自身确有失败页或后处理失败，补跑成功后重建即可转 ready。
 
+### 5.7 已删插件域的契约/旗标残留与前端产物陈旧（2026-10-19，用户批准后清理）
+
+`GET /api/v2/system/capabilities` 持续 500：`cleanup`（提交 `09f44a4`）删除了插件域，但 capabilities 载荷仍在读 `RuntimeProfile.allow_plugins`（`src/backend_v2/api/app.py`，`AttributeError`）。注意日志层级：`data-v2/logs/saber-api.log` 只记「状态码 500」摘要，完整栈帧在 `data-v2/logs/saber-api-diagnostic.log`。
+
+**修复（不复活已删域，而是摘掉残留）**
+- `src/backend_v2/api/app.py`：capabilities 载荷去掉 `plugins`；`openapi/v2.yaml` 的 `RuntimeCapabilities.features` 去掉该属性与 required 项；`vue-frontend/src/api/v2/auth.ts`、`vue-frontend/src/stores/runtimeStore.ts` 同步（前端已无人读该旗标）；`node node_modules/openapi-typescript/bin/cli.js ../openapi/v2.yaml -o src/api/generated/v2.ts` 重生成（−784 行）。
+- 契约裁剪：删除 `/plugins`（8 条）与 `/plugin-agent`（5 条）全部路径、19 个 `Plugin*` schema、`PluginId`/`PluginAgentSessionId` 参数与 `plugins`/`plugin-agent` 两个 tag，共 36 个块 647 行；`openapi/v2.yaml` 现 **124 paths / 242 schemas**，后端对应路由实测 404（此前契约单方面保留死路径）。
+- 前端产物重建：`src/backend_v2/static/vue` 旧产物（构建于 10-18 16:16）仍在调用已删的 `POST /api/v2/system/release-models`；`node node_modules/vite/bin/vite.js build` 重建（50 文件 / 2.4 MiB，入口 `index.BN-Jkyfc.js`），三条死引用（release-models、`/api/v2/plugins`、`features.plugins`）实测归零；旧捐赠二维码图片（源码侧已无来源）随产物空目录清理一并删除。
+
+**验证**：`compileall` exit 0；重启栈后 `/api/v2/system/capabilities` 200（`features={localProviders,webImport}`，`scheduling.maxDeepLearningConcurrency` 为 null 表示不限）、`/api/v2/openapi.json` 124 paths / 0 个 plugin 路径、`GET /` 已引用新包；`vue-tsc` 23 个错误与基线一致（未新增）。提交 `557679b`、`8f334ae`。
+
 ## 6. 发现与建议汇总（滚动）
 
 | # | 级别 | 发现 | 建议 |
@@ -289,6 +300,7 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 | 26 | 低 | 手动重建（`POST /books/<id>/entity-alignment/rebuild`）产出的对齐产物 `run_id` 为 **NULL**，于是所有依赖「产物 run → 页 → 章」映射的展示（分析器/前端章覆盖）失去依据 | 重建时写入源 run（或按 `pages → analysis_page_results` 反查）；下游读者应容忍 NULL 并回退到最近 run（分析器已如此实现） |
 | 27 | 低 | 产物 `status=degraded` 的判据是「source_run_status 含 `completed_with_errors`」（`_publication_status`，derived.py:6650-6658），且**不会因后来补跑成功而自动变绿**：`entity_alignment` 手动重建后转 ready，而 compressed_context/overviews 仍 degraded（其 layer 结果源自旧失败 run）（真实分母见 #28） | UI 应说明 degraded 的含义与消除方式（重建对应产物）；或让补跑成功后自动使下游衍生产物失效并排队重建。**已于 2026-10-19 按 #28 拆分语义：`degraded` 现仅表示本次 run 自身有失败（见 §5.6 / 决策 10）** |
 | 28 | 高 | **产物「永远 degraded」的真实根因：派生状态把「全书页数」当分母**。局部范围 run（前 10 话 234 页，全书 2998 页）即使自身目标 234/234 全部成功，仍被判为「有失败」：①`derived.py:3044-3051` 用全书页数算 `source_run_status`（234 < 2998）→ 快照写 `completed_with_errors` → 经 `_publication_status`（derived.py:6650-6658）令产物 degraded；②`repository.py:1944-1952` 的 `derived_status` 同样用 `success_count < 全书页数`。因此**手动重建不可能转 ready**：2026-10-19 对 compressed_context / overview(no_spoiler) / overview(story_summary) 三个端点各重建一次，新 rev2 仍为 degraded（源 run `2c9d40c2` 运行状态确为 `completed`、目标 234/234 成功、`analysis_heads` 全部指向它）。口径也不一致：`entity_alignment` 的生成点硬编码 `status="ready"`（derived.py:4354-4361），同一批产物里只有它「干净」。测试 `test_stage5_insight.py:5474-5495` 把 degraded 当作期望行为 | 二选一：①**保留语义**（degraded ＝ 派生输入只覆盖全书一部分，信息量为真），由 UI 说明并在产物上显式展示 coverage；②**拆分「失败」与「覆盖不全」**：状态只按本次 run 的目标页判定（干净 run → ready），另在快照/payload 记录 coverage 与 partial 标志，同时统一 `entity_alignment` 口径并改那条测试。若不动代码，唯一能让产物真变 ready 的路径是跑完整本 2998 页。**已修复（2026-10-19，用户选方案②，见 §5.6 / 决策 10）**：删除 `derived.py` 快照里「全书页数当分母」的改写（改为采信 run 自身 status），`repository.py` 的 `derived_status` 只按本次 run 的 `final_status`；重建三个产物均 rev3 `status=ready`；测试期望同步 3 处、删除 1 条过期断言。保留取舍：`entity_alignment` 独立重建仍硬编码 ready（其产物无 run 可判定） |
+| 29 | 高 | **已删插件域的残留使用点 + 陈旧前端产物**：`cleanup` 删除插件域后，①`src/backend_v2/api/app.py` 的 capabilities 载荷仍读 `RuntimeProfile.allow_plugins` → `AttributeError` → `GET /api/v2/system/capabilities` 自 2026-10-19 13:53 起持续 500（与 #23 同一族缺陷）；②`openapi/v2.yaml` 仍留 `/plugins`、`/plugin-agent` 共 13 条死路径与 19 个 `Plugin*` schema（后端已无路由）；③`src/backend_v2/static/vue` 旧产物（10-18 16:16）仍在调用已删的 `POST /api/v2/system/release-models` | **已修复（§5.7）**：capabilities 去掉 `features.plugins`（不复活已删域）、契约裁剪 36 块并重生成 `v2.ts`、前端产物重建；建议把「未定义全局名扫描（`tmp_scan_undefined.py`）+ 契约死引用扫描 + 前端产物重建」列为删域后的固定收尾动作，并在排障指引中注明「`saber-api.log` 只记状态码，栈帧在 `saber-api-diagnostic.log`」 |
 
 ## 7. 附录
 - 监控手段：job_items 状态分布查询（tmp_job_status.py）、worker 日志（data-v2/logs/saber-worker.log）、守护脚本（tmp_guard_job.py，空闲 360s 触发 reconcile+continue）。

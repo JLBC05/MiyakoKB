@@ -79,7 +79,7 @@
 - [x] 验收点 3：关系图谱轻量化、丝滑无卡顿，故事梗概合并打通实体。
 - [x] 验收点 4：问答引用消除冗余括号章节号，优先显示真实话数。
 - [x] 验收点 5：统一启动器拉起双进程稳定运行。
-- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#28）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
+- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#29）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；
@@ -128,6 +128,13 @@
   - *验证*：重启栈后重建三个产物（job `d7ba340e` / `ddb49c59` / `a13510df`，均 completed 1/1）→ `compressed_context`、`overview(no_spoiler)`、`overview(story_summary)` 全部 rev3 `status=ready`、active=True；`entity_alignment/default` rev5 保持 ready。测试期望同步 3 处并删除 1 条过期断言（报告 §5.6）。
   - *已知取舍*：`entity_alignment` 独立重建路径仍硬编码 `status="ready"`（derived.py:4354-4361）——其产物 `run_id` 为 NULL（发现 #26），没有 run 可判定。
 
+- **决策 11：清理已删域时「删代码」≠「删干净」——必须同步清契约、旗标与前端产物**（2026-10-19 用户批准）
+  - *背景*：见坑 11 / 发现 #29——插件域删除后仍有使用点残留：capabilities 载荷读已删的 `RuntimeProfile.allow_plugins` → `GET /api/v2/system/capabilities` 持续 500；OpenAPI 仍留 13 条死路径与 19 个 `Plugin*` schema；前端产物仍在调已删的 `POST /api/v2/system/release-models`。
+  - *否决方案*：为兼容旧契约把 `allow_plugins` 加回 `RuntimeProfile`（等于半复活已删域，且会让前端继续下发无意义的插件旗标）。
+  - *实现*：`app.py` capabilities 去掉 `features.plugins`；`openapi/v2.yaml` 删除 `/plugins`、`/plugin-agent` 全部路径与 `Plugin*` schema/参数/tags（36 块，现 124 paths / 242 schemas）；`openapi-typescript` 重生成 `v2.ts`；`vite build` 重建 `src/backend_v2/static/vue`。
+  - *验证*：capabilities / `server-info` / `jobs` / `settings` / `qa/status` 全 200，`/api/v2/plugins` 与 `/api/v2/tasks` 404，`/api/v2/openapi.json` 0 个 plugin 路径，`vue-tsc` 23 个错误与基线一致（未新增）；提交 `557679b`、`8f334ae`。
+  - *遗留*：`plugin_agent` 属「半删除域」——`JOB_KINDS` 仍含该 job 类型（`storage/schema.py:93`，与 OpenAPI job-kind 枚举、DB CHECK 一致）、设置域仍被接受（`settings/validation.py:42,97,120`）、前端设置类型仍列它；与 DB CHECK 兼容一起另案清理（不在本轮范围）。
+
 ---
 
 ## 5. 踩过的坑 / 阻塞
@@ -165,6 +172,12 @@
   - *根因*（发现 #28）：派生状态把**全书页数**当分母 —— ①`derived.py:3044-3051` 用全书页数算产物快照的 `source_run_status`（234 < 2998 → `completed_with_errors`），再由 `_publication_status`（derived.py:6650-6658）记为 degraded；②`repository.py:1944-1952` 的 `derived_status` 同样比较 `success_count < 全书页数`。另有一致性缺口：`entity_alignment` 生成点硬编码 `status="ready"`（derived.py:4354-4361），同一批产物里只有它「干净」；`tests_backend/v2/test_stage5_insight.py:5474-5495` 还把 degraded 当期望行为。
   - *现状*：**已于 2026-10-19 按方案②落地（决策 10）**——状态只按本次 run 的目标页判定：①删除 `derived.py` 快照里「全书页数当分母」的改写（现为 `source_run_status = active_run_status`，derived.py:3046）；②`repository.py:1946` 的 `derived_status` 只按本次 run 的 `final_status`。重建三产物 → 全部 rev3 `ready`（此前 rev2 仍 degraded）；覆盖范围改由 `snapshot.pages` / `source_coverage` / `qa/status.coverage` 表达。测试同步 `tests_backend/v2/test_stage5_insight.py` 三处期望由 degraded 改 ready（含更名 `test_partial_analysis_publishes_ready_global_artifacts`），并删除过期断言 `'"characters"' not in payload`（`knowledgeMode` 下页面产物规范携带五个实体数组）。*残留取舍*：`entity_alignment` 独立重建仍硬编码 ready（其产物无 run 可判定）。
 
+- **坑 11：已删域的使用点残留会以 500 / 死引用形式浮出来**
+  - *现象*：`GET /api/v2/system/capabilities` 自 2026-10-19 13:53 起持续 500；`data-v2/logs/saber-api.log` 只有「状态码 500」摘要，看起来像瞬时故障。
+  - *根因*（发现 #29）：`cleanup` 删除插件域后①`src/backend_v2/api/app.py` 的 capabilities 载荷仍读 `RuntimeProfile.allow_plugins`（`AttributeError`，完整栈帧只在 `data-v2/logs/saber-api-diagnostic.log`）；②`openapi/v2.yaml` 仍留 13 条 `/plugins`、`/plugin-agent` 死路径与 19 个 `Plugin*` schema；③`src/backend_v2/static/vue` 旧产物仍在调已删的 `POST /api/v2/system/release-models`。同族缺陷此前已有坑 8 里 `retry-failed` 的两处未定义全局名（发现 #23）。
+  - *现状*：**已修**（决策 11 / 报告 §5.7）——capabilities 200（`features={localProviders,webImport}`）、契约裁剪 36 块、`v2.ts` 重生成、前端产物重建（50 文件 / 2.4 MiB）；提交 `557679b`、`8f334ae`。
+  - *自检命令*（删域后固定跑）：`python tmp_scan_undefined.py`（未定义全局名扫描）；`Select-String -Path openapi/v2.yaml -Pattern '^  /(plugins|plugin-agent)'`（应无输出）；重建产物后 grep 已删接口路径（本轮为 `release-models`、`/api/v2/plugins`、`features.plugins`，均应为 0）。排查 API 500 时先看 `data-v2/logs/saber-api-diagnostic.log`，`saber-api.log` 只有摘要。
+
 ---
 
 ## 6. 新会话先读
@@ -174,9 +187,9 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#28、裁决候选对离线回放数据、附录里的分析脚本清单）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#29、裁决候选对离线回放数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
-9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）。
+9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）。
 
 ---
 
