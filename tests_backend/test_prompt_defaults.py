@@ -2,14 +2,12 @@ import json
 import unittest
 from pathlib import Path
 
-from src.backend_v2.content.translation_constraints import (
-    DEFAULT_AUTO_GLOSSARY_PROMPT,
-)
 from src.shared.constants import (
     BATCH_TRANSLATE_JSON_SYSTEM_TEMPLATE,
     BATCH_TRANSLATE_SYSTEM_TEMPLATE,
     DEFAULT_AI_VISION_OCR_JSON_PROMPT,
     DEFAULT_AI_VISION_OCR_PROMPT,
+    DEFAULT_AUTO_GLOSSARY_PROMPT,
     DEFAULT_HQ_TRANSLATE_PROMPT,
     DEFAULT_PROMPT,
     DEFAULT_PROOFREADING_PROMPT,

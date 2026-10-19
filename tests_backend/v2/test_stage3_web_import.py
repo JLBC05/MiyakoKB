@@ -77,6 +77,19 @@ def _png(color: tuple[int, int, int]) -> bytes:
     return output.getvalue()
 
 
+def _active_draft_ids(engine, chapter_id: str) -> list[str]:
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(web_import_drafts.c.id, web_import_drafts.c.status).where(
+                web_import_drafts.c.chapter_id == chapter_id
+            )
+        ).all()
+    return [
+        row.id
+        for row in rows
+        if row.status not in {"completed", "failed", "cancelled"}
+    ]
+
 def test_web_agent_result_parser_accepts_only_the_current_schema() -> None:
     parser = object.__new__(MangaScraperAgent)
     current = parser._parse_result(
@@ -823,16 +836,10 @@ def test_cancelled_web_extract_draft_is_not_restored_as_active(
     draft_id = str(accepted["draftId"])
     job_id = str(accepted["jobIds"][0])
 
-    assert content.translation_bootstrap(
-        book_id=str(book["id"]),
-        chapter_id=str(chapter["id"]),
-    )["activeWebImportDraft"]["id"] == draft_id
+    assert _active_draft_ids(engine, str(chapter["id"])) == [draft_id]
     assert JobQueueRepository(engine).request_cancel(job_id)["status"] == "cancelled"
     assert commands.get_draft(draft_id)["status"] == "cancelled"
-    assert content.translation_bootstrap(
-        book_id=str(book["id"]),
-        chapter_id=str(chapter["id"]),
-    )["activeWebImportDraft"] is None
+    assert _active_draft_ids(engine, str(chapter["id"])) == []
 
     engine.dispose()
 
@@ -894,10 +901,7 @@ def test_web_extract_retry_creates_a_fresh_durable_draft(
     assert retry_job["retry_of_job_id"] == source_job_id
     assert retry_job["retry_mode"] == "current"
     assert commands.get_draft(retry_draft_id)["status"] == "extracting"
-    assert content.translation_bootstrap(
-        book_id=str(book["id"]),
-        chapter_id=str(chapter["id"]),
-    )["activeWebImportDraft"]["id"] == retry_draft_id
+    assert _active_draft_ids(engine, str(chapter["id"])) == [retry_draft_id]
     assert repository.request_cancel(retry_job_id)["status"] == "cancelled"
     engine.dispose()
 

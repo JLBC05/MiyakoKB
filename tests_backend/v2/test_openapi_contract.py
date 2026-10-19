@@ -42,18 +42,13 @@ UNKEYED_STATE_COMMANDS = frozenset(
         "pauseRunningJob",
         "pauseJobQueue",
         "prioritizeQueuedJobBatchMembers",
-        "promoteQuickWorkspace",
         "reorderChapterPages",
         "reorderChapters",
         "reorderJobs",
-        "resetQuickWorkspace",
         "resumePausedJob",
         "resumeJobQueue",
         "updateBook",
-        "updateBookTranslationConstraints",
         "updateChapter",
-        "updateChapterLastVisitedPage",
-        "updateChapterSettingsMemory",
         "updateTag",
     }
 )
@@ -244,13 +239,12 @@ def test_public_operations_do_not_use_an_untyped_generic_object() -> None:
 def test_required_backend_first_commands_are_explicit() -> None:
     document = _document()
     paths = document["paths"]
-    # The operations/repairs and studio chat domains were removed from
-    # src/** by the cleanup commit (src/backend_v2/operations/* is gone and
-    # the runtime exposes neither route set), so they are no longer
+    # The operations/repairs, studio chat and page-document domains were removed
+    # from src/** by the cleanup commits (src/backend_v2/operations/* is gone and
+    # the runtime exposes none of those route sets), so they are no longer
     # backend-first commands that the contract must pin.
     assert {
         "/pages/{page_id}",
-        "/pages/{page_id}/document",
         "/jobs/{job_id}/resume",
         "/jobs/{job_id}/continue",
     } <= set(paths)

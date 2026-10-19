@@ -1,4 +1,3 @@
-import type { BookTranslationConstraints } from './bookTranslationConstraints'
 import type { components } from '@/api/generated/v2'
 
 export type JobStatusSummary = components['schemas']['JobStatusSummary']
@@ -8,7 +7,6 @@ export interface BookData {
   title: string
   cover?: string
   tags?: string[]
-  translationConstraints?: BookTranslationConstraints
   chapters?: ChapterData[]
   chapterCount?: number
   totalPages?: number

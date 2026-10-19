@@ -1149,36 +1149,6 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         "423": {$ref: "#/components/responses/Locked"}
-  /books/{book_id}/translation-constraints:
-    parameters:
-      - $ref: "#/components/parameters/BookId"
-    get:
-      tags: [content]
-      operationId: getBookTranslationConstraints
-      responses:
-        "200":
-          description: Current translation constraints and revision.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/TranslationConstraintDocument"}
-        "404": {$ref: "#/components/responses/NotFound"}
-    put:
-      tags: [content]
-      operationId: updateBookTranslationConstraints
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: "#/components/schemas/TranslationConstraintUpdateCommand"}
-      responses:
-        "200":
-          description: Updated translation constraints.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/TranslationConstraintDocument"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "422": {$ref: "#/components/responses/ValidationError"}
   /books/{book_id}/chapters:
     parameters:
       - $ref: "#/components/parameters/BookId"
@@ -1298,44 +1268,6 @@ paths:
               schema: {$ref: "#/components/schemas/PageOrderRevisionResult"}
         "409": {$ref: "#/components/responses/Conflict"}
         "423": {$ref: "#/components/responses/Locked"}
-        "422": {$ref: "#/components/responses/ValidationError"}
-  /chapters/{chapter_id}/settings-memory:
-    patch:
-      tags: [content]
-      operationId: updateChapterSettingsMemory
-      parameters:
-        - $ref: "#/components/parameters/ChapterId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: "#/components/schemas/RevisionedPayloadCommand"}
-      responses:
-        "200":
-          description: Persisted chapter-scoped settings memory.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/ChapterSettingsMemory"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "422": {$ref: "#/components/responses/ValidationError"}
-  /chapters/{chapter_id}/last-visited-page:
-    patch:
-      tags: [content]
-      operationId: updateChapterLastVisitedPage
-      parameters:
-        - $ref: "#/components/parameters/ChapterId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: "#/components/schemas/LastVisitedPageCommand"}
-      responses:
-        "200":
-          description: Last-write-wins chapter navigation state.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/ChapterNavigation"}
-        "404": {$ref: "#/components/responses/NotFound"}
         "422": {$ref: "#/components/responses/ValidationError"}
   /chapters/{chapter_id}/container-import-jobs:
     post:
@@ -1517,121 +1449,6 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "423": {$ref: "#/components/responses/Locked"}
         "422": {$ref: "#/components/responses/ValidationError"}
-  /pages/{page_id}/document:
-    get:
-      tags: [pages]
-      operationId: getPageDocument
-      parameters:
-        - $ref: "#/components/parameters/PageId"
-      responses:
-        "200":
-          description: Aggregated relational page document.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PageDocument"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    patch:
-      tags: [pages]
-      operationId: updatePageDocument
-      parameters:
-        - $ref: "#/components/parameters/PageId"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: "#/components/schemas/PageDocumentBatchMutation"}
-      responses:
-        "200":
-          description: Updated page document.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/PageDocumentMutationResponse"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "423": {$ref: "#/components/responses/Locked"}
-        "422": {$ref: "#/components/responses/ValidationError"}
-  /pages/{page_id}/bubbles:
-    post:
-      tags: [pages]
-      operationId: createPageBubble
-      parameters:
-        - $ref: "#/components/parameters/PageId"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: "#/components/schemas/CreateBubbleCommand"}
-      responses:
-        "200":
-          description: Bubble created and the aggregate page document returned.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/PageDocumentMutationResponse"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "423": {$ref: "#/components/responses/Locked"}
-        "422": {$ref: "#/components/responses/ValidationError"}
-  /pages/{page_id}/bubbles/{bubble_id}:
-    parameters:
-      - $ref: "#/components/parameters/PageId"
-      - $ref: "#/components/parameters/BubbleId"
-    patch:
-      tags: [pages]
-      operationId: updatePageBubble
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: "#/components/schemas/PatchBubbleCommand"}
-      responses:
-        "200":
-          description: Bubble updated and the aggregate page document returned.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/PageDocumentMutationResponse"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "423": {$ref: "#/components/responses/Locked"}
-        "422": {$ref: "#/components/responses/ValidationError"}
-    delete:
-      tags: [pages]
-      operationId: deletePageBubble
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: "#/components/schemas/RevisionCommand"}
-      responses:
-        "200":
-          description: Bubble deleted and the aggregate page document returned.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/PageDocumentMutationResponse"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "423": {$ref: "#/components/responses/Locked"}
-        "422": {$ref: "#/components/responses/ValidationError"}
-  /pages/{page_id}/render-status:
-    get:
-      tags: [pages]
-      operationId: getPageRenderStatus
-      parameters:
-        - $ref: "#/components/parameters/PageId"
-      responses:
-        "200":
-          description: Current page render revision and immutable translated assets.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/PageRenderStatus"}
-        "404": {$ref: "#/components/responses/NotFound"}
   /assets/{asset_id}:
     get:
       tags: [content]
@@ -1647,71 +1464,6 @@ paths:
             image/webp: {schema: {type: string, format: binary}}
         "404":
           $ref: "#/components/responses/NotFound"
-  /translation/bootstrap:
-    get:
-      tags: [content]
-      operationId: getTranslationBootstrap
-      parameters:
-        - name: bookId
-          in: query
-          schema: {$ref: "#/components/schemas/Uuid"}
-        - name: chapterId
-          in: query
-          schema: {$ref: "#/components/schemas/Uuid"}
-      responses:
-        "200":
-          description: One-request translation workspace, settings, fonts, and prompt bootstrap.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/TranslationBootstrap"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "422": {$ref: "#/components/responses/ValidationError"}
-  /quick-workspace/reset:
-    post:
-      tags: [content]
-      operationId: resetQuickWorkspace
-      responses:
-        "200":
-          description: A new empty quick chapter was created.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/QuickWorkspaceContext"}
-        "423":
-          $ref: "#/components/responses/Locked"
-  /quick-workspace/promote:
-    post:
-      tags: [content]
-      operationId: promoteQuickWorkspace
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [mode, chapterTitle]
-              properties:
-                mode:
-                  type: string
-                  enum: [new_book, existing_book]
-                chapterTitle: {type: string, minLength: 1, maxLength: 500}
-                title: {type: string, minLength: 1, maxLength: 500}
-                bookId: {$ref: "#/components/schemas/Uuid"}
-              oneOf:
-                - properties:
-                    mode: {const: new_book}
-                  required: [title]
-                - properties:
-                    mode: {const: existing_book}
-                  required: [bookId]
-      responses:
-        "200":
-          description: Chapter relations moved and a new empty quick chapter created.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/QuickWorkspacePromotion"}
-        "423":
-          $ref: "#/components/responses/Locked"
   /tags:
     get:
       tags: [content]
@@ -3090,6 +2842,12 @@ components:
     Uuid:
       type: string
       format: uuid
+    ExportPreferences:
+      type: object
+      additionalProperties: false
+      required: [preserveOriginalFilenames]
+      properties:
+        preserveOriginalFilenames: {type: boolean}
     RuntimeCapabilities:
       type: object
       additionalProperties: false
@@ -3655,12 +3413,6 @@ components:
             - delete-current
             - clear-all
         rememberWorkflowModeEnabled: {type: boolean}
-    ExportPreferences:
-      type: object
-      additionalProperties: false
-      required: [preserveOriginalFilenames]
-      properties:
-        preserveOriginalFilenames: {type: boolean}
     PromptType:
       type: string
       enum:
@@ -4238,34 +3990,6 @@ components:
           type: string
           minLength: 1
           description: JSON-encoded complete text style frozen for every imported page.
-    OperationKind:
-      type: string
-      enum:
-        - bubble_ocr
-        - bubble_color
-        - page_detect
-        - page_repair
-        - bubble_translate
-        - studio_generate
-        - studio_chat
-        - studio_summary
-    OperationError:
-      type: object
-      additionalProperties: false
-      required: [code, message]
-      properties:
-        code: {type: string, minLength: 1}
-        message: {type: string}
-    OperationEvent:
-      type: object
-      additionalProperties: false
-      required: [eventId, operationId, type, payload, createdAt]
-      properties:
-        eventId: {type: integer, minimum: 1}
-        operationId: {$ref: "#/components/schemas/Uuid"}
-        type: {type: string}
-        payload: {type: object, additionalProperties: true}
-        createdAt: {type: string, format: date-time}
     BubbleOcrResult:
       type: object
       additionalProperties: false
@@ -4587,29 +4311,6 @@ components:
           minLength: 1
         bubbleId:
           $ref: "#/components/schemas/Uuid"
-    PageDocumentBatchMutation:
-      type: object
-      additionalProperties: false
-      required: [baseRevision, mutations]
-      properties:
-        baseRevision:
-          type: integer
-          minimum: 1
-        mutations:
-          type: array
-          items:
-            $ref: "#/components/schemas/BubbleMutation"
-        defaultFontId:
-          oneOf:
-            - $ref: "#/components/schemas/Uuid"
-            - type: "null"
-        pageStyleDefaultsPatch:
-          $ref: "#/components/schemas/PageStyleDefaultsPatch"
-        propagateStyleFields:
-          type: array
-          uniqueItems: true
-          items:
-            $ref: "#/components/schemas/PageStyleField"
     PageStyleField:
       type: string
       enum:
@@ -4747,37 +4448,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/BubbleDocument"
-    PageDocumentMutationResponse:
-      type: object
-      additionalProperties: false
-      required: [document, mutationResults]
-      properties:
-        document:
-          $ref: "#/components/schemas/PageDocument"
-        mutationResults:
-          type: array
-          items:
-            $ref: "#/components/schemas/BubbleMutationResult"
-    CreateBubbleCommand:
-      type: object
-      additionalProperties: false
-      required: [baseRevision, fields]
-      properties:
-        baseRevision:
-          type: integer
-          minimum: 1
-        fields:
-          $ref: "#/components/schemas/CompleteBubbleMutationFields"
-    PatchBubbleCommand:
-      type: object
-      additionalProperties: false
-      required: [baseRevision, fields]
-      properties:
-        baseRevision:
-          type: integer
-          minimum: 1
-        fields:
-          $ref: "#/components/schemas/BubbleMutationFields"
     Book:
       type: object
       additionalProperties: false
@@ -4988,35 +4658,6 @@ components:
       required: [baseRevision]
       properties:
         baseRevision: {type: integer, minimum: 1}
-    RevisionedPayloadCommand:
-      type: object
-      additionalProperties: false
-      required: [baseRevision, payload]
-      properties:
-        baseRevision: {type: integer, minimum: 1}
-        payload: {type: object, additionalProperties: true}
-    ChapterSettingsMemory:
-      type: object
-      additionalProperties: false
-      required: [chapterId, revision, payload]
-      properties:
-        chapterId: {$ref: "#/components/schemas/Uuid"}
-        revision: {type: integer, minimum: 1}
-        payload: {type: object, additionalProperties: true}
-    LastVisitedPageCommand:
-      type: object
-      additionalProperties: false
-      required: [pageId]
-      properties:
-        pageId: {$ref: "#/components/schemas/Uuid"}
-    ChapterNavigation:
-      type: object
-      additionalProperties: false
-      required: [chapterId, lastVisitedPageId, revision]
-      properties:
-        chapterId: {$ref: "#/components/schemas/Uuid"}
-        lastVisitedPageId: {$ref: "#/components/schemas/Uuid"}
-        revision: {type: integer, minimum: 1}
     ChapterList:
       type: object
       additionalProperties: false
@@ -5074,30 +4715,6 @@ components:
         translatedUrl: {type: [string, "null"]}
         width: {type: [integer, "null"], minimum: 1}
         height: {type: [integer, "null"], minimum: 1}
-    PageRenderStatus:
-      type: object
-      additionalProperties: false
-      required:
-        - pageId
-        - documentRevision
-        - renderedRevision
-        - renderStatus
-        - translatedUrl
-      properties:
-        pageId: {$ref: "#/components/schemas/Uuid"}
-        documentRevision: {type: integer, minimum: 1}
-        renderedRevision: {type: [integer, "null"], minimum: 1}
-        renderStatus:
-          type: string
-          enum:
-            - not_rendered
-            - ready
-            - stale
-            - rendering
-            - render_failed
-            - awaiting_repair
-            - repair_failed
-        translatedUrl: {type: [string, "null"]}
     PageList:
       type: object
       additionalProperties: false
@@ -5108,103 +4725,6 @@ components:
           items: {$ref: "#/components/schemas/PageSummary"}
         nextCursor: {type: [integer, "null"], minimum: 1}
         pageOrderRevision: {type: integer, minimum: 1}
-    TranslationBootstrap:
-      type: object
-      additionalProperties: false
-      required:
-        - activeJobs
-        - activeWebImportDraft
-        - book
-        - chapter
-        - constraints
-        - navigation
-        - pages
-        - settings
-        - fonts
-        - prompts
-      properties:
-        activeJobs:
-          type: array
-          items:
-            type: object
-            additionalProperties: false
-            required: [id, kind, status, queueRank, progress, pages]
-            properties:
-              id: {$ref: "#/components/schemas/Uuid"}
-              kind: {$ref: "#/components/schemas/JobKind"}
-              status: {$ref: "#/components/schemas/JobStatus"}
-              queueRank: {type: [integer, "null"], minimum: 1}
-              progress: {$ref: "#/components/schemas/JobProgress"}
-              pages:
-                type: array
-                items:
-                  type: object
-                  additionalProperties: false
-                  required: [pageId, status]
-                  properties:
-                    pageId: {$ref: "#/components/schemas/Uuid"}
-                    status:
-                      type: string
-                      enum: [pending, running, completed, failed, skipped, cancelled]
-        activeWebImportDraft:
-          oneOf:
-            - type: object
-              additionalProperties: false
-              required: [id, status, revision, expiresAt]
-              properties:
-                id: {$ref: "#/components/schemas/Uuid"}
-                status: {type: string}
-                revision: {type: integer, minimum: 1}
-                expiresAt: {type: string, format: date-time}
-            - type: "null"
-        book:
-          type: object
-          additionalProperties: false
-          required: [id, title, kind]
-          properties:
-            id: {$ref: "#/components/schemas/Uuid"}
-            title: {type: string}
-            kind: {type: string, enum: [library, quick_workspace]}
-        chapter:
-          type: object
-          additionalProperties: false
-          required:
-            - id
-            - title
-            - pageOrderRevision
-            - settingsMemory
-            - settingsMemoryRevision
-          properties:
-            id: {$ref: "#/components/schemas/Uuid"}
-            title: {type: string}
-            pageOrderRevision: {type: integer, minimum: 1}
-            settingsMemory: {type: object, additionalProperties: true}
-            settingsMemoryRevision: {type: integer, minimum: 1}
-        constraints:
-          type: object
-          additionalProperties: false
-          required: [payload, revision]
-          properties:
-            payload: {$ref: "#/components/schemas/TranslationConstraintPayload"}
-            revision: {type: integer, minimum: 1}
-        navigation:
-          type: object
-          additionalProperties: false
-          required: [lastVisitedPageId, revision]
-          properties:
-            lastVisitedPageId:
-              oneOf:
-                - $ref: "#/components/schemas/Uuid"
-                - type: "null"
-            revision: {type: integer, minimum: 0}
-        pages: {$ref: "#/components/schemas/PageList"}
-        settings: {$ref: "#/components/schemas/SettingsDocument"}
-        fonts:
-          type: array
-          items: {$ref: "#/components/schemas/FontResource"}
-        prompts:
-          type: array
-          items: {$ref: "#/components/schemas/PromptResource"}
     PageImportResult:
       type: object
       additionalProperties: false
@@ -5234,21 +4754,6 @@ components:
         documentRevision: {type: integer, minimum: 2}
         sourceUrl: {type: string}
         thumbnailSourceUrl: {type: string}
-    QuickWorkspaceContext:
-      type: object
-      additionalProperties: false
-      required: [bookId, chapterId]
-      properties:
-        bookId: {$ref: "#/components/schemas/Uuid"}
-        chapterId: {$ref: "#/components/schemas/Uuid"}
-    QuickWorkspacePromotion:
-      type: object
-      additionalProperties: false
-      required: [bookId, chapterId, quickChapterId]
-      properties:
-        bookId: {$ref: "#/components/schemas/Uuid"}
-        chapterId: {$ref: "#/components/schemas/Uuid"}
-        quickChapterId: {$ref: "#/components/schemas/Uuid"}
     Tag:
       type: object
       additionalProperties: false
@@ -5320,21 +4825,6 @@ components:
       properties:
         glossary: {$ref: "#/components/schemas/TranslationGlossarySettings"}
         nonTranslate: {$ref: "#/components/schemas/TranslationNonTranslateSettings"}
-    TranslationConstraintDocument:
-      type: object
-      additionalProperties: false
-      required: [bookId, revision, payload]
-      properties:
-        bookId: {$ref: "#/components/schemas/Uuid"}
-        revision: {type: integer, minimum: 1}
-        payload: {$ref: "#/components/schemas/TranslationConstraintPayload"}
-    TranslationConstraintUpdateCommand:
-      type: object
-      additionalProperties: false
-      required: [baseRevision, payload]
-      properties:
-        baseRevision: {type: integer, minimum: 1}
-        payload: {$ref: "#/components/schemas/TranslationConstraintPayload"}
     EmptyCommand:
       type: object
       additionalProperties: false

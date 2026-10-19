@@ -62,8 +62,6 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
       ...detail,
       ...summary,
       chapters: summary.chapters ?? detail.chapters,
-      translationConstraints:
-        summary.translationConstraints ?? detail.translationConstraints,
     }
   }
 

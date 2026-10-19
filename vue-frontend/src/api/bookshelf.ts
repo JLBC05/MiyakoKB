@@ -1,14 +1,12 @@
 import { apiClient } from './client'
 import type { components } from '@/api/generated/v2'
 import type { BookData, ChapterData, TagData } from '@/types'
-import type { BookTranslationConstraints } from '@/types/bookTranslationConstraints'
 import { newIdempotencyKey } from '@/api/v2/content'
 
 type V2Book = components['schemas']['Book']
 type V2BookList = components['schemas']['BookList']
 type V2Chapter = components['schemas']['Chapter']
 type V2ChapterTitleResult = components['schemas']['ChapterTitleResult']
-type V2ConstraintDocument = components['schemas']['TranslationConstraintDocument']
 type V2Tag = components['schemas']['Tag']
 type V2TagList = components['schemas']['TagList']
 type V2JobBatchAccepted = components['schemas']['JobBatchAccepted']
@@ -55,10 +53,7 @@ function toChapter(chapter: V2Chapter): ChapterData {
   }
 }
 
-function toBook(
-  book: V2Book & { chapters?: V2Chapter[] },
-  constraints?: BookTranslationConstraints,
-): BookData {
+function toBook(book: V2Book & { chapters?: V2Chapter[] }): BookData {
   chapterOrderRevisions.set(book.id, book.chapterOrderRevision)
   const chapters = book.chapters?.map(toChapter)
   const result: BookData = {
@@ -78,9 +73,6 @@ function toBook(
   if (chapters !== undefined) {
     result.chapters = chapters
   }
-  if (constraints !== undefined) {
-    result.translationConstraints = constraints
-  }
   return result
 }
 
@@ -98,36 +90,6 @@ async function resolveTagIds(names: string[] | undefined): Promise<string[] | un
     if (!id) throw new Error(`标签不存在：${name}`)
     return id
   })
-}
-
-export async function getBookTranslationConstraints(
-  bookId: string,
-): Promise<{ constraints: BookTranslationConstraints; revision: number }> {
-  const document = await apiClient.get<V2ConstraintDocument>(
-    bookPath(bookId, '/translation-constraints'),
-  )
-  return {
-    constraints: document.payload,
-    revision: document.revision,
-  }
-}
-
-export async function updateBookTranslationConstraints(
-  bookId: string,
-  constraints: BookTranslationConstraints,
-  baseRevision: number,
-): Promise<{ constraints: BookTranslationConstraints; revision: number }> {
-  const document = await apiClient.put<V2ConstraintDocument>(
-    bookPath(bookId, '/translation-constraints'),
-    {
-      baseRevision,
-      payload: constraints,
-    },
-  )
-  return {
-    constraints: document.payload,
-    revision: document.revision,
-  }
 }
 
 export async function getBooks(params?: GetBooksParams): Promise<BookData[]> {
@@ -150,11 +112,10 @@ export async function getBooks(params?: GetBooksParams): Promise<BookData[]> {
 }
 
 export async function getBookDetail(bookId: string): Promise<BookData> {
-  const [book, constraintDocument] = await Promise.all([
-    apiClient.get<V2Book & { chapters: V2Chapter[] }>(bookPath(bookId)),
-    getBookTranslationConstraints(bookId),
-  ])
-  return toBook(book, constraintDocument.constraints)
+  const book = await apiClient.get<V2Book & { chapters: V2Chapter[] }>(
+    bookPath(bookId),
+  )
+  return toBook(book)
 }
 
 function createBookFormData(title: string, tagIds: string[], cover: File): FormData {

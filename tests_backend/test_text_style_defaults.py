@@ -3,7 +3,6 @@ import os
 import unittest
 from pathlib import Path
 
-from src.core.config_models import BubbleState
 from src.shared.text_style_defaults import (
     _validate_text_style_defaults,
     get_text_style_factory_defaults,
@@ -55,45 +54,6 @@ class TextStyleFactoryDefaultsTests(unittest.TestCase):
                 "类型错误",
             ):
                 _validate_text_style_defaults(broken)
-
-
-class BubbleStateDefaultsTests(unittest.TestCase):
-    def test_bubble_stroke_width_round_trip_preserves_decimals(self) -> None:
-        payload = BubbleState().to_dict()
-        for width in (0, 0.1, 1.25, 3):
-            with self.subTest(width=width):
-                state = BubbleState.from_dict({**payload, "strokeWidth": width})
-                self.assertEqual(state.stroke_width, width)
-                self.assertEqual(state.to_dict()["strokeWidth"], width)
-        for width in (-0.1, float("nan"), float("inf"), True, "1.2"):
-            with self.subTest(width=width), self.assertRaisesRegex(ValueError, "strokeWidth"):
-                BubbleState.from_dict({**payload, "strokeWidth": width})
-
-    def test_bubble_state_defaults_match_factory_fallbacks(self) -> None:
-        defaults = get_text_style_factory_defaults()
-        state = BubbleState()
-
-        self.assertEqual(state.font_size, defaults["fontSize"])
-        self.assertEqual(
-            state.font_family,
-            os.path.join(
-                "src",
-                "backend_v2",
-                "resources",
-                defaults["fontFamily"].replace("/", os.sep),
-            ),
-        )
-        self.assertEqual(state.text_direction, "vertical")
-        self.assertEqual(state.auto_text_direction, "vertical")
-        self.assertEqual(state.text_color, defaults["textColor"])
-        self.assertEqual(state.fill_color, defaults["fillColor"])
-        self.assertEqual(state.inpaint_method, defaults["inpaintMethod"])
-        self.assertEqual(state.stroke_enabled, defaults["strokeEnabled"])
-        self.assertEqual(state.stroke_color, defaults["strokeColor"])
-        self.assertEqual(state.stroke_width, defaults["strokeWidth"])
-        self.assertEqual(state.line_spacing, defaults["lineSpacing"])
-        self.assertEqual(state.inline_align, defaults["inlineAlign"])
-        self.assertEqual(state.block_align, defaults["blockAlign"])
 
 
 if __name__ == "__main__":

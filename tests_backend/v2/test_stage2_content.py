@@ -20,10 +20,6 @@ from src.backend_v2.content.repository import (
     ContentRepository,
     IdempotencyConflict,
 )
-from src.backend_v2.content.translation_constraints import (
-    empty_translation_constraints,
-    validate_translation_constraints,
-)
 from src.backend_v2.runtime_identity import RuntimeIdentity
 from src.backend_v2.runtime_profile import PROFILE_ENV
 from src.backend_v2.storage.assets import AssetQuotaExceeded, AssetStorageService
@@ -51,7 +47,16 @@ from src.backend_v2.storage.schema import (
 )
 from src.backend_v2.storage.seeding import seed_system_records
 from src.backend_v2.storage.seeding import QUICK_WORKSPACE_BOOK_ID
-from src.core.config_models import BubbleState
+
+
+def _page_identity(page: dict[str, object]) -> tuple[object, ...]:
+    return (
+        page["logicalSourcePath"],
+        page["sourceRevision"],
+        page["documentRevision"],
+        page["width"],
+        page["height"],
+    )
 
 
 def _stored_job_progress(status: str = "queued") -> str:
@@ -102,14 +107,6 @@ def _image_bytes(
     with Image.new("RGB", size, color) as image:
         image.save(output, format=image_format)
     return output.getvalue()
-
-
-def _bubble_fields(**overrides: object) -> dict[str, object]:
-    payload = BubbleState().to_dict()
-    payload.pop("fontFamily")
-    payload.pop("autoTextDirection")
-    payload.update(overrides)
-    return payload
 
 
 def test_large_image_policy_has_no_byte_or_pixel_dimension_gate() -> None:
@@ -451,74 +448,6 @@ def test_tag_rename_conflict_is_reported_as_a_domain_conflict(content_platform) 
         )
 
 
-def test_translation_bootstrap_includes_backend_owned_runtime_configuration(
-    content_platform,
-) -> None:
-    data_root, engine, _repository, _storage, _importer, book, chapter = (
-        content_platform
-    )
-    app = create_api_app(
-        ApiSettings(
-            data_root=data_root,
-            identity=RuntimeIdentity(
-                epoch_id="test-bootstrap-api",
-                epoch_token="test-token",
-                test_mode=True,
-            ),
-            engine=engine,
-        )
-    )
-
-    response = app.test_client().get(
-        "/api/v2/translation/bootstrap",
-        query_string={
-            "bookId": str(book["id"]),
-            "chapterId": str(chapter["id"]),
-        },
-    )
-
-    assert response.status_code == 200
-    payload = response.get_json()
-    assert payload["book"]["id"] == str(book["id"])
-    assert payload["chapter"]["id"] == str(chapter["id"])
-
-    settings_by_domain = {
-        item["domain"]: item for item in payload["settings"]["settings"]
-    }
-    assert {
-        "translation",
-        "text_style_defaults",
-        "workflow_preferences",
-        "export_preferences",
-    } <= settings_by_domain.keys()
-    translation = settings_by_domain["translation"]
-    assert translation["revision"] == 1
-    # Translation is decoupled: the persisted domain is an empty placeholder.
-    assert translation["payload"] == {}
-    assert settings_by_domain["text_style_defaults"]["payload"]["fontFamily"]
-
-    workflow = settings_by_domain["workflow_preferences"]["payload"]
-    assert workflow == {
-        "rememberWorkflowModeEnabled": False,
-        "lastWorkflowMode": "translate-current",
-    }
-    assert settings_by_domain["export_preferences"]["payload"] == {
-        "preserveOriginalFilenames": False,
-    }
-    assert payload["fonts"] == [
-        {
-            "isDefault": font.id == DEFAULT_FONT_ID,
-            "displayName": font.display_name,
-            "id": font.id,
-            "scope": "shared",
-        }
-        for font in bundled_font_files()
-    ]
-    # The bootstrap surface still filters prompts to the retired translation
-    # types ("translate"/"textbox"), so it now reports no prompts at all.
-    assert payload["prompts"] == []
-
-
 def test_new_page_style_rejects_invalid_setting_values(content_platform) -> None:
     _root, engine, _repository, _storage, _importer, _book, _chapter = (
         content_platform
@@ -535,105 +464,6 @@ def test_new_page_style_rejects_invalid_setting_values(content_platform) -> None
             resolve_new_page_style(connection)
 
 
-def test_chapter_settings_memory_is_cas_scoped_and_rejects_style_or_secrets(
-    content_platform,
-) -> None:
-    _root, _engine, repository, _storage, _importer, book, chapter = (
-        content_platform
-    )
-    chapter_id = str(chapter["id"])
-    payload = {
-        "ocrEngine": "paddle_ocr",
-        "targetLanguage": "zh",
-        "parallel": {"enabled": True, "deepLearningLockSize": 2},
-        "translation": {
-            "provider": "siliconflow",
-            "modelName": "chapter-model",
-        },
-    }
-    updated = repository.update_chapter_settings_memory(
-        chapter_id=chapter_id,
-        base_revision=1,
-        payload=payload,
-    )
-    assert updated == {
-        "chapterId": chapter_id,
-        "revision": 2,
-        "payload": payload,
-    }
-    bootstrap = repository.translation_bootstrap(
-        book_id=str(book["id"]),
-        chapter_id=chapter_id,
-    )
-    assert bootstrap["chapter"]["settingsMemory"] == payload
-    assert bootstrap["chapter"]["settingsMemoryRevision"] == 2
-
-    with pytest.raises(ContentConflict):
-        repository.update_chapter_settings_memory(
-            chapter_id=chapter_id,
-            base_revision=1,
-            payload={"ocrEngine": "paddleocr_vl"},
-        )
-    with pytest.raises(ValueError, match="unsupported fields"):
-        repository.update_chapter_settings_memory(
-            chapter_id=chapter_id,
-            base_revision=2,
-            payload={"textStyle": {"fontSize": 42}},
-        )
-    with pytest.raises(ValueError, match="apiKey"):
-        repository.update_chapter_settings_memory(
-            chapter_id=chapter_id,
-            base_revision=2,
-            payload={
-                "translation": {
-                    "provider": "custom",
-                    "apiKey": "must-not-be-stored",
-                }
-            },
-        )
-    for field in ("inlineAlign", "blockAlign"):
-        with pytest.raises(ValueError, match=field):
-            repository.update_chapter_settings_memory(
-                chapter_id=chapter_id,
-                base_revision=2,
-                payload={"translation": {field: "start"}},
-            )
-
-
-def test_old_chapter_concurrency_is_loaded_without_rewriting(content_platform) -> None:
-    _root, engine, repository, _storage, _importer, book, chapter = content_platform
-    chapter_id = str(chapter["id"])
-    memory = {"parallel": {"enabled": True, "deepLearningLockSize": 8}, "targetLanguage": "zh"}
-    with engine.begin() as connection:
-        connection.execute(update(chapters).where(chapters.c.id == chapter_id).values(settings_memory_json=json.dumps(memory)))
-    bootstrap = repository.translation_bootstrap(book_id=str(book["id"]), chapter_id=chapter_id)
-    loaded = bootstrap["chapter"]["settingsMemory"]
-    # The four-pool deep-learning clamp retired with the translation pipeline, so
-    # a legacy lock size is surfaced verbatim instead of being rewritten on load.
-    assert loaded == memory
-    repository.update_chapter_settings_memory(chapter_id=chapter_id, base_revision=1, payload=memory)
-    with engine.connect() as connection:
-        saved = json.loads(connection.execute(select(chapters.c.settings_memory_json).where(chapters.c.id == chapter_id)).scalar_one())
-    assert saved == loaded
-
-
-def test_chapter_settings_memory_has_no_aggregate_byte_gate(content_platform) -> None:
-    _root, _engine, repository, _storage, _importer, _book, chapter = (
-        content_platform
-    )
-    prompt = "示" * 100_000
-    payload = {
-        "translatePrompt": prompt,
-        "textboxPrompt": prompt,
-    }
-
-    updated = repository.update_chapter_settings_memory(
-        chapter_id=str(chapter["id"]),
-        base_revision=1,
-        payload=payload,
-    )
-
-    assert updated["payload"] == payload
 def test_page_import_publishes_source_and_webp_thumbnail_without_base64(
     content_platform,
 ) -> None:
@@ -725,9 +555,14 @@ def test_page_import_api_materializes_the_submitted_style_and_replays(
     assert replay.get_json() == first.get_json()
     assert len(repository.list_pages(chapter_id=chapter_id, all_pages=True)["items"]) == 1
     page_id = first.get_json()["page"]["id"]
-    document = client.get(f"/api/v2/pages/{page_id}/document").get_json()
-    assert document["defaultFontId"] == text_style["fontFamily"]
-    assert document["pageStyleDefaults"] == {
+    with engine.connect() as connection:
+        stored = connection.execute(
+            select(pages.c.default_font_id, pages.c.page_style_defaults_json).where(
+                pages.c.id == page_id
+            )
+        ).one()
+    assert stored.default_font_id == text_style["fontFamily"]
+    assert json.loads(stored.page_style_defaults_json) == {
         key: value for key, value in text_style.items() if key != "fontFamily"
     }
 
@@ -812,46 +647,6 @@ def test_page_import_materializes_the_submitted_font_as_a_foreign_key(
     assert "fontFamily" not in page_style
     assert page_style["layoutDirection"] == "horizontal"
     assert page_style["inpaintMethod"] == "litelama"
-
-
-@pytest.mark.parametrize(
-    ("patch", "message"),
-    [
-        ({"fontSize": 0}, "fontSize"),
-        ({"textColor": "black"}, "textColor"),
-        ({"layoutDirection": "diagonal"}, "layoutDirection"),
-        ({"lineSpacing": float("inf")}, "lineSpacing"),
-        ({"strokeWidth": -0.1}, "strokeWidth"),
-        ({"strokeWidth": float("inf")}, "strokeWidth"),
-        ({"strokeWidth": True}, "strokeWidth"),
-        ({"strokeWidth": "1.2"}, "strokeWidth"),
-        ({"inpaintMethod": "auto"}, "inpaintMethod"),
-        ({"fontFamily": DEFAULT_FONT_ID}, "unknown page style fields"),
-    ],
-)
-def test_page_style_patch_is_validated_by_the_backend_domain(
-    content_platform,
-    patch,
-    message,
-) -> None:
-    _root, _engine, repository, _storage, importer, _book, chapter = content_platform
-    result, _replayed = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((64, 96)),
-        logical_path="style-validation.png",
-        key=f"style-validation-{message}",
-    )
-
-    with pytest.raises(ValueError, match=message):
-        repository.mutate_page_document(
-            page_id=str(result["page"]["id"]),
-            base_revision=1,
-            mutations=[],
-            idempotency_key=f"style-validation-document-{message}",
-            page_style_defaults_patch=patch,
-        )
 
 
 def test_long_strip_thumbnail_uses_width_cap_and_top_crop(content_platform) -> None:
@@ -1077,50 +872,6 @@ def test_single_page_summary_route_returns_only_requested_page(content_platform)
     assert "base64" not in response.get_data(as_text=True).lower()
 
 
-def test_last_visited_page_is_independent_last_write_wins(
-    content_platform,
-) -> None:
-    _root, _engine, repository, _storage, importer, book, chapter = (
-        content_platform
-    )
-    first, _replayed = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((120, 180)),
-        logical_path="001.png",
-        key="navigation-first",
-    )
-    second, _replayed = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((120, 180), color=(60, 40, 20)),
-        logical_path="002.png",
-        key="navigation-second",
-    )
-
-    initial = repository.update_last_visited_page(
-        chapter_id=str(chapter["id"]),
-        page_id=str(first["page"]["id"]),
-    )
-    stale_tab = repository.update_last_visited_page(
-        chapter_id=str(chapter["id"]),
-        page_id=str(second["page"]["id"]),
-    )
-    bootstrap = repository.translation_bootstrap(
-        book_id=str(book["id"]),
-        chapter_id=str(chapter["id"]),
-    )
-
-    assert initial["revision"] == 1
-    assert stale_tab["revision"] == 2
-    assert bootstrap["navigation"] == {
-        "lastVisitedPageId": str(second["page"]["id"]),
-        "revision": 2,
-    }
-
-
 def test_deleting_recreated_chapters_after_reordering_keeps_contiguous_ordinals(
     content_platform,
 ) -> None:
@@ -1166,14 +917,20 @@ def test_deleting_reordered_pages_keeps_remaining_content_and_ordinals(
         chapter_id=chapter_id, ordered_ids=order, base_revision=revision,
     )
     remaining = [value for index, value in enumerate(order) if index != deleted_index]
-    documents = {value: repository.get_page_document(value) for value in remaining}
+    documents = {
+        value: _page_identity(repository.get_page_summary(value))
+        for value in remaining
+    }
     repository.delete_page(order[deleted_index])
     current = repository.list_pages(chapter_id=chapter_id, all_pages=True)
     assert [(row["id"], row["ordinal"]) for row in current["items"]] == [
         (value, index) for index, value in enumerate(remaining, start=1)
     ]
     assert current["pageOrderRevision"] == revision + 1
-    assert {value: repository.get_page_document(value) for value in remaining} == documents
+    assert {
+        value: _page_identity(repository.get_page_summary(value))
+        for value in remaining
+    } == documents
     for page_id in remaining:
         repository.delete_page(page_id)
     assert repository.list_pages(chapter_id=chapter_id, all_pages=True)["items"] == []
@@ -1319,57 +1076,6 @@ def test_media_api_marks_missing_object_as_failed_integrity(
     assert status == "missing"
 
 
-def test_page_document_bubble_persistence_is_retired(content_platform) -> None:
-    """Bubble rows were dropped with the translation tables (d5fb0eb/12c37e6).
-
-    A page-document mutation is therefore answered from the request only: the
-    aggregate document reloads without bubbles, the revision still advances and
-    a follow-up mutation cannot find the bubble it just created.
-    """
-
-    _root, _engine, repository, _storage, importer, _book, chapter = content_platform
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=str(chapter["id"]),
-        payload=_image_bytes((120, 120)),
-        logical_path="retired-bubbles.png",
-        key="retired-bubbles-page",
-    )
-    page_id = str(imported["page"]["id"])
-
-    created, _ = repository.mutate_page_document(
-        page_id=page_id,
-        base_revision=1,
-        idempotency_key="retired-bubbles-create",
-        mutations=[
-            {
-                "op": "create",
-                "clientMutationId": "retired-bubbles-create",
-                "fields": _bubble_fields(coords=[4, 5, 44, 52]),
-            }
-        ],
-    )
-    assert created["document"]["documentRevision"] == 2
-    assert created["document"]["bubbles"] == []
-    assert repository.get_page_document(page_id=page_id)["bubbles"] == []
-
-    with pytest.raises(ContentNotFound):
-        repository.mutate_page_document(
-            page_id=page_id,
-            base_revision=2,
-            idempotency_key="retired-bubbles-patch",
-            mutations=[
-                {
-                    "op": "patch",
-                    "clientMutationId": "retired-bubbles-patch",
-                    "bubbleId": str(uuid.uuid4()),
-                    "fields": {"rotationAngle": 1},
-                }
-            ],
-        )
-
-
 def test_content_routes_reject_scalar_coercion_and_missing_required_fields(
     content_platform,
 ) -> None:
@@ -1424,36 +1130,6 @@ def test_content_routes_reject_scalar_coercion_and_missing_required_fields(
             },
             content_type="multipart/form-data",
         ),
-        lambda: client.patch(
-            f"/api/v2/chapters/{chapter['id']}/settings-memory",
-            headers={"Idempotency-Key": "strict-memory-revision"},
-            json={"payload": {}, "baseRevision": "1"},
-        ),
-        lambda: client.patch(
-            f"/api/v2/chapters/{chapter['id']}/last-visited-page",
-            headers={"Idempotency-Key": "strict-last-page"},
-            json={"pageId": {"value": page_id}},
-        ),
-        lambda: client.patch(
-            f"/api/v2/pages/{page_id}/document",
-            headers={"Idempotency-Key": "strict-document-revision"},
-            json={"baseRevision": "1", "mutations": []},
-        ),
-        lambda: client.post(
-            f"/api/v2/pages/{page_id}/bubbles",
-            headers={"Idempotency-Key": "strict-bubble-fields"},
-            json={"baseRevision": 1},
-        ),
-        lambda: client.post(
-            "/api/v2/quick-workspace/promote",
-            headers={"Idempotency-Key": "strict-promote-fields"},
-            json={
-                "mode": "new_book",
-                "chapterTitle": "Chapter",
-                "title": "Book",
-                "bookId": book["id"],
-            },
-        ),
     ]
 
     try:
@@ -1463,144 +1139,6 @@ def test_content_routes_reject_scalar_coercion_and_missing_required_fields(
             assert response.get_json()["error"]["code"] == "validation_error"
     finally:
         app.extensions["saber_v2_runtime"].close()
-
-
-def test_quick_workspace_promote_moves_relations_without_moving_assets(
-    content_platform,
-) -> None:
-    _root, engine, repository, _storage, importer, _book, _chapter = content_platform
-    quick = repository.list_chapters(QUICK_WORKSPACE_BOOK_ID)
-    quick_chapter_id = str(quick["chapters"][0]["id"])
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=quick_chapter_id,
-        payload=_image_bytes((40, 60)),
-        logical_path="quick.png",
-        key="quick",
-    )
-    with engine.connect() as connection:
-        source_path_before = connection.execute(
-            select(assets.c.relative_path)
-            .join(page_assets, page_assets.c.asset_id == assets.c.id)
-            .where(
-                page_assets.c.page_id == imported["page"]["id"],
-                page_assets.c.role == "source",
-            )
-        ).scalar_one()
-
-    promoted = repository.promote_quick_workspace(
-        chapter_title="Saved Chapter",
-        new_book_title="Saved Book",
-    )
-    assert promoted["chapterId"] == quick_chapter_id
-    with engine.connect() as connection:
-        moved = connection.execute(
-            select(chapters.c.book_id, chapters.c.title).where(
-                chapters.c.id == quick_chapter_id
-            )
-        ).one()
-        source_path_after = connection.execute(
-            select(assets.c.relative_path)
-            .join(page_assets, page_assets.c.asset_id == assets.c.id)
-            .where(
-                page_assets.c.page_id == imported["page"]["id"],
-                page_assets.c.role == "source",
-            )
-        ).scalar_one()
-    assert moved == (promoted["bookId"], "Saved Chapter")
-    assert source_path_after == source_path_before
-    assert repository.list_chapters(QUICK_WORKSPACE_BOOK_ID)["chapters"] == [
-        {
-            "id": promoted["quickChapterId"],
-            "ordinal": 1,
-            "title": "快速翻译",
-            "pageCount": 0,
-            "pageOrderRevision": 1,
-        }
-    ]
-
-
-def test_quick_workspace_promote_route_uses_explicit_mode_contract(
-    content_platform,
-) -> None:
-    data_root, engine, repository, _storage, importer, _book, _chapter = (
-        content_platform
-    )
-    quick_chapter_id = str(
-        repository.list_chapters(QUICK_WORKSPACE_BOOK_ID)["chapters"][0][
-            "id"
-        ]
-    )
-    _import(
-        repository,
-        importer,
-        chapter_id=quick_chapter_id,
-        payload=_image_bytes((40, 60)),
-        logical_path="route-quick.png",
-        key="route-quick",
-    )
-    app = create_api_app(
-        ApiSettings(
-            data_root=data_root,
-            identity=RuntimeIdentity(
-                epoch_id="quick-promote-api",
-                epoch_token="test-token",
-                test_mode=True,
-            ),
-            engine=engine,
-        )
-    )
-    try:
-        response = app.test_client().post(
-            "/api/v2/quick-workspace/promote",
-            headers={"Idempotency-Key": "promote-route"},
-            json={
-                "mode": "new_book",
-                "title": "Route Book",
-                "chapterTitle": "Route Chapter",
-            },
-        )
-    finally:
-        app.extensions["saber_v2_runtime"].close()
-
-    assert response.status_code == 200
-    payload = response.get_json()
-    assert payload["chapterId"] == quick_chapter_id
-    assert repository.get_book(str(payload["bookId"]))["title"] == "Route Book"
-
-
-def test_quick_workspace_promote_rejects_duplicate_destinations(
-    content_platform,
-) -> None:
-    _root, _engine, repository, _storage, importer, book, _chapter = (
-        content_platform
-    )
-    quick_chapter_id = str(
-        repository.list_chapters(QUICK_WORKSPACE_BOOK_ID)["chapters"][0][
-            "id"
-        ]
-    )
-    _import(
-        repository,
-        importer,
-        chapter_id=quick_chapter_id,
-        payload=_image_bytes((40, 60)),
-        logical_path="duplicate-quick.png",
-        key="duplicate-quick",
-    )
-
-    with pytest.raises(ValueError, match="new book title already exists"):
-        repository.promote_quick_workspace(
-            chapter_title="Saved Chapter",
-            new_book_title=str(book["title"]),
-        )
-
-    with pytest.raises(ValueError, match="chapter title already exists"):
-        repository.promote_quick_workspace(
-            chapter_title="Chapter",
-            target_book_id=str(book["id"]),
-        )
 
 
 def test_content_tag_filters_and_batch_updates_reject_duplicate_ids(
@@ -1621,126 +1159,3 @@ def test_content_tag_filters_and_batch_updates_reject_duplicate_ids(
         )
 
 
-@pytest.mark.parametrize("blocker", ("job", "operation"))
-def test_quick_workspace_reset_and_promote_reject_every_active_work_kind(
-    content_platform,
-    blocker: str,
-) -> None:
-    _root, engine, repository, _storage, importer, _book, _chapter = (
-        content_platform
-    )
-    quick_chapter_id = str(
-        repository.list_chapters(QUICK_WORKSPACE_BOOK_ID)["chapters"][0][
-            "id"
-        ]
-    )
-    imported, _ = _import(
-        repository,
-        importer,
-        chapter_id=quick_chapter_id,
-        payload=_image_bytes((32, 48)),
-        logical_path=f"{blocker}.png",
-        key=f"quick-{blocker}",
-    )
-    if blocker == "job":
-        with engine.begin() as connection:
-            connection.execute(
-                insert(jobs).values(
-                    id="quick-active-job",
-                    kind="export",
-                    status="queued",
-                    book_id=QUICK_WORKSPACE_BOOK_ID,
-                    chapter_id=quick_chapter_id,
-                    config_json="{}",
-                    latest_progress_json=_stored_job_progress(),
-                )
-            )
-    elif blocker == "operation":
-        with engine.begin() as connection:
-            connection.execute(
-                insert(operations).values(
-                    id="quick-active-operation",
-                    kind="page_detect",
-                    executor_role="worker",
-                    status="pending",
-                    page_id=imported["page"]["id"],
-                    base_revision=1,
-                    request_json="{}",
-                )
-            )
-    with pytest.raises(ContentLocked):
-        repository.reset_quick_workspace()
-    with pytest.raises(ContentLocked):
-        repository.promote_quick_workspace(
-            chapter_title="Blocked",
-            new_book_title="Blocked Book",
-        )
-
-
-def test_quick_workspace_reset_clears_pages(content_platform) -> None:
-    _root, _engine, repository, _storage, importer, _book, _chapter = (
-        content_platform
-    )
-    quick_chapter_id = str(
-        repository.list_chapters(QUICK_WORKSPACE_BOOK_ID)["chapters"][0][
-            "id"
-        ]
-    )
-    _import(
-        repository,
-        importer,
-        chapter_id=quick_chapter_id,
-        payload=_image_bytes((32, 48)),
-        logical_path="reset.png",
-        key="quick-reset",
-    )
-
-    reset = repository.reset_quick_workspace()
-
-    assert reset["chapterId"] != quick_chapter_id
-    assert repository.list_pages(chapter_id=reset["chapterId"])["items"] == []
-
-
-def test_translation_constraints_have_no_entry_count_gate() -> None:
-    payload = empty_translation_constraints()
-    payload["glossary"]["entries"] = [
-        {
-            "source": f"source-{index}",
-            "target": f"target-{index}",
-            "note": "",
-            "matchMode": "text",
-        }
-        for index in range(10_001)
-    ]
-
-    validated = validate_translation_constraints(payload)
-
-    assert len(validated["glossary"]["entries"]) == 10_001
-
-
-def test_promote_to_existing_book_resets_the_quick_workspace(
-    content_platform,
-) -> None:
-    _root, _engine, repository, _storage, importer, book, _chapter = (
-        content_platform
-    )
-    quick_chapter_id = str(
-        repository.list_chapters(QUICK_WORKSPACE_BOOK_ID)["chapters"][0][
-            "id"
-        ]
-    )
-    _import(
-        repository,
-        importer,
-        chapter_id=quick_chapter_id,
-        payload=_image_bytes((32, 48)),
-        logical_path="existing.png",
-        key="quick-existing",
-    )
-
-    promoted = repository.promote_quick_workspace(
-        chapter_title="Imported",
-        target_book_id=str(book["id"]),
-    )
-
-    assert promoted["chapterId"] == quick_chapter_id

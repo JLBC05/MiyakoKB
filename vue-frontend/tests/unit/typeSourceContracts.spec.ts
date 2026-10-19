@@ -196,7 +196,6 @@ describe('type source contracts', () => {
       './folder',
       './insight',
       './workflow',
-      './bookTranslationConstraints',
     ].flatMap(modulePath => [`${exportPrefix}'${modulePath}'`, ''])
     expectedLines.pop()
 

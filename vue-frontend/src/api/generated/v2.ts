@@ -891,24 +891,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/books/{book_id}/translation-constraints": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                book_id: components["parameters"]["BookId"];
-            };
-            cookie?: never;
-        };
-        get: operations["getBookTranslationConstraints"];
-        put: operations["updateBookTranslationConstraints"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/books/{book_id}/chapters": {
         parameters: {
             query?: never;
@@ -975,38 +957,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/chapters/{chapter_id}/settings-memory": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch: operations["updateChapterSettingsMemory"];
-        trace?: never;
-    };
-    "/chapters/{chapter_id}/last-visited-page": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch: operations["updateChapterLastVisitedPage"];
         trace?: never;
     };
     "/chapters/{chapter_id}/container-import-jobs": {
@@ -1109,73 +1059,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/pages/{page_id}/document": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getPageDocument"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch: operations["updatePageDocument"];
-        trace?: never;
-    };
-    "/pages/{page_id}/bubbles": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["createPageBubble"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/pages/{page_id}/bubbles/{bubble_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                page_id: components["parameters"]["PageId"];
-                bubble_id: components["parameters"]["BubbleId"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete: operations["deletePageBubble"];
-        options?: never;
-        head?: never;
-        patch: operations["updatePageBubble"];
-        trace?: never;
-    };
-    "/pages/{page_id}/render-status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getPageRenderStatus"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/assets/{asset_id}": {
         parameters: {
             query?: never;
@@ -1186,54 +1069,6 @@ export interface paths {
         get: operations["getImmutableAsset"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/translation/bootstrap": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getTranslationBootstrap"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/quick-workspace/reset": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["resetQuickWorkspace"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/quick-workspace/promote": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["promoteQuickWorkspace"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2085,6 +1920,9 @@ export interface components {
     schemas: {
         /** Format: uuid */
         Uuid: string;
+        ExportPreferences: {
+            preserveOriginalFilenames: boolean;
+        };
         RuntimeCapabilities: {
             /** @enum {string} */
             profile: "local" | "public";
@@ -2392,9 +2230,6 @@ export interface components {
             lastWorkflowMode: "translate-current" | "translate-batch" | "hq-batch" | "proofread-batch" | "remove-current" | "remove-batch" | "retry-failed" | "delete-current" | "clear-all";
             rememberWorkflowModeEnabled: boolean;
         };
-        ExportPreferences: {
-            preserveOriginalFilenames: boolean;
-        };
         /** @enum {string} */
         PromptType: "translate" | "textbox" | "ai_vision_ocr" | "hq_translate" | "proofreading" | "batch_analysis" | "segment_summary" | "chapter_summary" | "book_overview" | "group_summary" | "qa_response" | "analysis_system";
         PromptResource: {
@@ -2665,22 +2500,6 @@ export interface components {
             /** @description JSON-encoded complete text style frozen for every imported page. */
             textStyle: string;
         };
-        /** @enum {string} */
-        OperationKind: "bubble_ocr" | "bubble_color" | "page_detect" | "page_repair" | "bubble_translate" | "studio_generate" | "studio_chat" | "studio_summary";
-        OperationError: {
-            code: string;
-            message: string;
-        };
-        OperationEvent: {
-            eventId: number;
-            operationId: components["schemas"]["Uuid"];
-            type: string;
-            payload: {
-                [key: string]: unknown;
-            };
-            /** Format: date-time */
-            createdAt: string;
-        };
         BubbleOcrResult: {
             text: string;
             confidence: number | null;
@@ -2830,13 +2649,6 @@ export interface components {
             clientMutationId: string;
             bubbleId: components["schemas"]["Uuid"];
         };
-        PageDocumentBatchMutation: {
-            baseRevision: number;
-            mutations: components["schemas"]["BubbleMutation"][];
-            defaultFontId?: components["schemas"]["Uuid"] | null;
-            pageStyleDefaultsPatch?: components["schemas"]["PageStyleDefaultsPatch"];
-            propagateStyleFields?: components["schemas"]["PageStyleField"][];
-        };
         /** @enum {string} */
         PageStyleField: "fontSize" | "fontFamily" | "layoutDirection" | "textColor" | "fillColor" | "strokeEnabled" | "strokeColor" | "strokeWidth" | "lineSpacing" | "inlineAlign" | "blockAlign";
         PageStyleDefaultsPatch: {
@@ -2893,18 +2705,6 @@ export interface components {
             defaultFontId: components["schemas"]["Uuid"] | null;
             pageStyleDefaults: WithRequired<components["schemas"]["PageStyleDefaultsPatch"], "fontSize" | "autoFontSize" | "layoutDirection" | "textColor" | "fillColor" | "inpaintMethod" | "useAutoTextColor" | "strokeEnabled" | "strokeColor" | "strokeWidth" | "lineSpacing" | "inlineAlign" | "blockAlign">;
             bubbles: components["schemas"]["BubbleDocument"][];
-        };
-        PageDocumentMutationResponse: {
-            document: components["schemas"]["PageDocument"];
-            mutationResults: components["schemas"]["BubbleMutationResult"][];
-        };
-        CreateBubbleCommand: {
-            baseRevision: number;
-            fields: components["schemas"]["CompleteBubbleMutationFields"];
-        };
-        PatchBubbleCommand: {
-            baseRevision: number;
-            fields: components["schemas"]["BubbleMutationFields"];
         };
         Book: {
             id: components["schemas"]["Uuid"];
@@ -3020,27 +2820,6 @@ export interface components {
         RevisionCommand: {
             baseRevision: number;
         };
-        RevisionedPayloadCommand: {
-            baseRevision: number;
-            payload: {
-                [key: string]: unknown;
-            };
-        };
-        ChapterSettingsMemory: {
-            chapterId: components["schemas"]["Uuid"];
-            revision: number;
-            payload: {
-                [key: string]: unknown;
-            };
-        };
-        LastVisitedPageCommand: {
-            pageId: components["schemas"]["Uuid"];
-        };
-        ChapterNavigation: {
-            chapterId: components["schemas"]["Uuid"];
-            lastVisitedPageId: components["schemas"]["Uuid"];
-            revision: number;
-        };
         ChapterList: {
             book: {
                 [key: string]: unknown;
@@ -3066,66 +2845,10 @@ export interface components {
             width: number | null;
             height: number | null;
         };
-        PageRenderStatus: {
-            pageId: components["schemas"]["Uuid"];
-            documentRevision: number;
-            renderedRevision: number | null;
-            /** @enum {string} */
-            renderStatus: "not_rendered" | "ready" | "stale" | "rendering" | "render_failed" | "awaiting_repair" | "repair_failed";
-            translatedUrl: string | null;
-        };
         PageList: {
             items: components["schemas"]["PageSummary"][];
             nextCursor: number | null;
             pageOrderRevision: number;
-        };
-        TranslationBootstrap: {
-            activeJobs: {
-                id: components["schemas"]["Uuid"];
-                kind: components["schemas"]["JobKind"];
-                status: components["schemas"]["JobStatus"];
-                queueRank: number | null;
-                progress: components["schemas"]["JobProgress"];
-                pages: {
-                    pageId: components["schemas"]["Uuid"];
-                    /** @enum {string} */
-                    status: "pending" | "running" | "completed" | "failed" | "skipped" | "cancelled";
-                }[];
-            }[];
-            activeWebImportDraft: {
-                id: components["schemas"]["Uuid"];
-                status: string;
-                revision: number;
-                /** Format: date-time */
-                expiresAt: string;
-            } | null;
-            book: {
-                id: components["schemas"]["Uuid"];
-                title: string;
-                /** @enum {string} */
-                kind: "library" | "quick_workspace";
-            };
-            chapter: {
-                id: components["schemas"]["Uuid"];
-                title: string;
-                pageOrderRevision: number;
-                settingsMemory: {
-                    [key: string]: unknown;
-                };
-                settingsMemoryRevision: number;
-            };
-            constraints: {
-                payload: components["schemas"]["TranslationConstraintPayload"];
-                revision: number;
-            };
-            navigation: {
-                lastVisitedPageId: components["schemas"]["Uuid"] | null;
-                revision: number;
-            };
-            pages: components["schemas"]["PageList"];
-            settings: components["schemas"]["SettingsDocument"];
-            fonts: components["schemas"]["FontResource"][];
-            prompts: components["schemas"]["PromptResource"][];
         };
         PageImportResult: {
             page: components["schemas"]["PageSummary"];
@@ -3142,15 +2865,6 @@ export interface components {
             documentRevision: number;
             sourceUrl: string;
             thumbnailSourceUrl: string;
-        };
-        QuickWorkspaceContext: {
-            bookId: components["schemas"]["Uuid"];
-            chapterId: components["schemas"]["Uuid"];
-        };
-        QuickWorkspacePromotion: {
-            bookId: components["schemas"]["Uuid"];
-            chapterId: components["schemas"]["Uuid"];
-            quickChapterId: components["schemas"]["Uuid"];
         };
         Tag: {
             id: components["schemas"]["Uuid"];
@@ -3191,15 +2905,6 @@ export interface components {
         TranslationConstraintPayload: {
             glossary: components["schemas"]["TranslationGlossarySettings"];
             nonTranslate: components["schemas"]["TranslationNonTranslateSettings"];
-        };
-        TranslationConstraintDocument: {
-            bookId: components["schemas"]["Uuid"];
-            revision: number;
-            payload: components["schemas"]["TranslationConstraintPayload"];
-        };
-        TranslationConstraintUpdateCommand: {
-            baseRevision: number;
-            payload: components["schemas"]["TranslationConstraintPayload"];
         };
         EmptyCommand: Record<string, never>;
         BookIdCommand: {
@@ -5706,58 +5411,6 @@ export interface operations {
             423: components["responses"]["Locked"];
         };
     };
-    getBookTranslationConstraints: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                book_id: components["parameters"]["BookId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current translation constraints and revision. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TranslationConstraintDocument"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-        };
-    };
-    updateBookTranslationConstraints: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                book_id: components["parameters"]["BookId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TranslationConstraintUpdateCommand"];
-            };
-        };
-        responses: {
-            /** @description Updated translation constraints. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TranslationConstraintDocument"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            422: components["responses"]["ValidationError"];
-        };
-    };
     listBookChapters: {
         parameters: {
             query?: never;
@@ -5922,62 +5575,6 @@ export interface operations {
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             423: components["responses"]["Locked"];
-        };
-    };
-    updateChapterSettingsMemory: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                chapter_id: components["parameters"]["ChapterId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RevisionedPayloadCommand"];
-            };
-        };
-        responses: {
-            /** @description Persisted chapter-scoped settings memory. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChapterSettingsMemory"];
-                };
-            };
-            409: components["responses"]["Conflict"];
-            422: components["responses"]["ValidationError"];
-        };
-    };
-    updateChapterLastVisitedPage: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                chapter_id: components["parameters"]["ChapterId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LastVisitedPageCommand"];
-            };
-        };
-        responses: {
-            /** @description Last-write-wins chapter navigation state. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChapterNavigation"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["ValidationError"];
         };
     };
     createContainerImportJob: {
@@ -6243,186 +5840,6 @@ export interface operations {
             423: components["responses"]["Locked"];
         };
     };
-    getPageDocument: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                page_id: components["parameters"]["PageId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Aggregated relational page document. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PageDocument"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-        };
-    };
-    updatePageDocument: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Stable key for this normalized command and target scope. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
-            path: {
-                page_id: components["parameters"]["PageId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PageDocumentBatchMutation"];
-            };
-        };
-        responses: {
-            /** @description Updated page document. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PageDocumentMutationResponse"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            422: components["responses"]["ValidationError"];
-            423: components["responses"]["Locked"];
-        };
-    };
-    createPageBubble: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Stable key for this normalized command and target scope. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
-            path: {
-                page_id: components["parameters"]["PageId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateBubbleCommand"];
-            };
-        };
-        responses: {
-            /** @description Bubble created and the aggregate page document returned. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PageDocumentMutationResponse"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            422: components["responses"]["ValidationError"];
-            423: components["responses"]["Locked"];
-        };
-    };
-    deletePageBubble: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Stable key for this normalized command and target scope. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
-            path: {
-                page_id: components["parameters"]["PageId"];
-                bubble_id: components["parameters"]["BubbleId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RevisionCommand"];
-            };
-        };
-        responses: {
-            /** @description Bubble deleted and the aggregate page document returned. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PageDocumentMutationResponse"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            422: components["responses"]["ValidationError"];
-            423: components["responses"]["Locked"];
-        };
-    };
-    updatePageBubble: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Stable key for this normalized command and target scope. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
-            path: {
-                page_id: components["parameters"]["PageId"];
-                bubble_id: components["parameters"]["BubbleId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PatchBubbleCommand"];
-            };
-        };
-        responses: {
-            /** @description Bubble updated and the aggregate page document returned. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PageDocumentMutationResponse"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            422: components["responses"]["ValidationError"];
-            423: components["responses"]["Locked"];
-        };
-    };
-    getPageRenderStatus: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                page_id: components["parameters"]["PageId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current page render revision and immutable translated assets. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PageRenderStatus"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-        };
-    };
     getImmutableAsset: {
         parameters: {
             query?: never;
@@ -6446,89 +5863,6 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
-        };
-    };
-    getTranslationBootstrap: {
-        parameters: {
-            query?: {
-                bookId?: components["schemas"]["Uuid"];
-                chapterId?: components["schemas"]["Uuid"];
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description One-request translation workspace, settings, fonts, and prompt bootstrap. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TranslationBootstrap"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["ValidationError"];
-        };
-    };
-    resetQuickWorkspace: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description A new empty quick chapter was created. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuickWorkspaceContext"];
-                };
-            };
-            423: components["responses"]["Locked"];
-        };
-    };
-    promoteQuickWorkspace: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @enum {string} */
-                    mode: "new_book" | "existing_book";
-                    chapterTitle: string;
-                    title?: string;
-                    bookId?: components["schemas"]["Uuid"];
-                } & ({
-                    /** @constant */
-                    mode?: "new_book";
-                } | {
-                    /** @constant */
-                    mode?: "existing_book";
-                });
-            };
-        };
-        responses: {
-            /** @description Chapter relations moved and a new empty quick chapter created. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuickWorkspacePromotion"];
-                };
-            };
-            423: components["responses"]["Locked"];
         };
     };
     listTags: {

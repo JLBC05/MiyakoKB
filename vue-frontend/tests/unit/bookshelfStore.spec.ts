@@ -146,18 +146,6 @@ describe('bookshelfStore', () => {
         order: 0,
         imageCount: 1,
       }],
-      translationConstraints: {
-        glossary: {
-          enabled: true,
-          autoExtractEnabled: false,
-          autoExtractPrompt: '',
-          entries: [],
-        },
-        nonTranslate: {
-          enabled: false,
-          entries: [],
-        },
-      },
     }])
     store.setCurrentBook('book-detail')
     vi.spyOn(bookshelfApi, 'getBooks').mockResolvedValue([{
@@ -166,7 +154,6 @@ describe('bookshelfStore', () => {
       tags: ['updated'],
       chapterCount: 1,
       chapters: undefined,
-      translationConstraints: undefined,
     }])
 
     await store.loadBooks()
@@ -174,7 +161,6 @@ describe('bookshelfStore', () => {
     expect(store.books[0]?.chapters).toBeUndefined()
     expect(store.currentBook?.tags).toEqual(['updated'])
     expect(store.currentBook?.chapters?.[0]?.id).toBe('chapter-1')
-    expect(store.currentBook?.translationConstraints?.glossary.enabled).toBe(true)
   })
 
   it('only commits the newest bookshelf request', async () => {

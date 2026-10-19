@@ -38,4 +38,3 @@ export function isPaddleOcrVlLanguage(value: unknown): value is PaddleOcrVlLangu
 
 export const DEFAULT_HQ_TRANSLATE_PROMPT = promptDefaults.hqTranslation
 
-export const DEFAULT_AUTO_GLOSSARY_PROMPT = promptDefaults.autoGlossary

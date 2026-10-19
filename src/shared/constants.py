@@ -13,6 +13,8 @@ from src.shared.text_style_defaults import (
 
 _TEXT_STYLE_DEFAULTS = get_text_style_factory_defaults()
 
+DEFAULT_AUTO_GLOSSARY_PROMPT = get_prompt_factory_defaults()["autoGlossary"]
+
 DEFAULT_FONT_RELATIVE_PATH = os.path.join(
     "src",
     "backend_v2",

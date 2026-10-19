@@ -744,7 +744,7 @@ def test_query_supplied_insight_book_id_cannot_cross_owners(public_platform) -> 
     assert foreign_status.get_json()["error"]["message"] == "book not found"
 
 
-def test_page_document_cannot_reference_another_users_uploaded_font(
+def test_uploaded_fonts_are_owner_scoped(
     public_platform,
 ) -> None:
     app = public_platform["app"]
@@ -769,55 +769,34 @@ def test_page_document_cannot_reference_another_users_uploaded_font(
     alice_font_id = str(uploaded.get_json()["id"])
 
     bob_client, bob_csrf = _login(app, "bob", BOB_PASSWORD)
-    book = bob_client.post(
-        "/api/v2/books",
-        base_url=PUBLIC_BASE,
-        headers={
-            "Idempotency-Key": "bob-font-isolation-book",
-            "X-CSRF-Token": bob_csrf,
-        },
-        json={"title": "Bob Book"},
-    )
-    assert book.status_code == 201
-    chapter = bob_client.post(
-        f"/api/v2/books/{book.get_json()['id']}/chapters",
-        base_url=PUBLIC_BASE,
-        headers={"X-CSRF-Token": bob_csrf},
-        json={"title": "Chapter"},
-    )
-    assert chapter.status_code == 201
-    page = bob_client.post(
-        f"/api/v2/chapters/{chapter.get_json()['id']}/pages",
-        base_url=PUBLIC_BASE,
-        headers={
-            "Idempotency-Key": "bob-font-isolation-page",
-            "X-CSRF-Token": bob_csrf,
-        },
-        data={
-            "file": (BytesIO(_png_bytes()), "page.png"),
-            "logicalPath": "page.png",
-            "textStyle": json.dumps(DEFAULT_TEXT_STYLE),
-        },
-        content_type="multipart/form-data",
-    )
-    assert page.status_code == 201, page.get_data(as_text=True)
-    page_id = str(page.get_json()["page"]["id"])
+    # Alice's upload must not leak into Bob's font listing ...
+    alice_fonts = alice_client.get("/api/v2/fonts", base_url=PUBLIC_BASE)
+    assert alice_fonts.status_code == 200
+    alice_listed = {str(item["id"]) for item in alice_fonts.get_json()["items"]}
+    assert alice_font_id in alice_listed
+    bob_fonts = bob_client.get("/api/v2/fonts", base_url=PUBLIC_BASE)
+    assert bob_fonts.status_code == 200
+    assert alice_font_id not in {
+        str(item["id"]) for item in bob_fonts.get_json()["items"]
+    }
 
-    foreign_font = bob_client.patch(
-        f"/api/v2/pages/{page_id}/document",
+    # ... and Bob cannot delete (or even address) Alice's private font.
+    foreign_font = bob_client.delete(
+        f"/api/v2/fonts/{alice_font_id}",
         base_url=PUBLIC_BASE,
         headers={
-            "Idempotency-Key": "bob-foreign-font-reference",
+            "Idempotency-Key": "bob-foreign-font-delete",
             "X-CSRF-Token": bob_csrf,
-        },
-        json={
-            "baseRevision": 1,
-            "mutations": [],
-            "defaultFontId": alice_font_id,
         },
     )
     assert foreign_font.status_code == 404
-    assert foreign_font.get_json()["error"]["message"] == "font not found"
+    assert foreign_font.get_json()["error"]["code"] == "not_found"
+    assert alice_font_id in {
+        str(item["id"])
+        for item in alice_client.get(
+            "/api/v2/fonts", base_url=PUBLIC_BASE
+        ).get_json()["items"]
+    }
 
 
 def test_invite_registration_is_single_use_and_returns_recovery_codes(
@@ -962,7 +941,6 @@ def test_admin_can_control_public_user_features_and_admin_is_unrestricted(
         content_type="multipart/form-data",
     )
     assert page.status_code == 201
-    page_id = str(page.get_json()["page"]["id"])
 
     policy = deepcopy(DEFAULT_PUBLIC_USER_POLICY)
     policy["features"] = {
@@ -984,19 +962,14 @@ def test_admin_can_control_public_user_features_and_admin_is_unrestricted(
         base_url=PUBLIC_BASE,
     ).get_json()["publicUserPolicy"] == policy
 
+    # feature_disabled is reported for the insight domain; the editMode feature
+    # no longer has a user-facing HTTP route now that the page-document domain
+    # is retired (its enforcement is covered directly in
+    # test_non_default_detector_policy_requires_default_mask_model).
     blocked_requests = (
         alice_client.get(
             "/api/v2/insight/bootstrap",
             base_url=PUBLIC_BASE,
-        ),
-        alice_client.patch(
-            f"/api/v2/pages/{page_id}/document",
-            base_url=PUBLIC_BASE,
-            headers={
-                "Idempotency-Key": "blocked-edit",
-                "X-CSRF-Token": alice_csrf,
-            },
-            json={"baseRevision": 1, "mutations": []},
         ),
     )
     for response in blocked_requests:

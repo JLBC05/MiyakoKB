@@ -31,37 +31,4 @@ describe('content command API', () => {
     )
   })
 
-  it('does not turn an incomplete translation identity into the quick workspace', async () => {
-    mocks.get.mockResolvedValue({})
-    const { getTranslationBootstrap } = await import('@/api/v2/content')
-
-    await getTranslationBootstrap({ bookId: 'book-1' })
-    await getTranslationBootstrap({ chapterId: '' })
-
-    expect(mocks.get).toHaveBeenNthCalledWith(
-      1,
-      '/api/v2/translation/bootstrap?bookId=book-1',
-      { signal: undefined },
-    )
-    expect(mocks.get).toHaveBeenNthCalledWith(
-      2,
-      '/api/v2/translation/bootstrap?chapterId=',
-      { signal: undefined },
-    )
-  })
-
-  it('returns the reset command response without issuing a second bootstrap request', async () => {
-    const context = {
-      bookId: 'book-1',
-      chapterId: 'chapter-1',
-      title: '快速翻译',
-    }
-    mocks.post.mockResolvedValue(context)
-    const { resetQuickWorkspace } = await import('@/api/v2/content')
-
-    await expect(resetQuickWorkspace()).resolves.toBe(context)
-
-    expect(mocks.post).toHaveBeenCalledOnce()
-    expect(mocks.post).toHaveBeenCalledWith('/api/v2/quick-workspace/reset')
-  })
 })

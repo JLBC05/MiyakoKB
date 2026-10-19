@@ -75,21 +75,6 @@ describe('bookshelf v2 api contracts', () => {
     uploadMock.mockReset()
   })
 
-  it('loads book details and constraints from encoded v2 resources', async () => {
-    const { getBookDetail } = await import('@/api/bookshelf')
-
-    const result = await getBookDetail(book.id)
-
-    expect(getMock).toHaveBeenCalledWith('/api/v2/books/book%2Fid%20one')
-    expect(getMock).toHaveBeenCalledWith(
-      '/api/v2/books/book%2Fid%20one/translation-constraints',
-    )
-    expect(result.translationConstraints).toEqual({
-      glossary: constraints.payload.glossary,
-      nonTranslate: constraints.payload.nonTranslate,
-    })
-  })
-
   it('returns the create response without a redundant detail read', async () => {
     postMock.mockResolvedValue(book)
     const { createBook } = await import('@/api/bookshelf')
@@ -150,34 +135,6 @@ describe('bookshelf v2 api contracts', () => {
         },
       },
     )
-  })
-
-  it('saves the structured constraint document through its dedicated CAS resource', async () => {
-    putMock.mockResolvedValue({
-      ...constraints,
-      revision: 3,
-    })
-    const { updateBookTranslationConstraints } = await import('@/api/bookshelf')
-    const result = await updateBookTranslationConstraints(book.id, {
-      glossary: constraints.payload.glossary,
-      nonTranslate: constraints.payload.nonTranslate,
-    }, 2)
-
-    expect(putMock).toHaveBeenCalledWith(
-      '/api/v2/books/book%2Fid%20one/translation-constraints',
-      {
-        baseRevision: 2,
-        payload: {
-          glossary: constraints.payload.glossary,
-          nonTranslate: constraints.payload.nonTranslate,
-        },
-      },
-    )
-    expect(getMock).not.toHaveBeenCalled()
-    expect(result).toEqual({
-      constraints: constraints.payload,
-      revision: 3,
-    })
   })
 
   it('updates a book cover through the multipart PUT contract', async () => {

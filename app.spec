@@ -88,7 +88,7 @@ hiddenimports += [
 
     # 知识库算法实现（仍由 v2 services 在 Worker 内按需导入）
     'src',
-    'src.core', 'src.core.config_models', 'src.core.ocr_types',
+    'src.core',
 
     # Manga Insight 模型和传输适配器
     'src.core.manga_insight', 'src.core.manga_insight.config_models',
