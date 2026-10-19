@@ -63,6 +63,9 @@ def analysis_final_steps(layer_indices: Sequence[int]) -> tuple[str, ...]:
         "insight_stage_overview_no_spoiler",
         "insight_stage_overview_story_summary",
         "insight_stage_timeline",
+        # 实体对齐独立成步：它内部有 (词条数² ) 级候选对的 LLM 语义裁决，过去藏在
+        # 「剧情时间线」步骤内部，导致该步骤耗时被算进时间线、且用户侧完全看不到进展。
+        "insight_stage_entity_alignment",
         "insight_stage_vectors",
         "insight_publish_run",
     )

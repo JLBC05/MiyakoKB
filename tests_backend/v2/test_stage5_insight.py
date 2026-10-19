@@ -1587,7 +1587,8 @@ def test_full_analysis_failed_item_retry_refreshes_settings_and_republishes(
     retry_detail = JobQueueRepository(platform["engine"]).get_job(
         retry_job_id
     )
-    assert retry_detail["counts"]["total"] == 11
+    # 1 个重试页 + 11 个收尾步骤（收尾步骤含 insight_stage_entity_alignment）
+    assert retry_detail["counts"]["total"] == 12
     assert retry_detail["target"]["pageCount"] == 1
     assert retry_detail["target"]["retryItemCount"] == 1
     retry_algorithms = FakeInsightAlgorithms()
@@ -1686,10 +1687,11 @@ def test_partial_analysis_retry_creates_isolated_run_and_rebinds_source(
     assert config["targetCount"] == 1
     assert bound_asset_id == expected_asset_id
     assert bound_asset_id != original_asset_id
+    # 1 个重试页 + 11 个收尾步骤（收尾步骤含 insight_stage_entity_alignment）
     assert (
         JobQueueRepository(platform["engine"])
         .get_job(retry_job_id)["counts"]["total"]
-        == 11
+        == 12
     )
     assert _run_job(platform, FakeInsightAlgorithms()) == "completed"
 

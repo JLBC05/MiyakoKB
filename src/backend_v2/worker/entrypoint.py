@@ -285,6 +285,7 @@ def run_worker(args: object) -> int:
                     "insight_stage_overview_no_spoiler": insight_derived.handle,
                     "insight_stage_overview_story_summary": insight_derived.handle,
                     "insight_stage_timeline": insight_derived.handle,
+                    "insight_stage_entity_alignment": insight_derived.handle,
                     "insight_stage_vectors": insight_derived.handle,
                 }
             )

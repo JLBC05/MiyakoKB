@@ -2623,7 +2623,9 @@ class InsightRepository:
                 ).join(jobs, jobs.c.id == job_items.c.job_id)
             )
             .where(
-                job_steps.c.kind == "insight_build_entity_alignment",
+                job_steps.c.kind.in_(
+                    ("insight_build_entity_alignment", "insight_stage_entity_alignment")
+                ),
                 job_steps.c.status == "failed",
             )
             .order_by(jobs.c.book_id, jobs.c.created_at.desc())

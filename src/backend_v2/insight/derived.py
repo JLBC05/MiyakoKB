@@ -814,8 +814,16 @@ class LLMBatchJudge:
         except Exception:
             pass
 
-    async def judge_batch(self, candidate_pairs: list[tuple[str, str, str]]) -> dict[str, bool]:
-        """批量裁决入口：缓存优先，未命中者按 batch_size 切块并轻度并发送 LLM。"""
+    async def judge_batch(
+        self,
+        candidate_pairs: list[tuple[str, str, str]],
+        progress: Callable[[int, int], None] | None = None,
+    ) -> dict[str, bool]:
+        """批量裁决入口：缓存优先，未命中者按 batch_size 切块并轻度并发送 LLM。
+
+        progress(done_chunks, total_chunks) 在每个批次结束后回调，用于把长耗时阶段
+        的进度暴露给任务日志（旧实现只在最后打印一行，用户侧看不到任何进展）。
+        """
         results: dict[str, bool] = {}
         to_query: list[dict[str, Any]] = []
         seen_keys: set[str] = set()
@@ -848,10 +856,20 @@ class LLMBatchJudge:
 
         chunks = [to_query[i:i + self.batch_size] for i in range(0, len(to_query), self.batch_size)]
         semaphore = asyncio.Semaphore(self.parallel)
+        total_chunks = len(chunks)
+        done_chunks = 0
 
         async def _run_chunk(chunk: list[dict[str, Any]]) -> dict[str, bool]:
+            nonlocal done_chunks
             async with semaphore:
-                return await self._judge_chunk(chunk)
+                outcome = await self._judge_chunk(chunk)
+            done_chunks += 1
+            if progress is not None:
+                try:
+                    progress(done_chunks, total_chunks)
+                except Exception:  # noqa: BLE001
+                    pass
+            return outcome
 
         outcomes = await asyncio.gather(
             *[_run_chunk(chunk) for chunk in chunks], return_exceptions=True
@@ -1000,51 +1018,83 @@ def prefetch_alignment_judgements(
     raw_stats: dict,
     canonical_by_id: dict,
     max_pairs: int | None = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> dict:
-    """方案5：在归并主循环之前，把通过粗筛闸门的候选对批量送 LLM 裁决并落缓存。
+    """在归并主循环之前，把通过粗筛闸门的候选对批量送 LLM 裁决并落缓存（原「方案5」的完整版）。
 
-    - 候选面与主循环的判定条件保持一致（硬性拒绝规则 + 核心字重合度 + 短名保护；
-      abilities 额外要求核心名一致）；
-    - 只写缓存，不改变归并语义：主循环随后命中缓存，不再逐对发起请求；
-    - 缓存已命中/已在候选集内的对会被去重，避免重复计费。
+    - 候选面覆盖主循环可能询问的全部同类别组合：raw_stats 的每个词条 ×（已有实体的
+      canonical_name/别名 ∪ 本类别全部词条）。首次全量构建时 canonical_by_id 为空，
+      候选面完全来自词条两两组合——这正是旧实现被 `if ... and canonical_by_id`
+      跳过、导致 387 页全书构建退化成逐对单请求（1165 次）的场景。
+    - 过滤与主循环一致：硬性拒绝规则 + 短名保护 + 核心字重合度（都在
+      is_judge_candidate 内），abilities 额外要求核心名一致；命中确定性归并规则的
+      对由主循环自己处理，不进入裁决。
+    - 只写缓存、不改变归并语义：主循环随后逐对命中缓存，不再发起单请求。
+    - 按 batch_size 切块 + 轻度并发；进度通过 progress(done_chunks, total_chunks) 回调对外可见。
     """
     pairs: list = []
-    seen: set = set()
     for cat, raw_dict in raw_stats.items():
-        for name in raw_dict.keys():
-            for ent in canonical_by_id.values():
-                if ent.get("category") != cat:
-                    continue
-                candidates = [ent.get("canonical_name")] + list(ent.get("aliases", []))
-                for other in candidates:
-                    if not other or other == name:
-                        continue
-                    key = LLMBatchJudge.make_key(cat, name, other)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    if cat == "abilities":
-                        core1 = _alignment_ability_core(name)
-                        core2 = _alignment_ability_core(other)
-                        if core1 and core2 and core1 != core2:
-                            continue
-                    if is_judge_candidate(cat, name, other):
-                        pairs.append((cat, name, other))
+        names = list(dict.fromkeys(
+            str(item).strip() for item in raw_dict.keys() if str(item).strip()
+        ))
+        if not names:
+            continue
+        # 已有实体名：与词条同名的不再重复枚举（make_key 与顺序无关，raw×raw 已覆盖）。
+        name_set = set(names)
+        existing: list[str] = []
+        for ent in canonical_by_id.values():
+            if ent.get("category") != cat:
+                continue
+            for candidate in [ent.get("canonical_name")] + list(ent.get("aliases", [])):
+                text = str(candidate or "").strip()
+                if text and text not in name_set:
+                    existing.append(text)
+        existing = list(dict.fromkeys(existing))
+
+        def _consider(other: str) -> None:
+            if cat == "abilities":
+                core1 = _alignment_ability_core(name)
+                core2 = _alignment_ability_core(other)
+                if core1 and core2 and core1 != core2:
+                    return
+            if is_judge_candidate(cat, name, other):
+                pairs.append((cat, name, other))
+
+        for name in names:
+            for other in existing:
+                _consider(other)
+        for index, name in enumerate(names):
+            for other in names[index + 1:]:
+                _consider(other)
 
     if max_pairs is not None and max_pairs > 0:
         pairs = pairs[:max_pairs]
     if not pairs:
         return {"candidates": 0, "judged": 0}
 
+    results: dict[str, bool] = {}
     try:
-        results = asyncio.run(llm_judge.judge_batch(pairs))
+        results = asyncio.run(llm_judge.judge_batch(pairs, progress=progress))
     except RuntimeError:
-        # 已处于事件循环中（同步归并路径通常不会发生）：回退逐对判定
-        results = {}
-        for cat, n1, n2 in pairs:
-            llm_judge.judge_pair_sync(cat, n1, n2)
-            results[llm_judge.make_key(cat, n1, n2)] = True
+        # 已处于事件循环中（同步归并路径通常不会发生）：回退逐对判定，判词以真实结果为准
+        total = len(pairs)
+        for done, (cat, n1, n2) in enumerate(pairs, 1):
+            verdict = llm_judge.judge_pair_sync(cat, n1, n2)
+            results[LLMBatchJudge.make_key(cat, n1, n2)] = bool(verdict)
+            if progress is not None and (done % llm_judge.batch_size == 0 or done == total):
+                try:
+                    progress(done, total)
+                except Exception:  # noqa: BLE001
+                    pass
     return {"candidates": len(pairs), "judged": len(results)}
+
+
+def _alignment_progress(message: str, done: int | None, total: int | None) -> None:
+    """把实体对齐阶段的进度写进任务日志（该阶段过去对用户完全不可见）。"""
+    if done is None or total is None:
+        log_result(message, ("正在准备候选对…",))
+    else:
+        log_result(message, (f"已裁决批次 {done}/{total}",))
 
 
 def check_model_entity_similarity(
@@ -3746,8 +3796,12 @@ class InsightDerivedRepository:
         slug_mode: str | None = None,
         staged: bool = False,
         dependency_fingerprint: str | None = None,
+        progress: Callable[[str, int | None, int | None], None] | None = None,
     ) -> dict[str, Any]:
         """Align entities extracted from chapter pages with existing canonical entities,
+
+        progress(message, done, total) 为可选进度回调：用于把「语义裁决」这类长耗时
+        阶段的分批进展写进任务日志（对齐过去整体藏在一个步骤里、对用户完全不可见）。
 
         supporting incremental updates, transactional locking, auto merge rules (frequency, substring overlap, model assisted),
         auto_merge_log auditing, and seed overrides.
@@ -3919,11 +3973,22 @@ class InsightDerivedRepository:
                     "timestamp": utcnow().isoformat(),
                 })
 
-            # 3.5 方案5：把通过粗筛闸门的候选对一次性批量送裁决（默认 30/批 + 轻度并发）并写入缓存；
-            # 主循环随后只命中缓存，不再逐对发起单请求（原实现「每对一次 LLM 调用」是主要耗时来源）。
-            if llm_judge is not None and canonical_by_id:
+            # 3.5 批量预取：把主循环可能询问的同类别候选对一次性送裁决（默认 30/批 + 轻度并发）并写缓存；
+            # 主循环随后只命中缓存，不再逐对发起单请求（旧实现「每对一次 LLM 调用」是主要耗时来源）。
+            # 注意：这里曾经要求 canonical_by_id 非空，导致首次全量构建（无历史实体）完全跳过预取，
+            # 退化成 1165 次单对请求、占掉整轮 69% 的墙钟时间。
+            if llm_judge is not None:
                 try:
-                    prefetch = prefetch_alignment_judgements(llm_judge, raw_stats, canonical_by_id)
+                    _prefetch_progress = None
+                    if progress is not None:
+                        progress("实体对齐：归集语义裁决候选对", None, None)
+
+                        def _prefetch_progress(done: int, total: int) -> None:  # noqa: E731
+                            progress("实体对齐语义裁决", done, total)
+
+                    prefetch = prefetch_alignment_judgements(
+                        llm_judge, raw_stats, canonical_by_id, progress=_prefetch_progress
+                    )
                     print(
                         f"[align_entities] 预取裁决候选 {prefetch['candidates']} 对："
                         f"缓存命中 {llm_judge.cache_hits}，LLM 调用 {llm_judge.llm_calls}，"
@@ -5828,6 +5893,7 @@ class InsightDerivedWorkerService:
                 "insight_stage_compressed_context",
                 "insight_build_timeline",
                 "insight_stage_timeline",
+                "insight_stage_entity_alignment",
                 "insight_build_entity_alignment",
             }
         ):
@@ -6072,33 +6138,53 @@ class InsightDerivedWorkerService:
                             activate=not staging_run,
                         )
                     )
-            elif kind == "insight_build_entity_alignment":
-                # 实体图谱独立构建：align_entities 自带独立事务并自行激活新 revision
-                align_result = self.repository.align_entities(
-                    book_id=frozen.book_id,
-                    chapter_id="",
-                    pages_analysis=frozen.pages,
-                    entity_slug_map_config=self.entity_slug_map,
-                    run_id=None,
-                    slug_mode=_slug_mode_from_config(config),
-                    dependency_fingerprint=frozen.fingerprint,
-                    llm_judge=self._alignment_judge(config, book_id=frozen.book_id),
-                )
-                checkpoint = {
-                    "artifactId": align_result.get("artifactId"),
-                    "revision": align_result.get("revision"),
-                    "entityCount": align_result.get("entityCount"),
-                    "aliasCount": align_result.get("aliasCount"),
-                    "autoMergeCount": align_result.get("autoMergeCount"),
-                }
-                log_result(
-                    "实体知识网络对齐完成",
-                    (
-                        f"实体总数：{checkpoint['entityCount']}",
-                        f"别名总数：{checkpoint['aliasCount']}",
-                        f"版本：{checkpoint['revision']}",
-                    ),
-                )
+            elif kind in {
+                "insight_build_entity_alignment",
+                "insight_stage_entity_alignment",
+            }:
+                # 实体图谱独立构建：align_entities 自带独立事务并自行激活新 revision。
+                # insight_stage_entity_alignment 是分析流水线里的正式步骤（timeline 之后、
+                # vectors 之前），staged 产物交给所属 run 的 publish_run 统一激活；
+                # insight_build_entity_alignment 仍是独立补偿作业用的入口。
+                # 对齐失败不阻塞分析结果发布：run 发布后由
+                # InsightAnalysisWorkerService._dispatch_entity_alignment_if_missing 补建独立作业。
+                _standalone_alignment = kind == "insight_build_entity_alignment"
+                checkpoint = {}
+                try:
+                    align_result = self.repository.align_entities(
+                        book_id=frozen.book_id,
+                        chapter_id="",
+                        pages_analysis=frozen.pages,
+                        entity_slug_map_config=self.entity_slug_map,
+                        run_id=None if _standalone_alignment else run_id,
+                        slug_mode=_slug_mode_from_config(config),
+                        staged=False if _standalone_alignment else staging_run,
+                        dependency_fingerprint=frozen.fingerprint,
+                        llm_judge=self._alignment_judge(config, book_id=frozen.book_id),
+                        progress=_alignment_progress,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 对齐失败必须让分析结果继续发布
+                    LOGGER.warning("实体对齐自动生成异常，继续流水线: %s", exc)
+                    log_result(
+                        "实体知识网络对齐失败",
+                        (f"原因：{exc}", "分析结果仍会发布，稍后可重跑实体对齐"),
+                    )
+                else:
+                    checkpoint = {
+                        "artifactId": align_result.get("artifactId"),
+                        "revision": align_result.get("revision"),
+                        "entityCount": align_result.get("entityCount"),
+                        "aliasCount": align_result.get("aliasCount"),
+                        "autoMergeCount": align_result.get("autoMergeCount"),
+                    }
+                    log_result(
+                        "实体知识网络对齐完成",
+                        (
+                            f"实体总数：{checkpoint['entityCount']}",
+                            f"别名总数：{checkpoint['aliasCount']}",
+                            f"版本：{checkpoint['revision']}",
+                        ),
+                    )
 
                 def publish(connection: Connection) -> None:
                     return None
@@ -6186,27 +6272,8 @@ class InsightDerivedWorkerService:
                 checkpoint=checkpoint,
                 publisher=publish,
             )
-            if kind in {"insight_build_timeline", "insight_stage_timeline"}:
-                try:
-                    align_res = self.repository.align_entities(
-                        book_id=frozen.book_id,
-                        chapter_id="",
-                        pages_analysis=frozen.pages,
-                        entity_slug_map_config=self.entity_slug_map,
-                        run_id=run_id,
-                        staged=staging_run,
-                        dependency_fingerprint=frozen.fingerprint,
-                        llm_judge=self._alignment_judge(config, book_id=frozen.book_id),
-                    )
-                    log_result(
-                        "实体知识网络对齐完成",
-                        (
-                            f"实体总数：{align_res.get('entityCount', 0)}",
-                            f"版本：{align_res.get('revision', 1)}",
-                        ),
-                    )
-                except Exception as exc:
-                    LOGGER.warning("实体对齐自动生成异常，继续流水线: %s", exc)
+            # 注意：实体对齐已从时间线步骤里拆出为独立步骤（insight_stage_entity_alignment），
+            # 不再在这里顺带执行——否则它的耗时会被算进时间线、且用户侧看不到进展。
             return {**checkpoint, "__already_published__": True}
         except AttemptFenced:
             raise

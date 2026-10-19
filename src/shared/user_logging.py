@@ -83,6 +83,7 @@ STEP_LABELS: Final = {
     "insight_stage_overview_no_spoiler": "生成无剧透概览",
     "insight_stage_overview_story_summary": "生成剧情总结",
     "insight_stage_timeline": "生成剧情时间线",
+    "insight_stage_entity_alignment": "对齐实体知识网络",
     "insight_stage_vectors": "建立语义索引",
     "continuation_generate_script": "生成续写脚本",
     "continuation_generate_page": "生成续写页面方案",
