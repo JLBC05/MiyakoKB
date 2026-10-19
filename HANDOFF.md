@@ -152,6 +152,12 @@
   - *理由*：不改主循环结构（避免高风险的两遍循环重构）——首建时几乎无既有实体，主循环本来就会问到几乎所有通过闸门的候选对，超集≈实际询问集；`LLMBatchJudge` 本身早已具备切块/并发/缓存/失败不落缓存的能力，缺的只是「调用点会批量」。
   - *验证*：`tests_backend/v2/test_stage5_insight.py` **152 passed**（3 条重试用例的 job item 计数随新步骤表 11→12；补偿用例继续钉住「对齐失败不阻塞分析结果发布」）；前端六项门禁复验 **0**（vitest 88 files / 642 tests）。
 
+- **决策 15：批内并发升级为供应商级设置；自定义架构下解耦「聚合粒度」与「每批页数」**（2026-10-19 用户批准「按你说的来」，属发现 #35）
+  - *背景*：A/B/C 之后仍有两处杠杆——①逐页分析的批内并发只由**进程环境变量** `INSIGHT_ANALYZE_PARALLEL` 控制（默认 3、范围 1..8），UI 看不见、无法按供应商能力调整（387 页实测正被压到 1）；②第 1 层聚合粒度被绑死在 `pagesPerBatch`（`derived.py` 的 `layer_units` 第 0 层分支写死 `group_size = pagesPerBatch`，第 0 层自带 `unitsPerGroup` 被忽略），前端还把两者刻意同步。
+  - *做法*：(a) 新增 **insight VLM 供应商级设置 `analyzeConcurrency`**（1..8，默认 3）——载荷键校验、整数范围校验、resolver 冻结映射（`analyze_concurrency`）、`provider_runtime.frozen_analyze_concurrency` 读取、`worker._analyze_concurrency(config)` 优先取设置、解析不到才回退 `INSIGHT_ANALYZE_PARALLEL`（env 降级为兜底）、前端 VLM 页签新增「批量并发分片（1-8，默认 3）」输入；(b) **自定义架构**（`architecturePreset == "custom"`）下第 0 层 `unitsPerGroup` 表示「每组合并页数」，≥1 时生效、0 回退 `pagesPerBatch`；**内置预设架构行为完全不变**（仍等于 `pagesPerBatch`），前端解耦两个旋钮（仅当用户未单独调整过第 0 层数值时才跟随每批页数）并区分标注「每 N 页汇总 / 每 N 个单元汇总」。
+  - *理由*：并发只影响速度、不改知识语义，适合做成可见可调的供应商参数；聚合粒度会改变中间层细节保留度，因此只在用户显式选择自定义架构时才接管默认值——不替所有用户降低知识产出质量。
+  - *验证*：新增 `test_vlm_page_analysis_concurrency_is_a_provider_setting`（含「老载荷缺该键仍合法」「越界/布尔拒绝」「设置优先于 env」）与 `test_custom_architecture_groups_first_layer_units_by_its_own_size`（自定义架构 units=2 → 第 1 层 2 个单元；内置架构不变）；受影响两个测试文件 **254 passed**；前端六项门禁 **0**（vitest 88 files / 642 tests，vue-tsc 0，eslint 0 errors / 20 warnings）。
+
 ---
 
 ## 5. 踩过的坑 / 阻塞
@@ -237,6 +243,12 @@
   - *现状*：**已修**（决策 14）——超集预取 + 批量裁决、对齐独立成步、回退分支按对取真实判定、每批进度写用户日志。
   - *教训*：①「底层已有批量能力」不等于「调用点会批量」，闸门条件要用「能力是否可用」而不是「是否有历史数据」；②任何耗时子过程都不要内联在另一个 step 内部——会同时毁掉进度可见性、可重试性与失败归因；③`except` 回退分支绝不能把判定默认写成 `True`（保守判 False 或显式告警）。
 
+- **坑 20：往「精确键载荷」里加字段＝对存量数据的破坏性契约变更**
+  - *现象*：为 E 给 insight VLM 载荷新增 `analyzeConcurrency` 后，`tests_backend/v2/test_stage5_insight.py` + `test_stage1_platform.py` 立刻 **86 failed**，报错都在 `src/backend_v2/settings/validation.py` 的 `_exact_keys`：`provider_settings.insight_vlm.payload` 的键集合必须与白名单**完全相等**，而存量库/夹具里的老载荷是 `{modelName, customBaseUrl, openaiOptions, imageMaxSize}`。这不是测试问题——**生产读设置时也会直接抛错**。
+  - *根因*：`_exact_keys`（原实现）同时承担「拒绝未知键」与「要求全部必填键」两件事，新增字段等于把所有缺该键的历史记录判为非法；前端 `vue-frontend/src/api/insight.ts` 的 `hasExactKeys` 同理（vitest 也红了 10 条）。
+  - *现状*：**已修**——后端 `_exact_keys(..., optional=...)` 与 `_OPTIONAL_INSIGHT_PROVIDER_PAYLOAD_FIELDS`，前端 `OPTIONAL_PROVIDER_PAYLOAD_FIELDS` + `hasRequiredKeys`；缺省合法、越界仍拒，受影响的 2 个测试文件 **254 passed**、前端 **642 passed**。
+  - *教训*：给这类「白名单 + 精确相等」的载荷加字段，必须同时把它登记进**可选键集合**（并让前端校验同样区分必填/可选），否则就是对存量数据的破坏性变更；加字段前先搜一遍 `_exact_keys` / `hasExactKeys` 的调用面。
+
 ---
 
 ## 6. 新会话先读
@@ -247,7 +259,7 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#34、裁决候选对离线回放数据、附录里的分析脚本清单）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#35、裁决候选对离线回放数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
 9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）、`tmp_audit_db_tables.py`（表三维对照：metadata 定义 vs 代码引用 vs 线上行数）、`tmp_audit_db_clusters.py`（按域打印 plugin / operations / studio 等簇的 metadata 覆盖与行数）。
 
@@ -287,4 +299,4 @@
 8. **发布前的两步（都在用户侧）**：①仓库当前仍是**私有**（未认证访问 `https://api.github.com/repos/JLBC05/MiyakoKB` 返回 404），而 README 的下载 / Issues 链接与 v* Release 资产都按「公开仓库」预期——要发布需先在仓库设置里改为公开；②建议先手动 `workflow_dispatch` 跑一次 `.github/workflows/release.yml` 验证 CI（它会跑后端 pytest + 前端门禁 + 打包 probe + 分卷上传），确认全绿后再打 `v0.1.0` tag（**首个公开发布按 0.x 起版**；`release.yml` 会强制 tag 版本 == `version.json` 的 `.version`，当前二者均为 `0.1.0`，`storageVersion` 独立为 `3.5.3`）。
 9. **发行包形态**：`release.yml` 仍按 `cpu` / `gpu` 两个 variant 各出一个包，但 `requirements-cpu.txt` 与 `requirements-gpu.txt` 已逐字节相同（本地模型与 CUDA 栈移除后二者内容一致）——是否收敛为单一发行包，需要产品决定（收敛可省一半 CI 时间并避免用户选错）。
 10. **下一版 DB 清理（`3.5.4`，本轮明确不做）**：4 张只被 `schema.py` 引用的悬空表（`operation_asset_inputs`、`operation_credential_snapshots`、`operation_plugin_snapshots`、`studio_message_assets`）与两个按域成簇 0 行的集群（plugin 集群 5 张、durable-operations 残留 4 张）是否在下一版一并删除。删除需要：按 `docs/storage-migrations.md` 新增 `src/storage_migrator/schemas/3.5.4.sql` + `v3_5_4.py`（convert 删表、validate 委派）+ `registry.py` 登记 + 测试版本号递增，并改动仍在读这些表的活代码（`jobs/retry.py`、`jobs/repository.py`、`storage/epochs.py`、`content/repository.py`、`auth/authorization.py`）。实测数据见清理报告 §10 第 1 条。
-11. **构建流水线的第二档提速（报告发现 #34 的剩余项）**：本轮已把实体对齐（69.3%）批量化并独立成步，剩下两处未动——①**第 1 层聚合 78 次请求 / 777.5s（8.5%）**按「5 页一批」而非按章批量，可合并请求；②**逐页 VLM 分析 78 批 / 1658s（18.1%）**当前串行（`INSIGHT_ANALYZE_PARALLEL`），恢复批内并发可线性压缩。两项都属「改吞吐不改语义」，可独立评估。
+11. **构建流水线的第二档提速（报告发现 #34 的剩余项）**：本轮已把实体对齐（69.3%）批量化并独立成步（决策 14），并把剩下两处杠杆做成可见可调（决策 15）：①**第 1 层聚合 78 次请求 / 777.5s（8.5%）**——自定义架构下第 1 层 `unitsPerGroup` 现可表示「每组合并页数」（内置预设行为不变）；②**逐页 VLM 分析 78 批 / 1658s（18.1%）**——批内并发已升级为 insight VLM 供应商级设置 `analyzeConcurrency`（1..8，默认 3；env `INSIGHT_ANALYZE_PARALLEL` 降级为兜底）。两项都属「改吞吐不改语义」，但仍需**在真实供应商上限下**复测：建议重启开发栈后用同一本 387 页漫画跑一次全书构建，记录新的阶段耗时与限流情况（注意并发调高对免费层供应商会触发 429）。
