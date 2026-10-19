@@ -12,8 +12,12 @@ ERROR = {"code": "STORAGE_UPGRADE_INTERRUPTED", "message": "存储升级中断�
 ACTIVE_JOBS = "('queued','running','paused','interrupted')"
 
 
-def stop_unfinished(root):
-    """Only used on a private copy before a real conversion out of 3.5.0."""
+def stop_unfinished(root, *, skip=()):
+    """Only used on a private copy before a real conversion out of 3.5.0.
+
+    ``skip`` names tables that a later contract already retired: a converter
+    that starts from such a version passes them so this frozen SQL stays valid.
+    """
     error = json.dumps(ERROR, ensure_ascii=False)
     with closing(sqlite3.connect(root / "saber.sqlite3")) as db, db:
         db.execute("PRAGMA foreign_keys=ON")
@@ -46,7 +50,8 @@ def stop_unfinished(root):
         db.execute("UPDATE transient_requests SET connection_open=0")
         # Render requests are disposable execution state. A future converter must
         # rebuild requests for changed documents, preserving valid saved images.
-        db.execute("UPDATE render_requests SET status='failed',attempt_id=NULL,executor_epoch_id=NULL,rendering_revision=NULL,error_json=? WHERE status IN ('pending','running')", (error,))
+        if "render_requests" not in skip:
+            db.execute("UPDATE render_requests SET status='failed',attempt_id=NULL,executor_epoch_id=NULL,rendering_revision=NULL,error_json=? WHERE status IN ('pending','running')", (error,))
         db.execute("UPDATE pages SET render_status='render_failed' WHERE render_status='rendering'")
         db.execute("DELETE FROM chapter_write_locks")
         for table in ("analysis_artifacts", "timeline_versions", "vector_generations"):
