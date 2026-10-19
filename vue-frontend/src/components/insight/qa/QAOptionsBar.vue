@@ -5,14 +5,12 @@ import type { ProductChipItem } from '@/components/product/ProductChipList.vue'
 import UiCheckbox from '@/components/ui/UiCheckbox.vue'
 import UiField from '@/components/ui/UiField.vue'
 import UiNumberField from '@/components/ui/UiNumberField.vue'
-import type { QAMode } from '@/types/insight'
 import EmbeddingRebuildControl from './EmbeddingRebuildControl.vue'
 
 const props = defineProps<{
   globalModeExamples: string[]
   isRebuildingEmbeddings: boolean
   progressLabel: string
-  qaMode: QAMode
   threshold: number
   topK: number
   useParentChild: boolean
@@ -23,7 +21,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: 'askExample', question: string): void
   (event: 'rebuild'): void
-  (event: 'update:qaMode', value: QAMode): void
   (event: 'update:threshold', value: number): void
   (event: 'update:topK', value: number): void
   (event: 'update:useParentChild', value: boolean): void

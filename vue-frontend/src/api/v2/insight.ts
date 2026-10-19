@@ -124,7 +124,7 @@ export function rebuildInsightTimeline(bookId: string): Promise<V2AcceptedJob> {
 
 export function getInsightQaStatus(
   bookId: string,
-  mode: 'exact' | 'global' = 'exact'
+  mode: 'generic' | 'exact' | 'global' = 'generic'
 ): Promise<V2InsightQaStatus> {
   return apiClient.get(`${ROOT}/qa/status`, { params: { bookId, mode } })
 }

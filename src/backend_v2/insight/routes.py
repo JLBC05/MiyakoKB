@@ -356,8 +356,8 @@ def create_insight_blueprint(
                 book_id=book_id,
                 mode=_query_choice(
                     "mode",
-                    allowed={"exact", "global"},
-                    default="exact",
+                    allowed={"generic", "exact", "global"},
+                    default="generic",
                 ),
             )
         )
@@ -447,26 +447,35 @@ def create_insight_blueprint(
                 )
                 config: Mapping[str, Any] = {}
                 if candidates:
+                    # 通用模式：全库材料（type=global）不参与重排，也不占页面候选配额，
+                    # 否则重排会把它挤出 topK，问答就失去了全局脉络。
+                    global_candidates = [
+                        value for value in candidates if value["type"] == "global"
+                    ]
+                    rankable = [
+                        value for value in candidates if value["type"] != "global"
+                    ]
                     should_rerank = (
                         handle.options["useReranker"]
-                        and len(candidates) > 1
+                        and len(rankable) > 1
                     )
                     config = qa_commands.materialize_api_config(
                         handle.config,
                         include_reranker=should_rerank,
                     )
                     if should_rerank:
-                        candidates = [
+                        ranked = [
                             dict(value)
                             for value in qa_api.rerank(
                                 question=handle.question,
-                                candidates=candidates,
+                                candidates=rankable,
                                 top_k=handle.options["topK"],
                                 config=config,
                             )
                         ]
                     else:
-                        candidates = candidates[: handle.options["topK"]]
+                        ranked = rankable[: handle.options["topK"]]
+                    candidates = global_candidates + ranked
                 citations = citations_for(candidates, engine=engine)
                 try:
                     resolved_entities = resolve_entities_in_question(

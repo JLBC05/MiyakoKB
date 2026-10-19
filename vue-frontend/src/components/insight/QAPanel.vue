@@ -27,7 +27,6 @@ type QARepairAction = NonNullable<insightApi.QAStatusResponse['repairAction']>
 const insightStore = useInsightStore()
 const taskCenterStore = useTaskCenterStore()
 const questionInput = ref('')
-const qaMode = ref<QAMode>('precise')
 const useParentChild = ref(true)
 const useReasoning = ref(true)
 const useReranker = ref(true)
@@ -67,14 +66,14 @@ const qaComposerDisabled = computed(
 )
 const qaStatusTitle = computed(() => {
   if (isQaStatusLoading.value) return '正在检查问答依赖'
-  return qaMode.value === 'global' ? '全局问答暂不可用' : '精确问答暂不可用'
+  return '通用问答暂不可用'
 })
 const qaStatusMessage = computed(() => {
   if (isQaStatusLoading.value) return '正在从后端读取当前书籍的问答可用性。'
   const reason = qaStatus.value?.reason
   const messages: Record<string, string> = {
     analysis_missing: '当前书籍还没有可用的分析结果，请先在左侧启动漫画分析。',
-    vector_missing: '精确问答需要先构建向量索引，重建完成后即可提问。',
+    vector_missing: '通用问答需要先构建向量索引，重建完成后即可提问。',
     vector_stale: '漫画分析结果已经变化，现有向量索引已过期，请重建后再提问。',
     global_summary_missing: '全局问答需要故事概要，请先生成故事概要。',
     global_summary_stale: '故事概要已过期，请重新生成后再使用全局问答。',
@@ -146,7 +145,7 @@ async function sendQuestion(): Promise<void> {
   await nextTick()
   scrollToBottom()
 
-  const loadingText = qaMode.value === 'global' ? '正在分析全文...' : '思考中...'
+  const loadingText = '思考中...'
   const loadingMessageId = (Date.now() + 1).toString()
   insightStore.addQAMessage({
     id: loadingMessageId,
@@ -182,18 +181,15 @@ async function sendQuestion(): Promise<void> {
         })
       },
     }
-    const chatOptions: insightApi.SendChatOptions =
-      qaMode.value === 'global'
-        ? { ...streamOptions, mode: 'global' }
-        : {
-            ...streamOptions,
-            mode: 'precise',
-            threshold: threshold.value,
-            topK: topK.value,
-            useParentChild: useParentChild.value,
-            useReasoning: useReasoning.value,
-            useReranker: useReranker.value,
-          }
+    const chatOptions: insightApi.SendChatOptions = {
+      ...streamOptions,
+      mode: 'generic',
+      threshold: threshold.value,
+      topK: topK.value,
+      useParentChild: useParentChild.value,
+      useReasoning: useReasoning.value,
+      useReranker: useReranker.value,
+    }
     const response = await insightApi.sendChat(bookId, question, chatOptions)
 
     if (!isCurrentChatRequest(requestId, bookId)) return
@@ -314,7 +310,6 @@ function resetQaRepairState(): void {
 
 async function refreshQAStatus(): Promise<void> {
   const bookId = insightStore.currentBookId
-  const mode = qaMode.value
   const requestId = ++qaStatusRequestSequence
   if (!bookId) {
     qaStatus.value = null
@@ -324,12 +319,11 @@ async function refreshQAStatus(): Promise<void> {
   qaStatus.value = null
   isQaStatusLoading.value = true
   try {
-    const status = await insightApi.getQAStatus(bookId, mode)
+    const status = await insightApi.getQAStatus(bookId)
     if (
       !isQAPanelMounted ||
       requestId !== qaStatusRequestSequence ||
-      insightStore.currentBookId !== bookId ||
-      qaMode.value !== mode
+      insightStore.currentBookId !== bookId
     )
       return
     qaStatus.value = status
@@ -337,8 +331,7 @@ async function refreshQAStatus(): Promise<void> {
     if (
       !isQAPanelMounted ||
       requestId !== qaStatusRequestSequence ||
-      insightStore.currentBookId !== bookId ||
-      qaMode.value !== mode
+      insightStore.currentBookId !== bookId
     )
       return
     qaStatus.value = {
@@ -349,8 +342,7 @@ async function refreshQAStatus(): Promise<void> {
     if (
       isQAPanelMounted &&
       requestId === qaStatusRequestSequence &&
-      insightStore.currentBookId === bookId &&
-      qaMode.value === mode
+      insightStore.currentBookId === bookId
     ) {
       isQaStatusLoading.value = false
     }
@@ -359,7 +351,6 @@ async function refreshQAStatus(): Promise<void> {
 
 async function repairQAStatus(): Promise<void> {
   const bookId = insightStore.currentBookId
-  const mode = qaMode.value
   const repairAction = qaStatus.value?.repairAction
   if (!bookId || !repairAction || isSubmittingQaRepair.value) return
   if (repairAction === 'vector_rebuild') {
@@ -382,8 +373,7 @@ async function repairQAStatus(): Promise<void> {
     if (
       !isQAPanelMounted ||
       requestId !== qaRepairRequestSequence ||
-      insightStore.currentBookId !== bookId ||
-      qaMode.value !== mode
+      insightStore.currentBookId !== bookId
     )
       return
     qaRepairTaskId.value = taskId
@@ -395,8 +385,7 @@ async function repairQAStatus(): Promise<void> {
     if (
       !isQAPanelMounted ||
       requestId !== qaRepairRequestSequence ||
-      insightStore.currentBookId !== bookId ||
-      qaMode.value !== mode
+      insightStore.currentBookId !== bookId
     )
       return
     showToast(error instanceof Error ? error.message : '修复任务创建失败', 'error')
@@ -615,12 +604,6 @@ watch(
   { immediate: true }
 )
 
-watch(qaMode, () => {
-  qaRepairRequestSequence += 1
-  isSubmittingQaRepair.value = false
-  resetChatSession()
-})
-
 watch(
   [
     () => taskCenterStore.queue,
@@ -633,7 +616,7 @@ watch(
 )
 
 watch(
-  [() => insightStore.currentBookId, () => qaMode.value, () => insightStore.dataRefreshKey],
+  [() => insightStore.currentBookId, () => insightStore.dataRefreshKey],
   refreshQAStatus,
   { immediate: true }
 )
@@ -652,7 +635,6 @@ watch(
 
     <div class="qa-panel__input-shell">
       <QAOptionsBar
-        v-model:qa-mode="qaMode"
         v-model:use-parent-child="useParentChild"
         v-model:use-reasoning="useReasoning"
         v-model:use-reranker="useReranker"

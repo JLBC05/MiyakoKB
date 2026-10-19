@@ -172,6 +172,14 @@ class QAHandle:
     book_id: str = ""
 
 
+# 通用问答模式：细粒度页面检索与全库概览/压缩上下文合成同一个入口。
+# exact/global 作为历史取值继续接受，便于旧客户端与既有测试逐步迁移。
+DEFAULT_QA_MODE = "generic"
+QA_MODES = frozenset({"generic", "exact", "global"})
+# 通用模式为全库材料预留的候选条数（在页面候选配额之外）。
+GENERIC_GLOBAL_CANDIDATE_LIMIT = 2
+
+
 def _validated_request_payload(
     value: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -198,7 +206,7 @@ def _validated_request_payload(
         not isinstance(source_run_id, str) or not source_run_id
     ):
         raise QAConflict("stored QA request sourceRunId is invalid")
-    if value["mode"] not in {"exact", "global"}:
+    if value["mode"] not in QA_MODES:
         raise QAConflict("stored QA request mode is invalid")
     for key in ("keywords", "queryVariants"):
         items = value[key]
@@ -313,7 +321,7 @@ def validate_retrieval_candidates(
 ) -> list[dict[str, Any]]:
     if set(value) != {"mode", "candidates"}:
         raise QAConflict("QA retrieval result fields are invalid")
-    if value["mode"] not in {"exact", "global"}:
+    if value["mode"] not in QA_MODES:
         raise QAConflict("QA retrieval result mode is invalid")
     raw_candidates = value["candidates"]
     if not isinstance(raw_candidates, list):
@@ -920,7 +928,6 @@ class InsightQAWorkerService:
         request_payload = _validated_request_payload(request_payload)
         mode = request_payload["mode"]
         book_id = request_payload["bookId"]
-        generation = request_payload["vectorGeneration"]
         if mode == "global":
             return {
                 "mode": "global",
@@ -931,7 +938,22 @@ class InsightQAWorkerService:
                     ],
                 ),
             }
+        candidates = self._page_candidates(request_payload)
+        if mode == "exact":
+            return {"mode": "exact", "candidates": candidates}
+        # 通用模式：页面/事件候选之后追加全库材料，使单次问答同时具备细粒度证据与全局脉络。
+        merged = self._global_artifact_candidates(
+            book_id=book_id,
+            dependency_fingerprint=request_payload["dependencyFingerprint"],
+        )[:GENERIC_GLOBAL_CANDIDATE_LIMIT] + candidates
+        return {"mode": "generic", "candidates": merged}
 
+    def _page_candidates(
+        self,
+        request_payload: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        book_id = request_payload["bookId"]
+        generation = request_payload["vectorGeneration"]
         candidates: list[dict[str, Any]] | None = None
         if generation > 0:
             with self.engine.connect() as connection:
@@ -1017,7 +1039,7 @@ class InsightQAWorkerService:
             run_id=request_payload["sourceRunId"],
             candidates=candidates,
         )
-        return {"mode": "exact", "candidates": candidates}
+        return candidates
 
     def _monitor_character_extraction_rate(
         self,
@@ -1264,6 +1286,20 @@ class InsightQAWorkerService:
         book_id: str,
         dependency_fingerprint: str,
     ) -> list[dict[str, Any]]:
+        candidates = self._global_artifact_candidates(
+            book_id=book_id,
+            dependency_fingerprint=dependency_fingerprint,
+        )
+        if not candidates:
+            return self._fallback_page_candidates(book_id=book_id, limit=20)
+        return candidates
+
+    def _global_artifact_candidates(
+        self,
+        *,
+        book_id: str,
+        dependency_fingerprint: str,
+    ) -> list[dict[str, Any]]:
         with self.engine.connect() as connection:
             rows = list(
                 connection.execute(
@@ -1329,8 +1365,6 @@ class InsightQAWorkerService:
                     "hybridScore": 1.0,
                 }
             )
-        if not output:
-            return self._fallback_page_candidates(book_id=book_id, limit=20)
         return output
 
     def _with_credentials(
@@ -1665,11 +1699,11 @@ class InsightQACommandService:
         question = raw_question.strip()
         if not question:
             raise ValueError("question must not be empty")
-        mode = command.get("mode", "exact")
+        mode = command.get("mode", DEFAULT_QA_MODE)
         if not isinstance(mode, str):
-            raise ValueError("mode must be exact or global")
-        if mode not in {"exact", "global"}:
-            raise ValueError("mode must be exact or global")
+            raise ValueError("mode must be generic, exact or global")
+        if mode not in QA_MODES:
+            raise ValueError("mode must be generic, exact or global")
         top_k = command.get("topK", 5)
         if isinstance(top_k, bool) or not isinstance(top_k, int):
             raise ValueError("topK must be an integer")
@@ -1711,12 +1745,14 @@ class InsightQACommandService:
         )
         snapshot = self.derived.snapshot(book_id=book_id)
         vector_generation = 0
-        if mode == "exact":
-            status = self.derived.qa_status(book_id=book_id)
+        if mode in {"exact", "generic"}:
+            # 通用模式复用页面检索的可用性信息：向量代次可用则走向量检索，否则由
+            # _page_candidates 内部回退到页面分析；只有旧的 exact 模式才硬性要求可用。
+            status = self.derived.qa_status(book_id=book_id, mode="exact")
             available = status.get("available")
             if not isinstance(available, bool):
                 raise QAConflict("exact QA status is invalid")
-            if not available:
+            if not available and mode == "exact":
                 raise QAConflict(
                     f"exact QA is unavailable: {status.get('reason')}"
                 )

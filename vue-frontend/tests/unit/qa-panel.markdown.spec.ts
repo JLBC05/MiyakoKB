@@ -9,7 +9,6 @@ import { useInsightStore } from '@/stores/insightStore'
 import ProductComposer from '@/components/product/ProductComposer.vue'
 import ProductScrollStack from '@/components/product/ProductScrollStack.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
-import QAOptionsBar from '@/components/insight/qa/QAOptionsBar.vue'
 
 const { getQAStatusMock, sendChatMock } = vi.hoisted(() => ({
   getQAStatusMock: vi.fn(),
@@ -200,11 +199,11 @@ describe('QAPanel Markdown rendering', () => {
     expect(store.isStreaming).toBe(false)
   })
 
-  it('aborts the current answer when the QA mode changes', async () => {
+  it('refreshes QA readiness on a data refresh but aborts the current answer when the book changes', async () => {
     const staleResponse = deferred<{
       answer: string
       citations: never[]
-      mode: 'precise'
+      mode: 'generic'
     }>()
     sendChatMock.mockReturnValueOnce(staleResponse.promise)
     const pinia = createPinia()
@@ -217,18 +216,24 @@ describe('QAPanel Markdown rendering', () => {
     await flushPromises()
 
     const composer = wrapper.getComponent(ProductComposer)
-    await composer.get('textarea').setValue('精确模式问题')
+    await composer.get('textarea').setValue('通用模式问题')
     await composer.get('button').trigger('click')
     await flushPromises()
     const signal = sendChatMock.mock.calls[0]?.[2]?.signal as AbortSignal
+    const statusCallsBeforeRefresh = getQAStatusMock.mock.calls.length
     expect(signal.aborted).toBe(false)
 
-    wrapper.getComponent(QAOptionsBar).vm.$emit('update:qaMode', 'global')
+    store.triggerDataRefresh()
+    await flushPromises()
+    expect(getQAStatusMock.mock.calls.length).toBe(statusCallsBeforeRefresh + 1)
+    expect(signal.aborted).toBe(false)
+
+    store.currentBookId = 'book-2'
     await nextTick()
     expect(signal.aborted).toBe(true)
     expect(store.qaHistory).toEqual([])
 
-    staleResponse.resolve({ answer: '过期回答', citations: [], mode: 'precise' })
+    staleResponse.resolve({ answer: '过期回答', citations: [], mode: 'generic' })
     await flushPromises()
     expect(wrapper.text()).not.toContain('过期回答')
     expect(store.isStreaming).toBe(false)

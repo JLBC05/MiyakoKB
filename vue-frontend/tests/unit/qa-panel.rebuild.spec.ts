@@ -176,7 +176,7 @@ describe('QAPanel vector rebuild task projection', () => {
     expect(insightStore.isLoading).toBe(false)
   })
 
-  it('consumes backend QA readiness and blocks exact questions until vectors are rebuilt', async () => {
+  it('consumes backend QA readiness and blocks questions until vectors are rebuilt', async () => {
     getQAStatusMock.mockResolvedValue({
       available: false,
       reason: 'vector_missing',
@@ -195,8 +195,8 @@ describe('QAPanel vector rebuild task projection', () => {
     })
     await flushPromises()
 
-    expect(getQAStatusMock).toHaveBeenCalledWith('book-1', 'precise')
-    expect(wrapper.get('.qa-panel__status').text()).toContain('精确问答暂不可用')
+    expect(getQAStatusMock).toHaveBeenCalledWith('book-1')
+    expect(wrapper.get('.qa-panel__status').text()).toContain('通用问答暂不可用')
     expect(wrapper.get('.qa-panel__status').text()).toContain('重建向量')
     expect(
       wrapper.get('textarea[placeholder="输入你的问题..."]').attributes('disabled')
@@ -290,9 +290,6 @@ describe('QAPanel vector rebuild task projection', () => {
     })
     await flushPromises()
 
-    const modeTabs = wrapper.get('[role="tablist"]')
-    await modeTabs.findAll('[role="tab"]')[1]!.trigger('click')
-    await flushPromises()
     await wrapper.get('.qa-panel__status button').trigger('click')
     await flushPromises()
 

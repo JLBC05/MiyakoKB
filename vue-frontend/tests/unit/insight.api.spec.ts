@@ -75,8 +75,8 @@ function accepted(jobId: string) {
   return { batchId: 'batch-1', jobIds: [jobId], runId: 'run-1', status: 'queued' }
 }
 
-const preciseChatOptions = {
-  mode: 'precise' as const,
+const genericChatOptions = {
+  mode: 'generic' as const,
   threshold: 0,
   topK: 5,
   useParentChild: true,
@@ -252,13 +252,13 @@ describe('insight v2 api', () => {
     expect(rebuild).toBe('compressed-context-job')
   })
 
-  it('serializes precise QA with the backend exact-mode contract', async () => {
+  it('serializes generic QA with the backend generic-mode contract', async () => {
     const body = [
       'event: status',
       'data: {"requestId":"request-1","status":"retrieving"}',
       '',
       'event: context',
-      'data: {"mode":"exact","citations":[{"pageId":"page-2","pageNumber":2,"excerpt":"证据","score":0.9}]}',
+      'data: {"mode":"generic","citations":[{"pageId":"page-2","pageNumber":2,"excerpt":"证据","score":0.9}]}',
       '',
       'event: chunk',
       'data: {"text":"回答"}',
@@ -280,7 +280,7 @@ describe('insight v2 api', () => {
     const abortController = new AbortController()
 
     const result = await sendChat('book/id one', '发生了什么？', {
-      ...preciseChatOptions,
+      ...genericChatOptions,
       onChunk: content => streamed.push(content),
       signal: abortController.signal,
     })
@@ -289,7 +289,7 @@ describe('insight v2 api', () => {
     expect(request.signal).toBe(abortController.signal)
     expect(JSON.parse(String(request.body))).toMatchObject({
       question: '发生了什么？',
-      mode: 'exact',
+      mode: 'generic',
       useParentChild: true,
       useReasoning: true,
       useReranker: true,
@@ -300,16 +300,16 @@ describe('insight v2 api', () => {
     expect(streamed).toEqual(['回答'])
   })
 
-  it('omits precise retrieval settings from a global QA command', async () => {
+  it('sends every generic retrieval setting with a generic QA command', async () => {
     const body = [
       'event: status',
-      'data: {"requestId":"request-global","status":"retrieving"}',
+      'data: {"requestId":"request-generic","status":"retrieving"}',
       '',
       'event: context',
-      'data: {"mode":"global","citations":[]}',
+      'data: {"mode":"generic","citations":[]}',
       '',
       'event: chunk',
-      'data: {"text":"全局回答"}',
+      'data: {"text":"通用回答"}',
       '',
       'event: done',
       'data: {}',
@@ -320,14 +320,19 @@ describe('insight v2 api', () => {
     vi.stubGlobal('fetch', fetchMock)
     const { sendChat } = await import('@/api/insight')
 
-    const result = await sendChat('book-1', '概括故事', { mode: 'global' })
+    const result = await sendChat('book-1', '概括故事', genericChatOptions)
 
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit
     expect(JSON.parse(String(request.body))).toEqual({
       question: '概括故事',
-      mode: 'global',
+      mode: 'generic',
+      useParentChild: true,
+      useReasoning: true,
+      useReranker: true,
+      topK: 5,
+      threshold: 0,
     })
-    expect(result).toEqual({ answer: '全局回答', citations: [], mode: 'global' })
+    expect(result).toEqual({ answer: '通用回答', citations: [], mode: 'generic' })
   })
 
   it('rejects answer chunks that arrive before the context event', async () => {
@@ -349,7 +354,7 @@ describe('insight v2 api', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })))
     const { sendChat } = await import('@/api/insight')
 
-    await expect(sendChat('book-1', '问题', preciseChatOptions)).rejects.toThrow(
+    await expect(sendChat('book-1', '问题', genericChatOptions)).rejects.toThrow(
       '问答 chunk 事件字段无效'
     )
   })
@@ -375,7 +380,7 @@ describe('insight v2 api', () => {
     )
     const { sendChat } = await import('@/api/insight')
 
-    await expect(sendChat('book-1', '问题', preciseChatOptions)).rejects.toThrow('问答引用字段无效')
+    await expect(sendChat('book-1', '问题', genericChatOptions)).rejects.toThrow('问答引用字段无效')
   })
 
   it('rejects a QA stream that closes without a done event', async () => {
@@ -402,7 +407,7 @@ describe('insight v2 api', () => {
     )
     const { sendChat } = await import('@/api/insight')
 
-    await expect(sendChat('book-1', '问题', preciseChatOptions)).rejects.toThrow('问答响应意外中断')
+    await expect(sendChat('book-1', '问题', genericChatOptions)).rejects.toThrow('问答响应意外中断')
   })
 
   it('loads an existing overview without creating a duplicate rebuild job', async () => {

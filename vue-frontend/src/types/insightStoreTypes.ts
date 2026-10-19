@@ -12,7 +12,8 @@ export type OverviewTemplateType =
   | 'highlights'
   | 'reading_notes'
 
-export type QAMode = 'precise' | 'global'
+/** 后端已把精确/全库问答合并为单一通用模式，前端只使用 generic。 */
+export type QAMode = 'generic'
 
 export interface ChapterInfo {
   id: string

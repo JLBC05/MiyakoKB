@@ -134,20 +134,14 @@ interface ChatStreamOptions {
   signal?: AbortSignal
 }
 
-export type SendChatOptions = ChatStreamOptions &
-  (
-    | {
-        mode: 'global'
-      }
-    | {
-        mode: 'precise'
-        threshold: number
-        topK: number
-        useParentChild: boolean
-        useReasoning: boolean
-        useReranker: boolean
-      }
-  )
+export type SendChatOptions = ChatStreamOptions & {
+  mode: 'generic'
+  threshold: number
+  topK: number
+  useParentChild: boolean
+  useReasoning: boolean
+  useReranker: boolean
+}
 
 function requireQaEventData(
   value: unknown,
@@ -854,24 +848,18 @@ export async function sendChat(
   question: string,
   options: SendChatOptions
 ): Promise<ChatResult> {
-  const preciseOptions =
-    options.mode === 'precise'
-      ? {
-          useParentChild: options.useParentChild,
-          useReasoning: options.useReasoning,
-          useReranker: options.useReranker,
-          topK: options.topK,
-          threshold: options.threshold,
-        }
-      : {}
   const response = await fetch(insightQaUrl(bookId), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal: options.signal,
     body: JSON.stringify({
       question,
-      mode: options.mode === 'global' ? 'global' : 'exact',
-      ...preciseOptions,
+      mode: 'generic',
+      useParentChild: options.useParentChild,
+      useReasoning: options.useReasoning,
+      useReranker: options.useReranker,
+      topK: options.topK,
+      threshold: options.threshold,
     }),
   })
   if (!response.ok) {
@@ -913,10 +901,15 @@ export async function sendChat(
           throw new Error('问答 context 事件字段无效')
         }
         const data = message.data
-        if (!statusSeen || contextSeen || (data.mode !== 'exact' && data.mode !== 'global')) {
+        // 后端已统一为 generic，仍兼容旧数据里的 exact/global。
+        if (
+          !statusSeen ||
+          contextSeen ||
+          (data.mode !== 'generic' && data.mode !== 'exact' && data.mode !== 'global')
+        ) {
           throw new Error('问答 context 事件字段无效')
         }
-        mode = data.mode === 'exact' ? 'precise' : 'global'
+        mode = 'generic'
         citations = requireQaCitations(data.citations)
         if ('resolvedEntities' in data && isRecord(data.resolvedEntities)) {
           const rawEntities = data.resolvedEntities
@@ -971,9 +964,9 @@ export async function rebuildEmbeddings(bookId: string): Promise<string> {
 
 export function getQAStatus(
   bookId: string,
-  mode: 'precise' | 'global' = 'precise'
+  mode: QAMode = 'generic'
 ): Promise<QAStatusResponse> {
-  return getInsightQaStatus(bookId, mode === 'global' ? 'global' : 'exact')
+  return getInsightQaStatus(bookId, mode)
 }
 
 export async function rebuildCompressedContext(bookId: string): Promise<string> {
