@@ -503,71 +503,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/pages/{page_id}/repairs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["createPageRepairOperation"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/operations/{operation_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getOperation"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/operations/{operation_id}/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description Returns durable catch-up events as JSON, or an SSE stream when the client sends Accept: text/event-stream or stream=1. */
-        get: operations["getOperationEvents"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/pages/{page_id}/operations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["createPageOperation"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/jobs": {
         parameters: {
             query?: never;
@@ -1453,6 +1388,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/import/venera/library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Local Venera comics that can be imported from this host. */
+        get: operations["listVeneraLibrary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/import/venera": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Import the selected Venera comics, one durable book per comic. */
+        post: operations["importVeneraComics"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/import/local/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Scan local folders or archives and propose books and chapters without writing anything. */
+        post: operations["previewLocalImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/import/local/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Import the reviewed local books and create their chapters and pages. */
+        post: operations["confirmLocalImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/insight/bootstrap": {
         parameters: {
             query?: never;
@@ -1461,6 +1464,57 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getInsightBootstrap"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insight/books/knowledge-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Knowledge-base progress and entity-graph state for every library book. */
+        get: operations["getBooksKnowledgeStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insight/entities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Entities derived from the active entity-alignment artifact. */
+        get: operations["listInsightEntities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insight/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Entity co-occurrence graph built from the active entity-alignment artifact. */
+        get: operations["getInsightGraph"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3822,6 +3876,141 @@ export interface components {
         ErrorEnvelope: {
             error: components["schemas"]["ErrorDetail"];
         };
+        VeneraComic: {
+            id: string;
+            title: string;
+            subtitle: string;
+            tags: string[];
+            directory: string;
+            cover: string;
+            coverPath: string;
+            comicType: number;
+            chapterCount: number;
+            downloadedChapters: string[];
+            createdAt: number;
+        };
+        VeneraLibrary: {
+            comics: components["schemas"]["VeneraComic"][];
+            total: number;
+            veneraFound: boolean;
+            error?: string;
+        };
+        VeneraImportDetail: {
+            comic_id: string;
+            book_id?: components["schemas"]["Uuid"];
+            /** @enum {string} */
+            status: "success" | "failed";
+            chapters?: number;
+            pages?: number;
+            error?: string;
+        };
+        VeneraImportResult: {
+            imported: number;
+            failed: number;
+            details: components["schemas"]["VeneraImportDetail"][];
+        };
+        LocalChapterPreview: {
+            temp_id: string;
+            title: string;
+            ordinal?: number | null;
+            /** @enum {string} */
+            source_type: "folder" | "archive";
+            source_path: string;
+            page_count: number;
+            /** @enum {string} */
+            recognition_layer: "filename" | "metadata" | "ai_vision" | "fallback";
+            /** @enum {string} */
+            confidence: "high" | "medium" | "low";
+            needs_review: boolean;
+            needs_ordinal?: boolean;
+        };
+        LocalBookPreview: {
+            temp_id: string;
+            title: string;
+            root_path: string;
+            cover_preview_path?: string | null;
+            total_chapters: number;
+            needs_manual_review: boolean;
+            chapters: components["schemas"]["LocalChapterPreview"][];
+        };
+        LocalImportPreview: {
+            status: string;
+            ai_vision_needed_count: number;
+            books: components["schemas"]["LocalBookPreview"][];
+        };
+        LocalChapterConfirm: {
+            title: string;
+            ordinal: number;
+            /** @enum {string} */
+            source_type: "folder" | "archive";
+            source_path: string;
+        };
+        LocalBookConfirm: {
+            title: string;
+            cover_source_path?: string | null;
+            chapters: components["schemas"]["LocalChapterConfirm"][];
+        };
+        LocalImportedBook: {
+            book_id: components["schemas"]["Uuid"];
+            title: string;
+            chapters_count: number;
+            pages_count: number;
+            status: string;
+        };
+        LocalImportResult: {
+            status: string;
+            imported_books: components["schemas"]["LocalImportedBook"][];
+        };
+        BookKnowledgeStatus: {
+            /** @enum {string} */
+            status: "completed" | "partial" | "none";
+            totalChapters: number;
+            analyzedChapters: number;
+            graph: components["schemas"]["BookKnowledgeGraphStatus"];
+        };
+        BookKnowledgeGraphStatus: {
+            /** @enum {string} */
+            status: "none" | "pending" | "ready" | "failed";
+            revision: number | null;
+            entityCount: number | null;
+            updatedAt: string | null;
+            lastError: string | null;
+        };
+        BooksKnowledgeStatus: {
+            items: {
+                [key: string]: components["schemas"]["BookKnowledgeStatus"];
+            };
+        };
+        InsightEntity: {
+            entity_id: string;
+            canonical_name: string;
+            category: string;
+            aliases: string[];
+            pages: number[];
+            frequency: number;
+        };
+        InsightEntityList: {
+            entities: components["schemas"]["InsightEntity"][];
+        };
+        InsightGraphNode: {
+            id: string;
+            name: string;
+            category: string;
+            aliases: string[];
+            frequency: number;
+            pages: number[];
+        };
+        InsightGraphEdge: {
+            id: string;
+            source: string;
+            target: string;
+            weight: number;
+            common_pages: number[];
+        };
+        InsightGraphData: {
+            nodes: components["schemas"]["InsightGraphNode"][];
+            edges: components["schemas"]["InsightGraphEdge"][];
+        };
     };
     responses: {
         /** @description Browser extension pairing token is missing or invalid. */
@@ -4927,123 +5116,6 @@ export interface operations {
                     };
                 };
             };
-        };
-    };
-    createPageRepairOperation: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Stable key for this normalized command and target scope. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
-            path: {
-                page_id: components["parameters"]["PageId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["BubbleRepairCommand"] | components["schemas"]["MaskSolidRepairCommand"] | components["schemas"]["MaskModelRepairCommand"] | components["schemas"]["MaskRestoreCommand"];
-            };
-        };
-        responses: {
-            /** @description Repair operation was durably created. */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperationAccepted"];
-                };
-            };
-            409: components["responses"]["Conflict"];
-            422: components["responses"]["ValidationError"];
-            423: components["responses"]["Locked"];
-        };
-    };
-    getOperation: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                operation_id: components["parameters"]["OperationId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current durable operation state. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Operation"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-        };
-    };
-    getOperationEvents: {
-        parameters: {
-            query?: {
-                after?: number;
-                limit?: number;
-                stream?: 0 | 1;
-            };
-            header?: {
-                "Last-Event-ID"?: number;
-            };
-            path: {
-                operation_id: components["parameters"]["OperationId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Operation events or an event stream. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperationEventList"];
-                    "text/event-stream": string;
-                };
-            };
-            404: components["responses"]["NotFound"];
-        };
-    };
-    createPageOperation: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Stable key for this normalized command and target scope. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
-            path: {
-                page_id: components["parameters"]["PageId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PageOperationCommand"];
-            };
-        };
-        responses: {
-            /** @description The operation was committed before returning. */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperationAccepted"];
-                };
-            };
-            409: components["responses"]["Conflict"];
-            422: components["responses"]["ValidationError"];
-            423: components["responses"]["Locked"];
         };
     };
     listJobs: {
@@ -6866,6 +6938,127 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    listVeneraLibrary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Detected comics, or an empty list with veneraFound=false when the local Venera database is unavailable. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VeneraLibrary"];
+                };
+            };
+        };
+    };
+    importVeneraComics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    comic_ids: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Per-comic import outcome; individual failures are reported inside the payload. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VeneraImportResult"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+        };
+    };
+    previewLocalImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    paths: string[];
+                    /** @default false */
+                    enable_ai_vision?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Proposed books with per-chapter recognition metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalImportPreview"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            /** @description The local scan failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    confirmLocalImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    books: components["schemas"]["LocalBookConfirm"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Imported books with their chapter and page counts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalImportResult"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            /** @description The local import failed for every submitted book. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     getInsightBootstrap: {
         parameters: {
             query?: never;
@@ -6884,6 +7077,75 @@ export interface operations {
                     "application/json": components["schemas"]["InsightBootstrap"];
                 };
             };
+        };
+    };
+    getBooksKnowledgeStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-book analysis status keyed by book id. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BooksKnowledgeStatus"];
+                };
+            };
+        };
+    };
+    listInsightEntities: {
+        parameters: {
+            query: {
+                book_id: components["schemas"]["Uuid"];
+                category?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Derived entities, optionally filtered by category. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightEntityList"];
+                };
+            };
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    getInsightGraph: {
+        parameters: {
+            query: {
+                book_id: components["schemas"]["Uuid"];
+                category?: string;
+                min_weight?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entity nodes and weighted co-occurrence edges. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightGraphData"];
+                };
+            };
+            422: components["responses"]["ValidationError"];
         };
     };
     listInsightChapters: {

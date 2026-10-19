@@ -14,7 +14,7 @@ tags:
   - name: settings
   - name: content
   - name: pages
-  - name: operations
+  - name: import
   - name: jobs
   - name: insight
   - name: web-import
@@ -694,108 +694,6 @@ paths:
                 required: [recovered]
                 properties:
                   recovered: {type: integer, minimum: 0}
-  /pages/{page_id}/repairs:
-    post:
-      tags: [operations]
-      operationId: createPageRepairOperation
-      parameters:
-        - $ref: "#/components/parameters/PageId"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              oneOf:
-                - $ref: "#/components/schemas/BubbleRepairCommand"
-                - $ref: "#/components/schemas/MaskSolidRepairCommand"
-                - $ref: "#/components/schemas/MaskModelRepairCommand"
-                - $ref: "#/components/schemas/MaskRestoreCommand"
-      responses:
-        "202":
-          description: Repair operation was durably created.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OperationAccepted"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "423":
-          $ref: "#/components/responses/Locked"
-        "422":
-          $ref: "#/components/responses/ValidationError"
-  /operations/{operation_id}:
-    get:
-      tags: [operations]
-      operationId: getOperation
-      parameters:
-        - $ref: "#/components/parameters/OperationId"
-      responses:
-        "200":
-          description: Current durable operation state.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Operation"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /operations/{operation_id}/events:
-    get:
-      tags: [operations]
-      operationId: getOperationEvents
-      description: >-
-        Returns durable catch-up events as JSON, or an SSE stream when the
-        client sends Accept: text/event-stream or stream=1.
-      parameters:
-        - $ref: "#/components/parameters/OperationId"
-        - name: Last-Event-ID
-          in: header
-          schema: {type: integer, minimum: 0}
-        - name: after
-          in: query
-          schema: {type: integer, minimum: 0, default: 0}
-        - name: limit
-          in: query
-          schema: {type: integer, minimum: 1, maximum: 2000, default: 500}
-        - name: stream
-          in: query
-          schema: {type: integer, enum: [0, 1], default: 0}
-      responses:
-        "200":
-          description: Operation events or an event stream.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/OperationEventList"}
-            text/event-stream:
-              schema: {type: string}
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /pages/{page_id}/operations:
-    post:
-      tags: [operations]
-      operationId: createPageOperation
-      parameters:
-        - $ref: "#/components/parameters/PageId"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PageOperationCommand"
-      responses:
-        "202":
-          description: The operation was committed before returning.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OperationAccepted"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "423":
-          $ref: "#/components/responses/Locked"
-        "422":
-          $ref: "#/components/responses/ValidationError"
   /jobs:
     get:
       tags: [jobs]
@@ -2014,6 +1912,104 @@ paths:
             image/png: {schema: {type: string, format: binary}}
             image/webp: {schema: {type: string, format: binary}}
         "404": {$ref: "#/components/responses/NotFound"}
+  /import/venera/library:
+    get:
+      tags: [import]
+      operationId: listVeneraLibrary
+      description: Local Venera comics that can be imported from this host.
+      responses:
+        "200":
+          description: Detected comics, or an empty list with veneraFound=false when the local Venera database is unavailable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/VeneraLibrary"}
+  /import/venera:
+    post:
+      tags: [import]
+      operationId: importVeneraComics
+      description: Import the selected Venera comics, one durable book per comic.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [comic_ids]
+              properties:
+                comic_ids:
+                  type: array
+                  minItems: 1
+                  items: {type: string}
+      responses:
+        "200":
+          description: Per-comic import outcome; individual failures are reported inside the payload.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/VeneraImportResult"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+  /import/local/preview:
+    post:
+      tags: [import]
+      operationId: previewLocalImport
+      x-command-mode: transient
+      description: Scan local folders or archives and propose books and chapters without writing anything.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [paths]
+              properties:
+                paths:
+                  type: array
+                  minItems: 1
+                  items: {type: string}
+                enable_ai_vision: {type: boolean, default: false}
+      responses:
+        "200":
+          description: Proposed books with per-chapter recognition metadata.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LocalImportPreview"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "500":
+          description: The local scan failed.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+  /import/local/confirm:
+    post:
+      tags: [import]
+      operationId: confirmLocalImport
+      description: Import the reviewed local books and create their chapters and pages.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [books]
+              properties:
+                books:
+                  type: array
+                  minItems: 1
+                  items: {$ref: "#/components/schemas/LocalBookConfirm"}
+      responses:
+        "200":
+          description: Imported books with their chapter and page counts.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LocalImportResult"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "500":
+          description: The local import failed for every submitted book.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
   /insight/bootstrap:
     get:
       tags: [insight]
@@ -2024,6 +2020,63 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/InsightBootstrap"}
+  /insight/books/knowledge-status:
+    get:
+      tags: [insight]
+      operationId: getBooksKnowledgeStatus
+      description: Knowledge-base progress and entity-graph state for every library book.
+      responses:
+        "200":
+          description: Per-book analysis status keyed by book id.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BooksKnowledgeStatus"}
+  /insight/entities:
+    get:
+      tags: [insight]
+      operationId: listInsightEntities
+      description: Entities derived from the active entity-alignment artifact.
+      parameters:
+        - name: book_id
+          in: query
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: category
+          in: query
+          required: false
+          schema: {type: string}
+      responses:
+        "200":
+          description: Derived entities, optionally filtered by category.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightEntityList"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+  /insight/graph:
+    get:
+      tags: [insight]
+      operationId: getInsightGraph
+      description: Entity co-occurrence graph built from the active entity-alignment artifact.
+      parameters:
+        - name: book_id
+          in: query
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: category
+          in: query
+          required: false
+          schema: {type: string}
+        - name: min_weight
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, default: 1}
+      responses:
+        "200":
+          description: Entity nodes and weighted co-occurrence edges.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightGraphData"}
+        "422": {$ref: "#/components/responses/ValidationError"}
   /insight/books/{book_id}/chapters:
     get:
       tags: [insight]
@@ -2855,12 +2908,6 @@ components:
         $ref: "#/components/schemas/Uuid"
     BubbleId:
       name: bubble_id
-      in: path
-      required: true
-      schema:
-        $ref: "#/components/schemas/Uuid"
-    OperationId:
-      name: operation_id
       in: path
       required: true
       schema:
@@ -4191,9 +4238,6 @@ components:
           type: string
           minLength: 1
           description: JSON-encoded complete text style frozen for every imported page.
-    OperationStatus:
-      type: string
-      enum: [pending, running, completed, failed, cancelled]
     OperationKind:
       type: string
       enum:
@@ -4205,111 +4249,6 @@ components:
         - studio_generate
         - studio_chat
         - studio_summary
-    Operation:
-      type: object
-      additionalProperties: false
-      required:
-        - operationId
-        - kind
-        - executorRole
-        - status
-        - pageId
-        - bubbleId
-        - studioDocumentId
-        - studioSessionId
-        - baseRevision
-        - baseGeneration
-        - request
-        - result
-        - error
-        - createdAt
-        - startedAt
-        - finishedAt
-      properties:
-        operationId:
-          $ref: "#/components/schemas/Uuid"
-        kind:
-          $ref: "#/components/schemas/OperationKind"
-        status:
-          $ref: "#/components/schemas/OperationStatus"
-        executorRole:
-          type: string
-          enum: [api, worker]
-        pageId:
-          oneOf:
-            - $ref: "#/components/schemas/Uuid"
-            - type: "null"
-        bubbleId:
-          oneOf:
-            - $ref: "#/components/schemas/Uuid"
-            - type: "null"
-        studioDocumentId:
-          oneOf:
-            - $ref: "#/components/schemas/Uuid"
-            - type: "null"
-        studioSessionId:
-          oneOf:
-            - $ref: "#/components/schemas/Uuid"
-            - type: "null"
-        baseRevision:
-          type: [integer, "null"]
-          minimum: 1
-        baseGeneration:
-          type: [integer, "null"]
-          minimum: 1
-        request:
-          type: object
-          additionalProperties: true
-        result:
-          type:
-            - object
-            - "null"
-          additionalProperties: true
-        error:
-          oneOf:
-            - $ref: "#/components/schemas/OperationError"
-            - type: "null"
-        createdAt:
-          type: string
-          format: date-time
-        startedAt:
-          type: [string, "null"]
-          format: date-time
-        finishedAt:
-          type: [string, "null"]
-          format: date-time
-    OperationAccepted:
-      type: object
-      additionalProperties: false
-      required: [operationId, kind, status, executorRole]
-      properties:
-        operationId:
-          $ref: "#/components/schemas/Uuid"
-        kind:
-          $ref: "#/components/schemas/OperationKind"
-        status:
-          type: string
-          const: pending
-        executorRole:
-          type: string
-          enum: [api, worker]
-        baseRevision:
-          type: [integer, "null"]
-          minimum: 1
-        baseGeneration:
-          type: [integer, "null"]
-          minimum: 1
-        sessionRevision:
-          type: integer
-          minimum: 1
-        sessionGeneration:
-          type: integer
-          minimum: 1
-        userMessageId:
-          $ref: "#/components/schemas/Uuid"
-        documentRevision:
-          type: integer
-          minimum: 1
     OperationError:
       type: object
       additionalProperties: false
@@ -4327,24 +4266,6 @@ components:
         type: {type: string}
         payload: {type: object, additionalProperties: true}
         createdAt: {type: string, format: date-time}
-    OperationEventList:
-      type: object
-      additionalProperties: false
-      required: [items]
-      properties:
-        items:
-          type: array
-          items: {$ref: "#/components/schemas/OperationEvent"}
-    PageOperationCommand:
-      type: object
-      additionalProperties: false
-      required: [kind, baseRevision]
-      properties:
-        kind:
-          type: string
-          enum: [bubble_ocr, bubble_color, page_detect, bubble_translate]
-        baseRevision: {type: integer, minimum: 1}
-        bubbleId: {$ref: "#/components/schemas/Uuid"}
     BubbleOcrResult:
       type: object
       additionalProperties: false
@@ -4857,76 +4778,6 @@ components:
           minimum: 1
         fields:
           $ref: "#/components/schemas/BubbleMutationFields"
-    BubbleRepairCommand:
-      type: object
-      additionalProperties: false
-      required: [target, bubble_id, base_revision]
-      properties:
-        target:
-          type: string
-          const: bubble
-        bubble_id:
-          $ref: "#/components/schemas/Uuid"
-        base_revision:
-          type: integer
-          minimum: 1
-    MaskSolidRepairCommand:
-      type: object
-      additionalProperties: false
-      required: [target, mask, base_revision, method, fill_color]
-      properties:
-        target:
-          type: string
-          const: mask
-        mask:
-          type: string
-          format: binary
-          contentMediaType: image/png
-        base_revision:
-          type: integer
-          minimum: 1
-        method:
-          type: string
-          const: solid
-        fill_color:
-          type: string
-          pattern: "^#[0-9A-Fa-f]{6}$"
-    MaskModelRepairCommand:
-      type: object
-      additionalProperties: false
-      required: [target, mask, base_revision, method]
-      properties:
-        target:
-          type: string
-          const: mask
-        mask:
-          type: string
-          format: binary
-          contentMediaType: image/png
-        base_revision:
-          type: integer
-          minimum: 1
-        method:
-          type: string
-          enum: [lama_mpe, litelama, lama_manga]
-    MaskRestoreCommand:
-      type: object
-      additionalProperties: false
-      required: [target, mask, base_revision, method]
-      properties:
-        target:
-          type: string
-          const: mask
-        mask:
-          type: string
-          format: binary
-          contentMediaType: image/png
-        base_revision:
-          type: integer
-          minimum: 1
-        method:
-          type: string
-          const: restore_source
     Book:
       type: object
       additionalProperties: false
@@ -6609,3 +6460,213 @@ components:
       properties:
         error:
           $ref: "#/components/schemas/ErrorDetail"
+
+    VeneraComic:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - subtitle
+        - tags
+        - directory
+        - cover
+        - coverPath
+        - comicType
+        - chapterCount
+        - downloadedChapters
+        - createdAt
+      properties:
+        id: {type: string}
+        title: {type: string}
+        subtitle: {type: string}
+        tags: {type: array, items: {type: string}}
+        directory: {type: string}
+        cover: {type: string}
+        coverPath: {type: string}
+        comicType: {type: integer}
+        chapterCount: {type: integer, minimum: 0}
+        downloadedChapters: {type: array, items: {type: string}}
+        createdAt: {type: integer}
+    VeneraLibrary:
+      type: object
+      additionalProperties: false
+      required: [comics, total, veneraFound]
+      properties:
+        comics: {type: array, items: {$ref: "#/components/schemas/VeneraComic"}}
+        total: {type: integer, minimum: 0}
+        veneraFound: {type: boolean}
+        error: {type: string}
+    VeneraImportDetail:
+      type: object
+      additionalProperties: false
+      required: [comic_id, status]
+      properties:
+        comic_id: {type: string}
+        book_id: {$ref: "#/components/schemas/Uuid"}
+        status: {type: string, enum: [success, failed]}
+        chapters: {type: integer, minimum: 0}
+        pages: {type: integer, minimum: 0}
+        error: {type: string}
+    VeneraImportResult:
+      type: object
+      additionalProperties: false
+      required: [imported, failed, details]
+      properties:
+        imported: {type: integer, minimum: 0}
+        failed: {type: integer, minimum: 0}
+        details: {type: array, items: {$ref: "#/components/schemas/VeneraImportDetail"}}
+    LocalChapterPreview:
+      type: object
+      additionalProperties: false
+      required:
+        - temp_id
+        - title
+        - source_type
+        - source_path
+        - page_count
+        - recognition_layer
+        - confidence
+        - needs_review
+      properties:
+        temp_id: {type: string}
+        title: {type: string}
+        ordinal: {type: [integer, "null"]}
+        source_type: {type: string, enum: [folder, archive]}
+        source_path: {type: string}
+        page_count: {type: integer, minimum: 0}
+        recognition_layer: {type: string, enum: [filename, metadata, ai_vision, fallback]}
+        confidence: {type: string, enum: [high, medium, low]}
+        needs_review: {type: boolean}
+        needs_ordinal: {type: boolean}
+    LocalBookPreview:
+      type: object
+      additionalProperties: false
+      required: [temp_id, title, root_path, total_chapters, needs_manual_review, chapters]
+      properties:
+        temp_id: {type: string}
+        title: {type: string}
+        root_path: {type: string}
+        cover_preview_path: {type: [string, "null"]}
+        total_chapters: {type: integer, minimum: 0}
+        needs_manual_review: {type: boolean}
+        chapters: {type: array, items: {$ref: "#/components/schemas/LocalChapterPreview"}}
+    LocalImportPreview:
+      type: object
+      additionalProperties: false
+      required: [status, ai_vision_needed_count, books]
+      properties:
+        status: {type: string}
+        ai_vision_needed_count: {type: integer, minimum: 0}
+        books: {type: array, items: {$ref: "#/components/schemas/LocalBookPreview"}}
+    LocalChapterConfirm:
+      type: object
+      additionalProperties: false
+      required: [title, ordinal, source_type, source_path]
+      properties:
+        title: {type: string}
+        ordinal: {type: integer}
+        source_type: {type: string, enum: [folder, archive]}
+        source_path: {type: string}
+    LocalBookConfirm:
+      type: object
+      additionalProperties: false
+      required: [title, chapters]
+      properties:
+        title: {type: string}
+        cover_source_path: {type: [string, "null"]}
+        chapters:
+          type: array
+          minItems: 1
+          items: {$ref: "#/components/schemas/LocalChapterConfirm"}
+    LocalImportedBook:
+      type: object
+      additionalProperties: false
+      required: [book_id, title, chapters_count, pages_count, status]
+      properties:
+        book_id: {$ref: "#/components/schemas/Uuid"}
+        title: {type: string}
+        chapters_count: {type: integer, minimum: 0}
+        pages_count: {type: integer, minimum: 0}
+        status: {type: string}
+    LocalImportResult:
+      type: object
+      additionalProperties: false
+      required: [status, imported_books]
+      properties:
+        status: {type: string}
+        imported_books:
+          type: array
+          items: {$ref: "#/components/schemas/LocalImportedBook"}
+    BookKnowledgeStatus:
+      type: object
+      additionalProperties: false
+      required: [status, totalChapters, analyzedChapters, graph]
+      properties:
+        status: {type: string, enum: [completed, partial, none]}
+        totalChapters: {type: integer, minimum: 0}
+        analyzedChapters: {type: integer, minimum: 0}
+        graph: {$ref: "#/components/schemas/BookKnowledgeGraphStatus"}
+    BookKnowledgeGraphStatus:
+      type: object
+      additionalProperties: false
+      required: [status, revision, entityCount, updatedAt, lastError]
+      properties:
+        status: {type: string, enum: [none, pending, ready, failed]}
+        revision: {type: [integer, "null"]}
+        entityCount: {type: [integer, "null"]}
+        updatedAt: {type: [string, "null"]}
+        lastError: {type: [string, "null"]}
+    BooksKnowledgeStatus:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: object
+          additionalProperties: {$ref: "#/components/schemas/BookKnowledgeStatus"}
+    InsightEntity:
+      type: object
+      additionalProperties: false
+      required: [entity_id, canonical_name, category, aliases, pages, frequency]
+      properties:
+        entity_id: {type: string}
+        canonical_name: {type: string}
+        category: {type: string}
+        aliases: {type: array, items: {type: string}}
+        pages: {type: array, items: {type: integer}}
+        frequency: {type: integer, minimum: 0}
+    InsightEntityList:
+      type: object
+      additionalProperties: false
+      required: [entities]
+      properties:
+        entities: {type: array, items: {$ref: "#/components/schemas/InsightEntity"}}
+    InsightGraphNode:
+      type: object
+      additionalProperties: false
+      required: [id, name, category, aliases, frequency, pages]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        category: {type: string}
+        aliases: {type: array, items: {type: string}}
+        frequency: {type: integer, minimum: 0}
+        pages: {type: array, items: {type: integer}}
+    InsightGraphEdge:
+      type: object
+      additionalProperties: false
+      required: [id, source, target, weight, common_pages]
+      properties:
+        id: {type: string}
+        source: {type: string}
+        target: {type: string}
+        weight: {type: number}
+        common_pages: {type: array, items: {type: integer}}
+    InsightGraphData:
+      type: object
+      additionalProperties: false
+      required: [nodes, edges]
+      properties:
+        nodes: {type: array, items: {$ref: "#/components/schemas/InsightGraphNode"}}
+        edges: {type: array, items: {$ref: "#/components/schemas/InsightGraphEdge"}}
