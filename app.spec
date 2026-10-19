@@ -24,6 +24,11 @@ PROJECT_ROOT = os.path.abspath(os.path.dirname(SPEC))
 
 # ===================== 初始化收集列表 =====================
 datas = [(os.path.join(PROJECT_ROOT, "version.json"), ".")]
+
+# 合规材料随包分发：许可与第三方组件清单必须在用户拿到的产物里可见
+datas.append((os.path.join(PROJECT_ROOT, "LICENSE"), "."))
+datas.append((os.path.join(PROJECT_ROOT, "THIRD_PARTY_LICENSES.md"), "."))
+datas.append((os.path.join(PROJECT_ROOT, "RELEASE_NOTES.md"), "."))
 binaries = []
 hiddenimports = []
 module_collection_mode = {}
@@ -36,6 +41,9 @@ datas.append((os.path.join(PROJECT_ROOT, 'src', 'shared', 'text_style_defaults_f
 datas.append((os.path.join(PROJECT_ROOT, 'src', 'shared', 'prompt_defaults_factory.json'), os.path.join('src', 'shared')))
 datas.append((os.path.join(PROJECT_ROOT, 'src', 'shared', 'ai_provider_manifest.json'), os.path.join('src', 'shared')))
 datas.append((os.path.join(PROJECT_ROOT, 'openapi', 'v2.yaml'), 'openapi'))
+# 存储契约 SQL：src/storage_migrator/contracts.py 用 Path(__file__).parent/"schemas"
+# 定位，打包时必须把 schemas 目录放到同样的相对位置，否则全新数据目录初始化直接失败。
+datas.append((os.path.join(PROJECT_ROOT, 'src', 'storage_migrator', 'schemas'), os.path.join('src', 'storage_migrator', 'schemas')))
 
 # 2. 用户设置、提示词和凭据只存在于 v2 data root 的数据库中，
 # 不把任何运行时配置或密钥打进应用包。

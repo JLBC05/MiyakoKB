@@ -116,6 +116,8 @@ CLAUDE.md
 # --- 本地临时脚本与凭据/数据产物（禁止入库：可能含真实密钥、内网地址或数据库备份） ---
 # 例：tmp_switch_vlm_deepseek.py 含真实 API Key；temp/backup-before-cleanup/saber.sqlite3 含整份凭据库
 /tmp_*
+/_tmp_*
+/dump_*
 /temp/
 *.sqlite3
 *.sqlite3-*

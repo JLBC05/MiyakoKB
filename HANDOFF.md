@@ -79,7 +79,7 @@
 - [x] 验收点 3：关系图谱轻量化、丝滑无卡顿，故事梗概合并打通实体。
 - [x] 验收点 4：问答引用消除冗余括号章节号，优先显示真实话数。
 - [x] 验收点 5：统一启动器拉起双进程稳定运行。
-- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#32）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
+- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#33）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；
@@ -198,6 +198,11 @@
   - *根因*（发现 #32）：基线提交 `5777d36` 把裸 launcher 路由到受管启动器；提交 `e843a4e` 改为路由到 `run_unified_launcher`，该实现跳过存储准备并以 `--test-mode` 启动子进程（提交 `8857592` 又给 worker 的 test-mode 分支加了 epoch 写入，但没有 schema 时必然失败）。
   - *现状*：**已修**（决策 12 / 报告 §6 发现 #32）——裸 `--role launcher` 回到受管启动器、一键守护改为 `--unified-launcher` 并补存储准备；`test_role_boundaries.py` **19 passed**。教训：改 CLI 默认路由时，必须确认「默认路径仍满足生产契约（存储准入 / epoch / 重启监护）」，并让两条路径都跑一遍「全新数据根 + health」冒烟。
 
+- **坑 15：打包产物从未包含存储契约 SQL（发布版无法初始化全新数据根）**
+  - *现象*：本地 `PyInstaller app.spec` 构建出的 `Saber-Translator.exe` 执行 `--role launcher --probe --test-mode` 立即以 `StorageError: 存储契约 3.5.3 未找到` 退出；CI 的 `probe_package.py` 本应在发布前拦住这种产物。
+  - *根因*（发现 #33）：`src/storage_migrator/contracts.py:78` 用 `Path(__file__).parent / "schemas" / f"{version}.sql"` 取契约，而 `app.spec` 的 `datas` 只收集 `src/backend_v2/static`、`src/backend_v2/resources`、三个 `src/shared/*.json` 与 `openapi/v2.yaml`——**从未收集 `src/storage_migrator/schemas`**。
+  - *现状*：**已修**（报告 §6 发现 #33）——`app.spec` 增加 `src/storage_migrator/schemas` 的 datas 条目（冻结后保持同相对路径），并把 `LICENSE` / `THIRD_PARTY_LICENSES.md` / `RELEASE_NOTES.md` 一并打进产物；重建后按 CI 同款 `probe_package.py` 逐角色校验。教训：**凡是运行时按 `Path(__file__).parent` 找的 `.sql`/`.json`，都必须显式进 spec 的 `datas`**；打包改动后必须跑一次 probe（本机沙箱下需先把 `TEMP/TMP/TMPDIR` 指向可写目录，否则 PyInstaller 的 matplotlib 运行时钩子在 cwd 位于 `%TEMP%` 时找不到可用临时目录而启动即失败）。
+
 ---
 
 ## 6. 新会话先读
@@ -207,7 +212,7 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#32、裁决候选对离线回放数据、附录里的分析脚本清单）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#33、裁决候选对离线回放数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
 9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）。
 
