@@ -61,7 +61,7 @@
 | `content` 的翻译时代路由（bubbles、quick-workspace、render-status 等） | 用户裁定保留；其中 `GET /translation-constraints` 被前端 `bookshelf.ts` 的 `getBookDetail` 实际调用 |
 | `transfer` 的导出（zip/cbz/pdf） | 前端书架/详情页在用 |
 | `continuation` 全域 | 知识库下游创作，与翻译无关 |
-| DB 表结构、`JOB_KINDS`/`OPERATION_KINDS` 枚举、plugin/studio 悬空表 | 既有数据库兼容，删除需迁移 SQL |
+| DB 表结构、`JOB_KINDS`/`OPERATION_KINDS` 枚举、plugin / durable-operations 时代的 0 行悬空表（逐表实测见 §10 第 1 条） | 既有数据库兼容：枚举值被 DB CHECK 约束引用，悬空表已冻结进 `3.5.0`–`3.5.3` 契约；删除需要一次 `3.5.4` 迁移（同步 `schema.py`、冻结契约 SQL 与版本指纹）并改动少量活代码，收益为 0 而风险跨安装数据丢失，留待发布后单独做 |
 | provider capability 映射中的 `plugin_agent` 项 | 既有 provider_settings 行仍存在，保留映射避免解析报错 |
 | `docs/insight-cleanup-plan.md` | 前次知识库链路清理的方案与偏差记录，有历史价值 |
 
@@ -94,7 +94,7 @@
 
 ## 10. 未处理 / 后续建议
 
-- **数据库层**：`job_step_asset_outputs`、`studio_message_assets` 等 0 行表仍在 schema 中；如需彻底清理，应写一版迁移 SQL 并同步 `schema.py`、`schema_metadata` 指纹与 `storage_migrator/schemas/`（本轮已按此流程把 8 张已退休表从契约与 metadata 中移除，见 3.5.3 迁移）。
+- **数据库层（已逐表实测，结论＝延后到发布后的 `3.5.4`）**：`tmp_audit_db_tables.py` / `tmp_audit_db_clusters.py`（只读）对当前 metadata 与线上库 `data-v2/saber.sqlite3` 做了三方对照——metadata 75 表 / 线上 76 表（多出的 `sqlite_sequence` 是 SQLite 内部表），**没有任何「零代码引用」的表**（每张表至少被 `schema.py` 自身引用），但存在 4 张**只被 `schema.py` 引用的悬空表**：`operation_asset_inputs`、`operation_credential_snapshots`、`operation_plugin_snapshots`、`studio_message_assets`。按域聚合的 0 行簇为：plugin 集群（`plugins`、`plugin_versions`、`plugin_current_versions`、`job_plugin_snapshots`、`operation_plugin_snapshots`，全部 0 行）、durable-operations 残留（`operations`、`operation_asset_inputs`、`operation_credential_snapshots`、`operation_events`，全部 0 行）；studio 域（`studio_chat_sessions`/`studio_documents`/`studio_messages`/`studio_message_assets`）线上虽 0 行但**代码仍在用**（`auth/authorization.py` 读 `studio_messages` 等），不属退休域。真要删需要一次 `3.5.4` 迁移，同时改动仍在读这些表的活代码（`src/backend_v2/jobs/retry.py` 复制 `job_plugin_snapshots`；`jobs/repository.py`、`storage/epochs.py`、`content/repository.py`、`auth/authorization.py` 读 `operations`），并按 `docs/storage-migrations.md` 新增冻结 SQL + convert/validate + registry + 测试版本号递增。本轮判定：**发布前不做**（对用户可见价值为 0、跨安装存在数据丢失风险、且会把已复验的存储版本再推一版），已登记为下一版清理项。
 - **退休域接缝**：`/pages/<id>/bubbles` 系列路由与契约条目仍在，但落库已由 `12c37e6` 改为 no-op（`existing_rows = []`）——「200 但什么都不落库」是否裁剪需产品拍板（HANDOFF 坑 12）。
 - **`tests_backend/`**：已清理完毕（969 项收集 0 错误、937 passed / 0 failed / 0 error）；已删除三个随域退出的打包/桌面/模型搬运测试文件。
 - **`docs/`**：`storage-audit-report.md`、`storage-migrations.md` 含翻译时代表说明，可后续修订。

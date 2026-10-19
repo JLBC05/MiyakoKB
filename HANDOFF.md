@@ -214,6 +214,11 @@
   - *根因*：翻译 / OCR 域退休后，这些规格仍在断言已删的 store 字段（`pluginAgent`、`ocrEngine`、`hints`、`saberYolo*`）与已删路由 `/translate`、`/translation-batches`；生成物与构建产物没有在源码改动时同步重建。
   - *现状*：**已修**（提交 `cbc23ff` 重建类型与静态产物、`faf5210` 清理陈旧用例）——22 条红全部处置（删除 3 个随域退役的规格、按当前 store/路由面重写 2 个属性测试、新增 `settings.backend-loading.test.ts`）；全量 vitest **88 files / 642 tests 全绿**。自检命令（改前端后固定跑）：`node node_modules/vitest/vitest.mjs run --configLoader runner`（**不要**只跑 `tests/unit`）；提交前确认 `node node_modules/openapi-typescript/bin/cli.js ../openapi/v2.yaml -o src/api/generated/v2.ts` 后 `git diff --exit-code` 无输出，且 `vite build` 后 `git status --porcelain -- src/backend_v2/static/vue` 为空。
 
+- **坑 17：判断一张表是否「悬空」不能只看行数——0 行 ≠ 死表**
+  - *现象*：清理报告里一直写着「`job_step_asset_outputs`、`studio_message_assets` 等 0 行表仍在 schema 中」；但线上库里 `sessions`、`invite_codes`、`book_tags`、`chapter_navigation_state`、`provider_rate_limits`、整个 studio 域**也全是 0 行**，只看行数会把活域一起判死。
+  - *正确方法*（本轮新建两个只读脚本）：**三维对照**——①`schema.py` 的 `metadata.tables` 定义（75 表）；②`src/**/*.py` + `tests_backend/**/*.py` 里对表标识符的引用（含字符串字面量）；③线上库逐表 `COUNT(*)`。三者交叉后，「只被 `schema.py` 引用的悬空表」只有 4 张（`operation_asset_inputs`、`operation_credential_snapshots`、`operation_plugin_snapshots`、`studio_message_assets`），而 plugin 集群与 durable-operations 残留是按**域**成簇 0 行。
+  - *结论*：**发布前不删**——删除需要一次 `3.5.4` 迁移（新冻结 SQL + convert/validate + registry + 测试版本号）并改动仍在读这些表的活代码（`jobs/retry.py` 读 `job_plugin_snapshots`；`jobs/repository.py`、`storage/epochs.py`、`content/repository.py`、`auth/authorization.py` 读 `operations`），收益为 0 而跨安装存在数据丢失风险。已登记为下一版清理项（清理报告 §10 第 1 条）。
+
 ---
 
 ## 6. 新会话先读
@@ -225,7 +230,7 @@
 6. `vue-frontend/src/views/`：前端核心页面实现。
 7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#33、裁决候选对离线回放数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
-9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）。
+9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）、`tmp_audit_db_tables.py`（表三维对照：metadata 定义 vs 代码引用 vs 线上行数）、`tmp_audit_db_clusters.py`（按域打印 plugin / operations / studio 等簇的 metadata 覆盖与行数）。
 
 ---
 
@@ -262,3 +267,4 @@
 7. **退休域的「接缝」是否裁剪**（报告发现 #30）：bubble 持久化已移除，但 `POST/GET /pages/<page_id>/bubbles`、`/pages/<page_id>/bubble-overrides`、`/translation/bootstrap` 仍在运行时路由与契约里（前者返回空投影、后者返回空 prompts/内存桩约束）。恢复实现还是从路由与 `openapi/v2.yaml` 一并裁掉，需要产品拍板。
 8. **发布前的两步（都在用户侧）**：①仓库当前仍是**私有**（未认证访问 `https://api.github.com/repos/JLBC05/MiyakoKB` 返回 404），而 README 的下载 / Issues 链接与 v* Release 资产都按「公开仓库」预期——要发布需先在仓库设置里改为公开；②建议先手动 `workflow_dispatch` 跑一次 `.github/workflows/release.yml` 验证 CI（它会跑后端 pytest + 前端门禁 + 打包 probe + 分卷上传），确认全绿后再打 `v3.5.17` tag。
 9. **发行包形态**：`release.yml` 仍按 `cpu` / `gpu` 两个 variant 各出一个包，但 `requirements-cpu.txt` 与 `requirements-gpu.txt` 已逐字节相同（本地模型与 CUDA 栈移除后二者内容一致）——是否收敛为单一发行包，需要产品决定（收敛可省一半 CI 时间并避免用户选错）。
+10. **下一版 DB 清理（`3.5.4`，本轮明确不做）**：4 张只被 `schema.py` 引用的悬空表（`operation_asset_inputs`、`operation_credential_snapshots`、`operation_plugin_snapshots`、`studio_message_assets`）与两个按域成簇 0 行的集群（plugin 集群 5 张、durable-operations 残留 4 张）是否在下一版一并删除。删除需要：按 `docs/storage-migrations.md` 新增 `src/storage_migrator/schemas/3.5.4.sql` + `v3_5_4.py`（convert 删表、validate 委派）+ `registry.py` 登记 + 测试版本号递增，并改动仍在读这些表的活代码（`jobs/retry.py`、`jobs/repository.py`、`storage/epochs.py`、`content/repository.py`、`auth/authorization.py`）。实测数据见清理报告 §10 第 1 条。
