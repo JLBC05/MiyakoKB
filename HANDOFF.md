@@ -79,10 +79,10 @@
 - [x] 验收点 3：关系图谱轻量化、丝滑无卡顿，故事梗概合并打通实体。
 - [x] 验收点 4：问答引用消除冗余括号章节号，优先显示真实话数。
 - [x] 验收点 5：统一启动器拉起双进程稳定运行。
-- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#33）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
+- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#34）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
-  1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；
+  1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；**2026-10-19 追加：全书构建 69% 墙钟耗在逐对裁决的问题已定案并落地**（报告发现 #34 / 决策 14 / 坑 19）：超集预取 + 批量裁决（30 对/批、3 并发）、对齐拆为独立步骤 `insight_stage_entity_alignment`、每批进度写用户日志；
   2. ~~**衍生缺口补跑**~~：**已完成（2026-10-19）**。`POST /api/v2/jobs/<id>/retry-failed` 只重跑失败项（源 job `39c2c48f` → 重试 job `091d72b7` → 补跑 job `8431eb87`/run `2c9d40c2`，20/20 成功），概览 no_spoiler(293 字)/story_summary(535 字) 已发布、`entity_alignment` rev5 status=ready；发现 #18/#19 关闭；
   3. **排查 global 问答召回**：问"少年院"只返回第 1 话引用并答"证据不足"，而该场景在第 6-8 话（报告发现 #20）；
   4. 清理收尾：`tests_backend` 失效 import 已清零（扫描脚本 `tmp_scan_tests.py`），后端全量 **937 passed / 0 failed / 0 error**（2026-10-19）；`vue-frontend` 六项门禁全部 0（vitest **88 files / 642 tests**、vue-tsc、eslint、stylelint、`lint:ui`、`lint:ui:audit`），生成类型与静态产物已与源码同步（见坑 16）；PySide6-Essentials 已从 requirements-cpu/gpu 删除；根目录临时脚本仍待归置（`tmp_*.py` 一律不入库）。
@@ -145,6 +145,12 @@
   - *范围与理由*：只改**对外可见层**（`app.spec` 的 EXE/COLLECT 名、`release.yml` 的探测路径 / 资产名 / 发布说明、`launcher/entrypoint.py` 的窗口标题与日志文件名、`web_import/worker.py` 的 UA、`PublicTrialNotice.vue` / `AdminView.vue` 文案、README / RELEASE_NOTES）；**不动** `src/backend_v2/*`、`src/shared/*`、`saber_v2.py`、`saber.sqlite3`、`data-v2/`、`SABER_*` 环境变量——这些是 import 路径与既有用户数据的位置，改名会破坏升级与全部测试，收益只有「好看」。
   - *同时*：README 重写为知识库定位（功能 / 快速上手 / 运行架构 / 源码开发 / 常见问题），删除两张作者个人赞赏码与 10 个翻译时代截图（`pic/` 只留 logo 与本代 5 张知识库截图）；`app.spec` 的 datas 补入 `LICENSE` / `THIRD_PARTY_LICENSES.md` / `RELEASE_NOTES.md`；`.github/scripts/check_models.py`（已无引用）删除；release.yml 残留的 torch/onnxruntime/模型搬运开关清理干净。
   - *验证*：`dist/MiyakoKB/MiyakoKB.exe` 打包成功（2863 文件 / 483.1 MB，仅 3 款字体）；CI 同款 `probe_package.py` 逐角色 exit=0；`release.yml` 中已无 `torch|onnxruntime|SABER_BUILD_MOVE_MODELS|models.z` 命中。提交 `cbc23ff`（品牌 + README + 产物重建）、`faf5210`（前端陈旧用例）、`f1ef3aa`（删死脚本）。
+
+- **决策 14：实体对齐的 LLM 语义裁决改为「超集预取 + 批量裁决」，并把对齐提升为独立流水线步骤**（2026-10-19 用户批准「就按你说的来」）
+  - *背景*（发现 #34）：久留美 387 页全书构建实测 9168.4s，其中**实体对齐 1158 次单对裁决耗 105.9 分钟（69.3%）**；且该段跑在 `insight_stage_timeline` 步骤内部，`job_events` 期间零事件（进度假完成、日志把 1158 次请求记成「生成剧情时间线」、失败后整段重跑）。
+  - *做法*：(a) 预取改为**超集枚举**——候选面 = raw 名 ×（已有实体名/别名 ∪ raw 名），abilities 保留 core 前缀过滤，统一走 `is_judge_candidate` 闸门，按 `LLMBatchJudge.make_key`（顺序无关）去重后一次性 `judge_batch`（默认 30 对/批、3 并发；`INSIGHT_JUDGE_BATCH_SIZE` / `INSIGHT_JUDGE_PARALLEL` 可调；失败批次重试 3 次且不写缓存），主循环随之为缓存命中；(b) 对齐拆为正式步骤 `insight_stage_entity_alignment`（`insight/commands.py` 的 `analysis_final_steps` 中位于 timeline 与 vectors 之间；worker 派发表、`STEP_LABELS`、前端 `taskDisplay.ts` 同步），失败**非阻塞**（写用户日志「实体知识网络对齐失败」并保留告警），由 `_dispatch_entity_alignment_if_missing` 补建独立作业；`get_books_knowledge_status` 的失败查询同时认新旧步骤名；(c) 每批裁决回写用户日志进度。
+  - *理由*：不改主循环结构（避免高风险的两遍循环重构）——首建时几乎无既有实体，主循环本来就会问到几乎所有通过闸门的候选对，超集≈实际询问集；`LLMBatchJudge` 本身早已具备切块/并发/缓存/失败不落缓存的能力，缺的只是「调用点会批量」。
+  - *验证*：`tests_backend/v2/test_stage5_insight.py` **152 passed**（3 条重试用例的 job item 计数随新步骤表 11→12；补偿用例继续钉住「对齐失败不阻塞分析结果发布」）；前端六项门禁复验 **0**（vitest 88 files / 642 tests）。
 
 ---
 
@@ -225,6 +231,12 @@
   - *现状*：**已修**——`FONTS` 改为两款随包自由字体（`思源黑体SourceHanSansK-Bold.TTF`、`ChisugaShotai_Regular0.2.12.1.ttf`），模块 **14 passed / 45 subtests passed**。
   - *教训*：①删资源后必须跑一次**后端全量**（`python -m pytest tests_backend -q`），定向子集会漏；②**不要**给全量套件设 `PYTHONIOENCODING=utf-8`——`_clean_role_environment()` 会把它继承给子进程，而 `_run_probe`（`tests_backend/v2/test_role_boundaries.py`）以 locale 解码，立刻产生两条假红。
 
+- **坑 19：预取闸门写死「必须有历史实体」+ 长过程内联在别的步骤里＝批量能力白装、进度不可见**
+  - *现象*：久留美 387 页全书构建的 69% 墙钟（105.9 分钟）花在**逐对** LLM 裁决上，而 `LLMBatchJudge.judge_batch` 早已支持「切块 + 3 并发 + 缓存」；同时 `job_events` 里这段时间完全没有事件，排障只能从 worker 日志反推。
+  - *根因*（发现 #34，`src/backend_v2/insight/derived.py`）：①预取闸门写成 `if llm_judge is not None and canonical_by_id:`——**首次全书构建没有既有实体，整段预取被跳过**，主循环于是对每个候选对走 `judge_pair_sync`（一次一对、每对一次 HTTP）；②对齐内联在 `insight_stage_timeline` 处理器里、且在 `self.jobs.complete_step(...)` **之后**执行，异常只 `LOGGER.warning("实体对齐自动生成异常，继续流水线: %s")` 静默继续；③预取的回退分支（`asyncio.run` 抛 `RuntimeError` 时）把结果**无条件写成 `True`**，是同类「静默错判」。
+  - *现状*：**已修**（决策 14）——超集预取 + 批量裁决、对齐独立成步、回退分支按对取真实判定、每批进度写用户日志。
+  - *教训*：①「底层已有批量能力」不等于「调用点会批量」，闸门条件要用「能力是否可用」而不是「是否有历史数据」；②任何耗时子过程都不要内联在另一个 step 内部——会同时毁掉进度可见性、可重试性与失败归因；③`except` 回退分支绝不能把判定默认写成 `True`（保守判 False 或显式告警）。
+
 ---
 
 ## 6. 新会话先读
@@ -235,7 +247,7 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#33、裁决候选对离线回放数据、附录里的分析脚本清单）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#34、裁决候选对离线回放数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
 9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）、`tmp_audit_db_tables.py`（表三维对照：metadata 定义 vs 代码引用 vs 线上行数）、`tmp_audit_db_clusters.py`（按域打印 plugin / operations / studio 等簇的 metadata 覆盖与行数）。
 
@@ -275,3 +287,4 @@
 8. **发布前的两步（都在用户侧）**：①仓库当前仍是**私有**（未认证访问 `https://api.github.com/repos/JLBC05/MiyakoKB` 返回 404），而 README 的下载 / Issues 链接与 v* Release 资产都按「公开仓库」预期——要发布需先在仓库设置里改为公开；②建议先手动 `workflow_dispatch` 跑一次 `.github/workflows/release.yml` 验证 CI（它会跑后端 pytest + 前端门禁 + 打包 probe + 分卷上传），确认全绿后再打 `v0.1.0` tag（**首个公开发布按 0.x 起版**；`release.yml` 会强制 tag 版本 == `version.json` 的 `.version`，当前二者均为 `0.1.0`，`storageVersion` 独立为 `3.5.3`）。
 9. **发行包形态**：`release.yml` 仍按 `cpu` / `gpu` 两个 variant 各出一个包，但 `requirements-cpu.txt` 与 `requirements-gpu.txt` 已逐字节相同（本地模型与 CUDA 栈移除后二者内容一致）——是否收敛为单一发行包，需要产品决定（收敛可省一半 CI 时间并避免用户选错）。
 10. **下一版 DB 清理（`3.5.4`，本轮明确不做）**：4 张只被 `schema.py` 引用的悬空表（`operation_asset_inputs`、`operation_credential_snapshots`、`operation_plugin_snapshots`、`studio_message_assets`）与两个按域成簇 0 行的集群（plugin 集群 5 张、durable-operations 残留 4 张）是否在下一版一并删除。删除需要：按 `docs/storage-migrations.md` 新增 `src/storage_migrator/schemas/3.5.4.sql` + `v3_5_4.py`（convert 删表、validate 委派）+ `registry.py` 登记 + 测试版本号递增，并改动仍在读这些表的活代码（`jobs/retry.py`、`jobs/repository.py`、`storage/epochs.py`、`content/repository.py`、`auth/authorization.py`）。实测数据见清理报告 §10 第 1 条。
+11. **构建流水线的第二档提速（报告发现 #34 的剩余项）**：本轮已把实体对齐（69.3%）批量化并独立成步，剩下两处未动——①**第 1 层聚合 78 次请求 / 777.5s（8.5%）**按「5 页一批」而非按章批量，可合并请求；②**逐页 VLM 分析 78 批 / 1658s（18.1%）**当前串行（`INSIGHT_ANALYZE_PARALLEL`），恢复批内并发可线性压缩。两项都属「改吞吐不改语义」，可独立评估。
