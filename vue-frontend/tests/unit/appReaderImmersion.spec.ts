@@ -263,7 +263,6 @@ describe('App reader immersion', () => {
           ProductConfirmProvider: true,
           ProductTextInputProvider: true,
           TaskCenterDrawer: { template: '<div data-testid="task-drawer" />' },
-          TaskCenterLauncher: { template: '<div data-testid="task-launcher" />' },
           ToastNotification: true,
         },
       },
@@ -273,14 +272,12 @@ describe('App reader immersion', () => {
     expect(taskCenterStoreMock.initialize).not.toHaveBeenCalled()
     expect(taskCenterStoreMock.close).toHaveBeenCalledOnce()
     expect(taskCenterStoreMock.disconnect).toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="task-launcher"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="task-drawer"]').exists()).toBe(false)
 
     await router.push('/')
     await flushPromises()
 
     expect(taskCenterStoreMock.initialize).toHaveBeenCalledOnce()
-    expect(wrapper.find('[data-testid="task-launcher"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="task-drawer"]').exists()).toBe(true)
     wrapper.unmount()
   })
@@ -303,7 +300,6 @@ describe('App reader immersion', () => {
           ProductConfirmProvider: true,
           ProductTextInputProvider: true,
           TaskCenterDrawer: { template: '<div data-testid="task-drawer" />' },
-          TaskCenterLauncher: { template: '<div data-testid="task-launcher" />' },
           ToastNotification: true,
         },
       },
@@ -318,7 +314,7 @@ describe('App reader immersion', () => {
     await router.push('/')
     await flushPromises()
     expect(taskCenterStoreMock.initialize).toHaveBeenCalledTimes(2)
-    expect(wrapper.find('[data-testid="task-launcher"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="task-drawer"]').exists()).toBe(true)
 
     resolveInitialInitialization?.()
     await flushPromises()

@@ -187,10 +187,10 @@ async function handleManualSave(): Promise<void> {
           </div>
 
           <nav class="settings-nav" aria-label="设置分类">
-            <button
+            <UiButton
               v-for="tab in settingsTabs"
               :key="tab.id"
-              type="button"
+              variant="tab"
               class="settings-nav__item"
               :class="{ 'settings-nav__item--active': activeTab === tab.id }"
               @click="activeTab = tab.id"
@@ -200,7 +200,7 @@ async function handleManualSave(): Promise<void> {
                 <span class="settings-nav__label">{{ tab.label }}</span>
                 <span class="settings-nav__desc">{{ tab.desc }}</span>
               </div>
-            </button>
+            </UiButton>
           </nav>
 
           <div class="settings-sidebar__footer">
@@ -271,7 +271,7 @@ async function handleManualSave(): Promise<void> {
                 <p class="panel-section-desc">控制实体提取时使用的 ID 生成规范、全自动语义归并及多模态分析流水线。</p>
 
                 <!-- SLUG MODE -->
-                <div class="settings-group">
+                <div class="settings-param-block">
                   <UiField
                     variant="settings"
                     label="实体 Slug 命名规范 (SLUG_MODE)"
@@ -285,7 +285,7 @@ async function handleManualSave(): Promise<void> {
                 </div>
 
                 <!-- 知识模式开关 -->
-                <div class="settings-group">
+                <div class="settings-param-block">
                   <UiField
                     variant="settings"
                     label="知识库模式 (knowledgeMode)"
@@ -299,7 +299,7 @@ async function handleManualSave(): Promise<void> {
                 </div>
 
                 <!-- 实体类别多选 -->
-                <div class="settings-group">
+                <div class="settings-param-block">
                   <label class="settings-subheading">启用的实体提取类别 (extraEntities)</label>
                   <div class="entity-categories-grid">
                     <div
@@ -319,7 +319,7 @@ async function handleManualSave(): Promise<void> {
                 </div>
 
                 <!-- 分批分析参数 -->
-                <div class="settings-group">
+                <div class="settings-param-block">
                   <h4 class="settings-subheading">分层架构与批次设定</h4>
                   <BatchSettingsTab
                     @update:config="insightStore.updateBatchConfig($event)"
@@ -344,7 +344,10 @@ async function handleManualSave(): Promise<void> {
 
 <style scoped>
 .settings-page {
-  min-height: 100vh;
+  --settings-shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.03);
+  --settings-shadow-active: 0 1px 3px rgba(0, 0, 0, 0.04);
+  --settings-tint-active: rgba(153, 119, 204, 0.08);
+
   background-color: var(--color-bg-base);
   color: var(--color-text-primary);
   display: flex;
@@ -371,7 +374,7 @@ async function handleManualSave(): Promise<void> {
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--settings-shadow-panel);
   position: sticky;
   top: 78px;
 }
@@ -421,7 +424,7 @@ async function handleManualSave(): Promise<void> {
 .settings-nav__item--active {
   background-color: var(--color-surface-secondary);
   border-color: var(--color-border);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--settings-shadow-active);
 }
 
 .settings-nav__icon {
@@ -442,7 +445,7 @@ async function handleManualSave(): Promise<void> {
 }
 
 .settings-nav__item--active .settings-nav__label {
-  color: var(--color-primary);
+  color: var(--color-brand-primary);
 }
 
 .settings-nav__desc {
@@ -487,7 +490,7 @@ async function handleManualSave(): Promise<void> {
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 28px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--settings-shadow-panel);
 }
 
 .settings-tab-pane {
@@ -507,7 +510,7 @@ async function handleManualSave(): Promise<void> {
   margin-bottom: 24px;
 }
 
-.settings-group {
+.settings-param-block {
   margin-bottom: 28px;
   padding-bottom: 20px;
   border-bottom: 1px solid var(--color-border);
@@ -541,12 +544,12 @@ async function handleManualSave(): Promise<void> {
 }
 
 .category-card:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-brand-primary);
 }
 
 .category-card--active {
-  background-color: rgba(153, 119, 204, 0.08);
-  border-color: var(--color-primary);
+  background-color: var(--settings-tint-active);
+  border-color: var(--color-brand-primary);
 }
 
 .category-card__header {
@@ -562,13 +565,13 @@ async function handleManualSave(): Promise<void> {
 }
 
 .category-card--active .category-card__title {
-  color: var(--color-primary);
+  color: var(--color-brand-primary);
 }
 
 .category-card__check {
   font-size: 0.9rem;
   font-weight: 700;
-  color: var(--color-primary);
+  color: var(--color-brand-primary);
 }
 
 .category-card__desc {

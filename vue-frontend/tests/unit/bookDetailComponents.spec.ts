@@ -394,7 +394,6 @@ describe('bookshelf detail child components', () => {
       .map(button => button.props('variant'))
     expect(buttonVariants).toEqual([
       'primary',
-      'primary',
       'card-action',
       'plain-danger',
     ])
@@ -434,7 +433,7 @@ describe('bookshelf detail child components', () => {
     expect(list.findAll('button').some(button => button.text().includes('全选有内容章节'))).toBe(true)
   })
 
-  it('keeps chapter download selection available when translation is unavailable', async () => {
+  it('keeps chapter selection available and offers knowledge build instead of translation', async () => {
     const wrapper = mount(ChapterList, {
       props: {
         chapters: [{
@@ -444,20 +443,19 @@ describe('bookshelf detail child components', () => {
         }],
         draggedChapterIndex: null,
         dragOverChapterIndex: null,
-        translationAllowed: false,
         selectedChapterIds: new Set(['chapter-download']),
       },
     })
 
     const checkbox = wrapper.get('input[type="checkbox"]')
     expect(checkbox.attributes('disabled')).toBeUndefined()
-    const downloadButton = wrapper.findAllComponents(UiButton)
-      .find(button => button.text().includes('下载选中章节'))!
-    expect(downloadButton.attributes('disabled')).toBeUndefined()
+    const buildButton = wrapper.findAllComponents(UiButton)
+      .find(button => button.text().includes('构建选中章节知识库'))!
+    expect(buildButton.attributes('disabled')).toBeUndefined()
     expect(wrapper.text()).not.toContain('翻译选中章节')
 
-    await downloadButton.trigger('click')
-    expect(wrapper.emitted('downloadSelected')).toHaveLength(1)
+    await buildButton.trigger('click')
+    expect(wrapper.emitted('buildKnowledgeSelected')).toHaveLength(1)
   })
 
   it('reuses an existing tag casing when quick-add is submitted from the keyboard', async () => {

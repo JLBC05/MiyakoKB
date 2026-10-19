@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { useInsightStore } from '@/stores/insightStore'
 import { getInsightGraph, type V2InsightGraphNode, type V2InsightGraphEdge } from '@/api/v2/insight'
 import UiButton from '@/components/ui/UiButton.vue'
+import UiInput from '@/components/ui/UiInput.vue'
 
 const route = useRoute()
 const insightStore = useInsightStore()
@@ -521,18 +522,19 @@ onUnmounted(() => {
     <div class="graph-toolbar">
       <!-- 类别过滤器 -->
       <div class="category-chips">
-        <button
+        <UiButton
           v-for="cat in categories"
           :key="cat.key"
-          type="button"
           class="category-chip"
           :class="{ active: selectedCategory === cat.key }"
+          variant="ghost"
+          size="xs"
           @click="selectedCategory = cat.key"
         >
           <span class="chip-icon">{{ cat.icon }}</span>
           <span class="chip-label">{{ cat.label }}</span>
           <span class="chip-count">{{ categoryCounts[cat.key] || 0 }}</span>
-        </button>
+        </UiButton>
       </div>
 
       <!-- 右侧控制区 -->
@@ -540,30 +542,40 @@ onUnmounted(() => {
         <!-- 最小共现页数滑块 -->
         <div class="weight-filter" title="过滤低于此共现页数的连线">
           <span class="weight-label">共现频次 ≥ {{ minWeight }}</span>
-          <input
-            v-model.number="minWeight"
+          <UiInput
+            :model-value="minWeight"
             type="range"
             min="1"
             max="15"
             step="1"
             class="weight-slider"
+            @update:model-value="value => { minWeight = Number(value) }"
           />
         </div>
 
         <!-- 搜索定位 -->
         <div class="graph-search">
-          <input
+          <UiInput
             v-model="searchQuery"
             type="text"
             placeholder="搜索实体..."
             class="search-input"
           />
-          <button v-if="searchQuery" class="clear-btn" @click="searchQuery = ''">✕</button>
+          <UiButton
+            v-if="searchQuery"
+            class="clear-btn"
+            variant="ghost"
+            size="xs"
+            aria-label="清空搜索"
+            @click="searchQuery = ''"
+          >
+            ✕
+          </UiButton>
         </div>
 
         <!-- 简洁模式切换 -->
         <UiButton
-          variant="outline"
+          variant="secondary"
           size="sm"
           :class="{ 'btn-active': isSimplifiedMode }"
           :title="isSimplifiedMode ? '当前为简洁核心视图（Top 60 核心实体），点击切换全量' : '当前为全景完整视图，点击切换核心'"
@@ -574,7 +586,7 @@ onUnmounted(() => {
 
         <!-- 开关标签 -->
         <UiButton
-          variant="outline"
+          variant="secondary"
           size="sm"
           :class="{ 'btn-active': showLabels }"
           @click="showLabels = !showLabels"
@@ -583,10 +595,10 @@ onUnmounted(() => {
         </UiButton>
 
         <!-- 重置与重排 -->
-        <UiButton variant="outline" size="sm" @click="resetView">
+        <UiButton variant="secondary" size="sm" @click="resetView">
           🎯 居中
         </UiButton>
-        <UiButton variant="outline" size="sm" @click="reheatSimulation(1.0)">
+        <UiButton variant="secondary" size="sm" @click="reheatSimulation(1.0)">
           ⚡ 刷新布局
         </UiButton>
       </div>
@@ -600,7 +612,7 @@ onUnmounted(() => {
 
     <div v-else-if="errorMessage" class="graph-state-overlay error">
       <p class="error-msg">⚠️ {{ errorMessage }}</p>
-      <UiButton variant="outline" size="sm" @click="loadGraphData">重试</UiButton>
+      <UiButton variant="secondary" size="sm" @click="loadGraphData">重试</UiButton>
     </div>
 
     <div v-else-if="!activeNodes.length" class="graph-state-overlay empty">
@@ -723,7 +735,15 @@ onUnmounted(() => {
               </span>
               <h3 class="entity-title">{{ selectedNodeDetail.name }}</h3>
             </div>
-            <button class="close-btn" @click="selectedNodeId = null">✕</button>
+            <UiButton
+              class="close-btn"
+              variant="ghost"
+              size="xs"
+              aria-label="关闭实体详情"
+              @click="selectedNodeId = null"
+            >
+              ✕
+            </UiButton>
           </div>
 
           <div class="detail-stats">
@@ -798,7 +818,15 @@ onUnmounted(() => {
                 {{ selectedEdgeDetail.sourceNode.name }} ⟷ {{ selectedEdgeDetail.targetNode.name }}
               </h3>
             </div>
-            <button class="close-btn" @click="selectedEdgeId = null">✕</button>
+            <UiButton
+              class="close-btn"
+              variant="ghost"
+              size="xs"
+              aria-label="关闭关系详情"
+              @click="selectedEdgeId = null"
+            >
+              ✕
+            </UiButton>
           </div>
 
           <div class="relation-summary-box">
@@ -852,14 +880,48 @@ onUnmounted(() => {
 
 <style scoped>
 .knowledge-graph-panel {
+  --graph-panel-surface: #1e1b2e;
+  --graph-panel-stroke-whisper: rgba(255, 255, 255, 0.08);
+  --graph-panel-surface-indigo: #262338;
+  --graph-panel-stroke-whisper-white: rgba(255, 255, 255, 0.1);
+  --graph-panel-surface-faint: rgba(255, 255, 255, 0.04);
+  --graph-panel-text: #94a3b8;
+  --graph-panel-text-white: #fff;
+  --graph-panel-shadow-medium: rgba(139, 92, 246, 0.35);
+  --graph-panel-surface-light: rgba(0, 0, 0, 0.25);
+  --graph-panel-surface-soft: rgba(0, 0, 0, 0.2);
+  --graph-panel-surface-soft-violet: rgba(139, 92, 246, 0.2);
+  --graph-panel-surface-faint-violet: rgba(139, 92, 246, 0.05);
+  --graph-panel-surface-indigo-deep: #2d2847;
+  --graph-panel-stroke-soft: rgba(255, 255, 255, 0.16);
+  --graph-panel-stroke: #c084fc;
+  --graph-panel-stroke-yellow: #fbbf24;
+  --graph-panel-stroke-heavy: rgba(255, 255, 255, 0.85);
+  --graph-panel-fill: #ffffff;
+  --graph-panel-fill-blue: #f1f5f9;
+  --graph-panel-surface-heavy: rgba(15, 12, 29, 0.88);
+  --graph-panel-surface-indigo-deep-alt2: #231f38;
+  --graph-panel-surface-soft-yellow: rgba(251, 191, 36, 0.15);
+  --graph-panel-surface-faint-white: rgba(255, 255, 255, 0.06);
+  --graph-panel-text-blue: #cbd5e1;
+  --graph-panel-surface-faint-white-bright: rgba(255, 255, 255, 0.03);
+  --graph-panel-stroke-faint: rgba(255, 255, 255, 0.05);
+  --graph-panel-surface-soft-violet-mid: rgba(139, 92, 246, 0.15);
+  --graph-panel-stroke-light: rgba(139, 92, 246, 0.3);
+  --graph-panel-text-violet: #d8b4fe;
+  --graph-panel-text-light: rgba(251, 191, 36, 0.3);
+  --graph-panel-text-yellow: #fde047;
+  --graph-panel-text-blue-bright: #e2e8f0;
+  --graph-panel-text-red: #ef4444;
+
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
   min-height: 640px;
-  background: var(--color-surface, #1e1b2e);
+  background: var(--color-surface, var(--graph-panel-surface));
   border-radius: var(--radius-lg, 12px);
-  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--color-border, var(--graph-panel-stroke-whisper));
   overflow: hidden;
   position: relative;
 }
@@ -872,9 +934,9 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 18px;
-  background: var(--color-surface-hover, #262338);
-  border-bottom: 1px solid var(--color-border, rgba(255, 255, 255, 0.08));
-  z-index: 10;
+  background: var(--color-surface-hover, var(--graph-panel-surface-indigo));
+  border-bottom: 1px solid var(--color-border, var(--graph-panel-stroke-whisper));
+  z-index: var(--z-local-toolbar);
 }
 
 .category-chips {
@@ -890,32 +952,32 @@ onUnmounted(() => {
   gap: 5px;
   padding: 4px 10px;
   border-radius: 9999px;
-  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--color-text-secondary, #94a3b8);
+  border: 1px solid var(--color-border, var(--graph-panel-stroke-whisper-white));
+  background: var(--graph-panel-surface-faint);
+  color: var(--color-text-secondary, var(--graph-panel-text));
   font-size: 13px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .category-chip:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
+  background: var(--graph-panel-stroke-whisper);
+  color: var(--graph-panel-text-white);
 }
 
 .category-chip.active {
-  background: var(--color-primary, #8b5cf6);
-  border-color: var(--color-primary, #8b5cf6);
-  color: #fff;
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+  color: var(--graph-panel-text-white);
   font-weight: 500;
-  box-shadow: 0 0 12px rgba(139, 92, 246, 0.35);
+  box-shadow: 0 0 12px var(--graph-panel-shadow-medium);
 }
 
 .chip-count {
   font-size: 11px;
   padding: 1px 5px;
   border-radius: 9999px;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--graph-panel-surface-light);
 }
 
 .toolbar-actions {
@@ -929,21 +991,21 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--graph-panel-surface-soft);
   padding: 4px 10px;
   border-radius: var(--radius-md, 8px);
-  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--color-border, var(--graph-panel-stroke-whisper));
 }
 
 .weight-label {
   font-size: 12px;
-  color: var(--color-text-secondary, #94a3b8);
+  color: var(--color-text-secondary, var(--graph-panel-text));
   white-space: nowrap;
 }
 
 .weight-slider {
   width: 80px;
-  accent-color: var(--color-primary, #8b5cf6);
+  accent-color: var(--color-brand-primary);
   cursor: pointer;
 }
 
@@ -957,9 +1019,9 @@ onUnmounted(() => {
   width: 140px;
   padding: 4px 26px 4px 10px;
   border-radius: var(--radius-md, 8px);
-  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
-  background: rgba(0, 0, 0, 0.25);
-  color: #fff;
+  border: 1px solid var(--color-border, var(--graph-panel-stroke-whisper-white));
+  background: var(--graph-panel-surface-light);
+  color: var(--graph-panel-text-white);
   font-size: 12px;
   transition: all 0.2s;
 }
@@ -967,7 +1029,7 @@ onUnmounted(() => {
 .search-input:focus {
   outline: none;
   width: 180px;
-  border-color: var(--color-primary, #8b5cf6);
+  border-color: var(--color-brand-primary);
 }
 
 .clear-btn {
@@ -975,15 +1037,15 @@ onUnmounted(() => {
   right: 6px;
   background: transparent;
   border: none;
-  color: #94a3b8;
+  color: var(--graph-panel-text);
   font-size: 11px;
   cursor: pointer;
 }
 
-.btn-active {
-  background: rgba(139, 92, 246, 0.2) !important;
-  border-color: var(--color-primary, #8b5cf6) !important;
-  color: #fff !important;
+.toolbar-actions .btn-active {
+  background: var(--graph-panel-surface-soft-violet);
+  border-color: var(--color-brand-primary);
+  color: var(--graph-panel-text-white);
 }
 
 /* 主画布与内容区 */
@@ -999,8 +1061,8 @@ onUnmounted(() => {
   height: 100%;
   position: relative;
   cursor: grab;
-  background: radial-gradient(circle at center, rgba(139, 92, 246, 0.05) 0%, transparent 70%),
-              radial-gradient(#2d2847 1px, transparent 1px);
+  background: radial-gradient(circle at center, var(--graph-panel-surface-faint-violet) 0%, transparent 70%),
+              radial-gradient(var(--graph-panel-surface-indigo-deep) 1px, transparent 1px);
   background-size: 100% 100%, 24px 24px;
 }
 
@@ -1016,26 +1078,26 @@ onUnmounted(() => {
 
 /* 连线样式 (纯净矢量绘制，零昂贵滤镜，极致丝滑) */
 .graph-edge {
-  stroke: rgba(255, 255, 255, 0.16);
+  stroke: var(--graph-panel-stroke-soft);
   stroke-linecap: round;
   cursor: pointer;
   transition: stroke 0.15s, stroke-width 0.15s, opacity 0.15s;
 }
 
 .graph-edge:hover {
-  stroke: var(--color-primary, #8b5cf6);
-  stroke-width: 3.5px !important;
+  stroke: var(--color-brand-primary);
+  stroke-width: 3.5px;
 }
 
 .graph-edge.highlighted {
-  stroke: #c084fc;
+  stroke: var(--graph-panel-stroke);
   stroke-opacity: 0.95;
-  stroke-width: 3px !important;
+  stroke-width: 3px;
 }
 
 .graph-edge.selected {
-  stroke: #fbbf24;
-  stroke-width: 4px !important;
+  stroke: var(--graph-panel-stroke-yellow);
+  stroke-width: 4px;
 }
 
 .graph-edge.dimmed {
@@ -1059,26 +1121,26 @@ onUnmounted(() => {
 }
 
 .node-circle {
-  stroke: rgba(255, 255, 255, 0.85);
+  stroke: var(--graph-panel-stroke-heavy);
   stroke-width: 1.5px;
   transition: stroke 0.15s, stroke-width 0.15s;
 }
 
 .graph-node-group:hover .node-circle,
 .graph-node-group.selected .node-circle {
-  stroke: #fbbf24;
+  stroke: var(--graph-panel-stroke-yellow);
   stroke-width: 3px;
 }
 
 .node-icon-text {
-  fill: #ffffff;
+  fill: var(--graph-panel-fill);
   font-weight: 700;
   pointer-events: none;
   user-select: none;
 }
 
 .node-label {
-  fill: var(--color-text, #f1f5f9);
+  fill: var(--color-text, var(--graph-panel-fill-blue));
   font-size: 11.5px;
   font-weight: 500;
   pointer-events: none;
@@ -1095,10 +1157,10 @@ onUnmounted(() => {
   gap: 6px;
   padding: 4px 10px;
   border-radius: 9999px;
-  background: rgba(15, 12, 29, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--graph-panel-surface-heavy);
+  border: 1px solid var(--graph-panel-stroke-whisper-white);
   font-size: 11.5px;
-  color: var(--color-text-secondary, #94a3b8);
+  color: var(--color-text-secondary, var(--graph-panel-text));
   pointer-events: none;
   user-select: none;
 }
@@ -1111,12 +1173,12 @@ onUnmounted(() => {
 .graph-detail-drawer {
   width: 340px;
   height: 100%;
-  background: var(--color-surface-hover, #231f38);
-  border-left: 1px solid var(--color-border, rgba(255, 255, 255, 0.08));
+  background: var(--color-surface-hover, var(--graph-panel-surface-indigo-deep-alt2));
+  border-left: 1px solid var(--color-border, var(--graph-panel-stroke-whisper));
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  z-index: 5;
+  z-index: var(--z-local);
 }
 
 .detail-card {
@@ -1143,22 +1205,22 @@ onUnmounted(() => {
 }
 
 .category-badge.link-badge {
-  background: rgba(251, 191, 36, 0.15);
-  color: #fbbf24;
+  background: var(--graph-panel-surface-soft-yellow);
+  color: var(--graph-panel-stroke-yellow);
 }
 
 .entity-title {
   margin: 0;
   font-size: 18px;
   font-weight: 700;
-  color: #fff;
+  color: var(--graph-panel-text-white);
   line-height: 1.3;
 }
 
 .close-btn {
   background: transparent;
   border: none;
-  color: #94a3b8;
+  color: var(--graph-panel-text);
   font-size: 14px;
   cursor: pointer;
   padding: 4px;
@@ -1166,15 +1228,15 @@ onUnmounted(() => {
 }
 
 .close-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: var(--graph-panel-stroke-whisper-white);
+  color: var(--graph-panel-text-white);
 }
 
 .detail-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--graph-panel-surface-soft);
   padding: 10px;
   border-radius: var(--radius-md, 8px);
 }
@@ -1188,12 +1250,12 @@ onUnmounted(() => {
 .stat-num {
   font-size: 16px;
   font-weight: 700;
-  color: #fff;
+  color: var(--graph-panel-text-white);
 }
 
 .stat-label {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--graph-panel-text);
   margin-top: 2px;
 }
 
@@ -1206,7 +1268,7 @@ onUnmounted(() => {
 .section-title {
   font-size: 12px;
   font-weight: 600;
-  color: #94a3b8;
+  color: var(--graph-panel-text);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -1220,9 +1282,9 @@ onUnmounted(() => {
 .entity-tag {
   padding: 3px 8px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--graph-panel-surface-faint-white);
   font-size: 12px;
-  color: #cbd5e1;
+  color: var(--graph-panel-text-blue);
 }
 
 .neighbors-list {
@@ -1237,15 +1299,15 @@ onUnmounted(() => {
   gap: 10px;
   padding: 6px 10px;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--graph-panel-surface-faint-white-bright);
+  border: 1px solid var(--graph-panel-stroke-faint);
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .neighbor-row:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: var(--color-primary, #8b5cf6);
+  background: var(--graph-panel-stroke-whisper);
+  border-color: var(--color-brand-primary);
 }
 
 .neighbor-avatar {
@@ -1257,7 +1319,7 @@ onUnmounted(() => {
   justify-content: center;
   font-size: 12px;
   font-weight: 700;
-  color: #fff;
+  color: var(--graph-panel-text-white);
 }
 
 .neighbor-info {
@@ -1268,22 +1330,22 @@ onUnmounted(() => {
 
 .neighbor-name {
   font-size: 13px;
-  color: #fff;
+  color: var(--graph-panel-text-white);
   font-weight: 500;
 }
 
 .neighbor-cat {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--graph-panel-text);
 }
 
 .neighbor-weight {
   font-size: 11px;
-  color: #cbd5e1;
+  color: var(--graph-panel-text-blue);
 }
 
 .neighbor-weight strong {
-  color: #fbbf24;
+  color: var(--graph-panel-stroke-yellow);
 }
 
 .pages-chips {
@@ -1297,28 +1359,28 @@ onUnmounted(() => {
 .page-chip {
   padding: 2px 6px;
   border-radius: 4px;
-  background: rgba(139, 92, 246, 0.15);
-  border: 1px solid rgba(139, 92, 246, 0.3);
-  color: #d8b4fe;
+  background: var(--graph-panel-surface-soft-violet-mid);
+  border: 1px solid var(--graph-panel-stroke-light);
+  color: var(--graph-panel-text-violet);
   font-size: 11px;
 }
 
 .page-chip.common {
-  background: rgba(251, 191, 36, 0.15);
-  border-color: rgba(251, 191, 36, 0.3);
-  color: #fde047;
+  background: var(--graph-panel-surface-soft-yellow);
+  border-color: var(--graph-panel-text-light);
+  color: var(--graph-panel-text-yellow);
 }
 
 .page-more {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--graph-panel-text);
   align-self: center;
 }
 
 /* 关系总结框 */
 .relation-summary-box {
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--graph-panel-surface-light);
+  border: 1px solid var(--graph-panel-stroke-whisper);
   border-radius: var(--radius-md, 8px);
   padding: 12px;
   display: flex;
@@ -1328,13 +1390,13 @@ onUnmounted(() => {
 
 .co-occur-stat {
   font-size: 13px;
-  color: #cbd5e1;
+  color: var(--graph-panel-text-blue);
   text-align: center;
 }
 
 .highlight-count {
   font-size: 16px;
-  color: #fbbf24;
+  color: var(--graph-panel-stroke-yellow);
 }
 
 .relation-partners {
@@ -1350,14 +1412,14 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   padding: 8px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--graph-panel-surface-faint);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .partner-card:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--graph-panel-stroke-whisper);
 }
 
 .partner-role {
@@ -1369,7 +1431,7 @@ onUnmounted(() => {
 .partner-name {
   font-size: 12px;
   font-weight: 600;
-  color: #fff;
+  color: var(--graph-panel-text-white);
   text-align: center;
 }
 
@@ -1384,7 +1446,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  color: #94a3b8;
+  color: var(--graph-panel-text);
   margin: auto 0;
 }
 
@@ -1396,7 +1458,7 @@ onUnmounted(() => {
 .hint-title {
   font-size: 14px;
   font-weight: 600;
-  color: #fff;
+  color: var(--graph-panel-text-white);
   margin-bottom: 12px;
 }
 
@@ -1406,11 +1468,11 @@ onUnmounted(() => {
   line-height: 1.8;
   padding-left: 18px;
   margin: 0;
-  color: #94a3b8;
+  color: var(--graph-panel-text);
 }
 
 .hint-list strong {
-  color: #e2e8f0;
+  color: var(--graph-panel-text-blue-bright);
 }
 
 /* 覆盖层状态 */
@@ -1422,7 +1484,7 @@ onUnmounted(() => {
   justify-content: center;
   gap: 12px;
   padding: 40px;
-  color: #94a3b8;
+  color: var(--graph-panel-text);
 }
 
 .graph-state-overlay.empty .empty-icon {
@@ -1432,19 +1494,19 @@ onUnmounted(() => {
 .graph-state-overlay.empty h3 {
   font-size: 18px;
   font-weight: 600;
-  color: #fff;
+  color: var(--graph-panel-text-white);
   margin: 0;
 }
 
 .graph-state-overlay.error .error-msg {
-  color: #ef4444;
+  color: var(--graph-panel-text-red);
 }
 
 .spinner {
   width: 32px;
   height: 32px;
-  border: 3px solid rgba(139, 92, 246, 0.2);
-  border-top-color: var(--color-primary, #8b5cf6);
+  border: 3px solid var(--graph-panel-surface-soft-violet);
+  border-top-color: var(--color-brand-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }

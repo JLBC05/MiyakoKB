@@ -3,6 +3,7 @@ import type { BookData, TagData } from '@/types'
 import ProductChipList from '@/components/product/ProductChipList.vue'
 import type { ProductChipItem } from '@/components/product/ProductChipList.vue'
 import ProductRecordCard from '@/components/product/ProductRecordCard.vue'
+import ProductHeaderAction from '@/components/product/ProductHeaderAction.vue'
 import { computed, ref, watch } from 'vue'
 import UiCheckbox from '@/components/ui/UiCheckbox.vue'
 import TaskStatusBadge from '@/components/task-center/TaskStatusBadge.vue'
@@ -115,14 +116,14 @@ function handleImageError() {
           :items="tagItems"
         />
         <div v-if="!selectable" class="book-card__actions" @click.stop>
-          <button
-            type="button"
+          <ProductHeaderAction
             class="build-knowledge-btn"
+            variant="solid"
+            tone="primary"
+            label="⚡ 构建知识库"
             title="开始构建该漫画的知识库"
             @click.stop="emit('buildKnowledge')"
-          >
-            ⚡ 构建知识库
-          </button>
+          />
         </div>
       </div>
     </ProductRecordCard>
@@ -309,21 +310,21 @@ function handleImageError() {
 }
 
 .knowledge-badge.completed {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.35);
+  background: color-mix(in srgb, var(--color-action-success-strong) 15%, transparent);
+  color: var(--color-action-success-strong);
+  border: 1px solid color-mix(in srgb, var(--color-action-success-strong) 35%, transparent);
 }
 
 .knowledge-badge.partial {
-  background: rgba(139, 92, 246, 0.15);
-  color: #a855f7;
-  border: 1px solid rgba(139, 92, 246, 0.35);
+  background: color-mix(in srgb, var(--color-surface-brand-strong) 15%, transparent);
+  color: var(--color-surface-brand-strong);
+  border: 1px solid color-mix(in srgb, var(--color-surface-brand-strong) 35%, transparent);
 }
 
 .knowledge-badge.none {
-  background: rgba(148, 163, 184, 0.12);
-  color: var(--color-text-secondary, #94a3b8);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: color-mix(in srgb, var(--color-text-supporting) 12%, transparent);
+  color: var(--color-text-supporting);
+  border: 1px solid color-mix(in srgb, var(--color-text-supporting) 20%, transparent);
 }
 
 .book-card__tags {
@@ -336,17 +337,13 @@ function handleImageError() {
 }
 
 .build-knowledge-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 0.78rem;
+  --product-header-action-padding: 4px 10px;
+  --product-header-action-radius: 6px;
+  --product-header-action-min-height: 26px;
+  --product-header-action-font-size: 0.78rem;
+  --product-header-action-gap: 4px;
+
   font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);
-  border: none;
-  cursor: pointer;
   transition: opacity 0.2s, transform 0.1s;
 }
 

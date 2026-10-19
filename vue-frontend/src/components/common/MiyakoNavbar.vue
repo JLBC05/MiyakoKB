@@ -64,23 +64,23 @@ function handleNavClick(item: NavItem) {
 
       <!-- 中间：核心四大导航项 -->
       <nav class="miyako-navbar__nav" aria-label="主导航">
-        <button
+        <UiButton
           v-for="item in navItems"
           :key="item.path"
-          type="button"
+          variant="tab"
           class="miyako-navbar__nav-btn"
           :class="{ 'miyako-navbar__nav-btn--active': isItemActive(item) }"
           @click="handleNavClick(item)"
         >
           <span class="miyako-navbar__nav-icon" aria-hidden="true">{{ item.icon }}</span>
           <span class="miyako-navbar__nav-label">{{ item.label }}</span>
-        </button>
+        </UiButton>
       </nav>
 
       <!-- 右侧：操作区（任务中心、主题切换） -->
       <div class="miyako-navbar__right">
-        <button
-          type="button"
+        <UiButton
+          variant="toolbar"
           class="miyako-navbar__task-btn"
           title="打开任务中心"
           :aria-label="`打开任务中心，${taskCenter.activeCount} 个当前任务`"
@@ -101,7 +101,7 @@ function handleNavClick(item: NavItem) {
           >
             {{ taskCenter.activeCount + taskCenter.queuedCount }}
           </span>
-        </button>
+        </UiButton>
 
         <ProductThemeToggle class="miyako-navbar__theme-toggle" />
       </div>
@@ -111,14 +111,18 @@ function handleNavClick(item: NavItem) {
 
 <style scoped>
 .miyako-navbar {
+  --miyako-navbar-shadow-bar: 0 1px 3px rgba(0, 0, 0, 0.04);
+  --miyako-navbar-shadow-active: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --miyako-navbar-tint-hover: rgba(153, 119, 204, 0.08);
+
   position: sticky;
   top: 0;
-  z-index: 100;
+  z-index: var(--z-app-header);
   width: 100%;
   height: 58px;
   background-color: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--miyako-navbar-shadow-bar);
   transition: background-color 0.2s, border-color 0.2s;
 }
 
@@ -156,7 +160,7 @@ function handleNavClick(item: NavItem) {
 }
 
 .miyako-navbar__brand-name {
-  color: var(--color-primary);
+  color: var(--color-brand-primary);
   font-family: inherit;
 }
 
@@ -208,14 +212,15 @@ function handleNavClick(item: NavItem) {
 
 .miyako-navbar__nav-btn:hover {
   color: var(--color-text-primary);
-  background-color: rgba(153, 119, 204, 0.08);
+  background-color: var(--miyako-navbar-tint-hover);
 }
 
-.miyako-navbar__nav-btn--active {
-  background-color: var(--color-surface) !important;
-  color: var(--color-primary) !important;
+.miyako-navbar__nav-btn--active,
+.miyako-navbar__nav-btn--active:hover {
+  background-color: var(--color-surface);
+  color: var(--color-brand-primary);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--miyako-navbar-shadow-active);
 }
 
 .miyako-navbar__nav-icon {
@@ -254,8 +259,8 @@ function handleNavClick(item: NavItem) {
 
 .miyako-navbar__task-btn:hover {
   background-color: var(--color-surface-hover);
-  border-color: var(--color-primary);
-  color: var(--color-primary);
+  border-color: var(--color-brand-primary);
+  color: var(--color-brand-primary);
 }
 
 .miyako-navbar__task-icon {
@@ -270,13 +275,13 @@ function handleNavClick(item: NavItem) {
 }
 
 .miyako-navbar__task-signal--active {
-  background-color: var(--color-success);
-  box-shadow: 0 0 6px var(--color-success);
+  background-color: var(--color-status-success);
+  box-shadow: 0 0 6px var(--color-status-success);
   animation: pulse-signal 1.5s infinite;
 }
 
 .miyako-navbar__task-signal--paused {
-  background-color: var(--color-warning);
+  background-color: var(--color-status-warning);
 }
 
 @keyframes pulse-signal {
@@ -293,8 +298,8 @@ function handleNavClick(item: NavItem) {
   height: 18px;
   padding: 0 5px;
   border-radius: 9px;
-  background-color: var(--color-primary);
-  color: #FFFFFF;
+  background-color: var(--color-brand-primary);
+  color: var(--color-text-inverse);
   font-size: 0.72rem;
   font-weight: 700;
 }

@@ -52,12 +52,12 @@ describe('reader state ownership', () => {
     await flushPromises(); wrapper.unmount()
     expect(loadReaderRecord(key)).toMatchObject({ pageId: 'p3', index: 2, fraction: 0 })
   })
-  it('preserves the page when switching layout and original/translated views', async () => {
+  it('preserves the page when switching layout', async () => {
     const wrapper = create(); await flushPromises()
     wrapper.getComponent(ReaderControls).vm.$emit('jump', 2)
     await flushPromises()
     wrapper.getComponent(ReaderControls).vm.$emit('settingsChange', { ...DEFAULT_READER_SETTINGS, layout: 'double' })
-    await wrapper.get('[data-mode="original"]').trigger('click')
+    await flushPromises()
     expect(wrapper.getComponent(ReaderCanvas).props('position').pageId).toBe('p2')
     expect(wrapper.get('.reader-header__page-info').text()).toBe('1–2 / 3')
   })

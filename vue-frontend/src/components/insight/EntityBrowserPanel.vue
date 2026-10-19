@@ -124,18 +124,19 @@ onMounted(() => {
     <!-- Header / Filter Bar -->
     <div class="entity-browser-panel__header">
       <div class="entity-browser-panel__filters">
-        <button
+        <UiButton
           v-for="cat in categories"
           :key="cat.key"
-          type="button"
           class="entity-filter-chip"
           :class="{ 'is-active': selectedCategory === cat.key }"
+          variant="ghost"
+          size="xs"
           @click="selectedCategory = cat.key"
         >
           <span class="entity-filter-chip__icon">{{ cat.icon }}</span>
           <span class="entity-filter-chip__label">{{ cat.label }}</span>
           <span class="entity-filter-chip__count">{{ categoryCountMap[cat.key] ?? 0 }}</span>
-        </button>
+        </UiButton>
       </div>
 
       <div class="entity-browser-panel__actions">
@@ -254,6 +255,30 @@ onMounted(() => {
 
 <style scoped>
 .entity-browser-panel {
+  --entity-browser-stroke-whisper: rgba(255, 255, 255, 0.08);
+  --entity-browser-surface-faint: rgba(255, 255, 255, 0.04);
+  --entity-browser-text: #94a3b8;
+  --entity-browser-text-blue: #f8fafc;
+  --entity-browser-surface: #3b82f6;
+  --entity-browser-text-white: #ffffff;
+  --entity-browser-surface-soft: rgba(0, 0, 0, 0.2);
+  --entity-browser-surface-whisper: rgba(239, 68, 68, 0.1);
+  --entity-browser-stroke-light: rgba(239, 68, 68, 0.3);
+  --entity-browser-text-red: #ef4444;
+  --entity-browser-stroke-whisper-white: rgba(255, 255, 255, 0.1);
+  --entity-browser-surface-medium: rgba(30, 41, 59, 0.5);
+  --entity-browser-surface-heavy: rgba(30, 41, 59, 0.8);
+  --entity-browser-text-medium: rgba(59, 130, 246, 0.5);
+  --entity-browser-surface-soft-blue: rgba(59, 130, 246, 0.15);
+  --entity-browser-stroke-light-blue: rgba(59, 130, 246, 0.3);
+  --entity-browser-text-blue-mid: #60a5fa;
+  --entity-browser-text-blue-mid-alt2: #64748b;
+  --entity-browser-surface-faint-white: rgba(255, 255, 255, 0.06);
+  --entity-browser-text-blue-bright: #cbd5e1;
+  --entity-browser-surface-whisper-blue: rgba(59, 130, 246, 0.1);
+  --entity-browser-stroke-soft: rgba(59, 130, 246, 0.2);
+  --entity-browser-text-blue-bright-alt2: #93c5fd;
+
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -270,7 +295,7 @@ onMounted(() => {
   gap: 1rem;
   margin-bottom: 1.5rem;
   padding-bottom: 1rem;
-  border-bottom: 1px solid var(--insight-view-sidebar-divider, rgba(255, 255, 255, 0.08));
+  border-bottom: 1px solid var(--insight-view-sidebar-divider, var(--entity-browser-stroke-whisper));
 }
 
 .entity-browser-panel__filters {
@@ -284,39 +309,39 @@ onMounted(() => {
   align-items: center;
   gap: 0.375rem;
   padding: 0.375rem 0.75rem;
-  background: var(--insight-surface-secondary, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--insight-view-sidebar-divider, rgba(255, 255, 255, 0.08));
+  background: var(--insight-surface-secondary, var(--entity-browser-surface-faint));
+  border: 1px solid var(--insight-view-sidebar-divider, var(--entity-browser-stroke-whisper));
   border-radius: 9999px;
-  color: var(--insight-text-secondary, #94a3b8);
+  color: var(--insight-text-secondary, var(--entity-browser-text));
   font-size: 0.875rem;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .entity-filter-chip:hover {
-  background: var(--insight-surface-tertiary, rgba(255, 255, 255, 0.08));
-  color: var(--insight-text-primary, #f8fafc);
+  background: var(--insight-surface-tertiary, var(--entity-browser-stroke-whisper));
+  color: var(--insight-text-primary, var(--entity-browser-text-blue));
 }
 
 .entity-filter-chip.is-active {
-  background: var(--color-action-primary-fill, #3b82f6);
-  border-color: var(--color-action-primary-fill, #3b82f6);
-  color: #ffffff;
+  background: var(--color-action-primary-fill, var(--entity-browser-surface));
+  border-color: var(--color-action-primary-fill, var(--entity-browser-surface));
+  color: var(--entity-browser-text-white);
 }
 
 .entity-filter-chip__count {
   font-size: 0.75rem;
   padding: 0.1rem 0.4rem;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--entity-browser-surface-soft);
   border-radius: 9999px;
 }
 
 .entity-browser-panel__error {
   padding: 0.75rem 1rem;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: var(--entity-browser-surface-whisper);
+  border: 1px solid var(--entity-browser-stroke-light);
   border-radius: 0.5rem;
-  color: #ef4444;
+  color: var(--entity-browser-text-red);
   margin-bottom: 1rem;
 }
 
@@ -327,15 +352,15 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   padding: 4rem 1rem;
-  color: var(--insight-text-secondary, #94a3b8);
+  color: var(--insight-text-secondary, var(--entity-browser-text));
   text-align: center;
 }
 
 .entity-browser-panel__spinner {
   width: 2rem;
   height: 2rem;
-  border: 3px solid rgba(255, 255, 255, 0.1);
-  border-top-color: var(--color-action-primary-fill, #3b82f6);
+  border: 3px solid var(--entity-browser-stroke-whisper-white);
+  border-top-color: var(--color-action-primary-fill, var(--entity-browser-surface));
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin-bottom: 1rem;
@@ -353,13 +378,13 @@ onMounted(() => {
 .entity-browser-panel__empty-text {
   font-size: 1.125rem;
   font-weight: 500;
-  color: var(--insight-text-primary, #f8fafc);
+  color: var(--insight-text-primary, var(--entity-browser-text-blue));
   margin-bottom: 0.5rem;
 }
 
 .entity-browser-panel__empty-subtext {
   font-size: 0.875rem;
-  color: var(--insight-text-secondary, #94a3b8);
+  color: var(--insight-text-secondary, var(--entity-browser-text));
 }
 
 .entity-group-section {
@@ -381,16 +406,16 @@ onMounted(() => {
   margin: 0;
   font-size: 1.125rem;
   font-weight: 600;
-  color: var(--insight-text-primary, #f8fafc);
+  color: var(--insight-text-primary, var(--entity-browser-text-blue));
 }
 
 .entity-group-section__badge {
   font-size: 0.75rem;
   font-weight: 600;
   padding: 0.125rem 0.5rem;
-  background: var(--insight-surface-tertiary, rgba(255, 255, 255, 0.1));
+  background: var(--insight-surface-tertiary, var(--entity-browser-stroke-whisper-white));
   border-radius: 9999px;
-  color: var(--insight-text-secondary, #94a3b8);
+  color: var(--insight-text-secondary, var(--entity-browser-text));
 }
 
 .entity-card-grid {
@@ -400,8 +425,8 @@ onMounted(() => {
 }
 
 .entity-card {
-  background: var(--insight-surface-secondary, rgba(30, 41, 59, 0.5));
-  border: 1px solid var(--insight-view-sidebar-divider, rgba(255, 255, 255, 0.08));
+  background: var(--insight-surface-secondary, var(--entity-browser-surface-medium));
+  border: 1px solid var(--insight-view-sidebar-divider, var(--entity-browser-stroke-whisper));
   border-radius: 0.75rem;
   padding: 1rem;
   cursor: pointer;
@@ -411,14 +436,14 @@ onMounted(() => {
 }
 
 .entity-card:hover {
-  background: var(--insight-surface-tertiary, rgba(30, 41, 59, 0.8));
-  border-color: var(--color-action-primary-fill, rgba(59, 130, 246, 0.5));
+  background: var(--insight-surface-tertiary, var(--entity-browser-surface-heavy));
+  border-color: var(--color-action-primary-fill, var(--entity-browser-text-medium));
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 4px 12px var(--entity-browser-surface-soft);
 }
 
 .entity-card.is-expanded {
-  border-color: var(--color-action-primary-fill, #3b82f6);
+  border-color: var(--color-action-primary-fill, var(--entity-browser-surface));
 }
 
 .entity-card__title-row {
@@ -431,7 +456,7 @@ onMounted(() => {
 .entity-card__name {
   font-size: 1rem;
   font-weight: 600;
-  color: var(--insight-text-primary, #f8fafc);
+  color: var(--insight-text-primary, var(--entity-browser-text-blue));
   word-break: break-all;
 }
 
@@ -439,16 +464,16 @@ onMounted(() => {
   font-size: 0.75rem;
   font-weight: 600;
   padding: 0.125rem 0.375rem;
-  background: rgba(59, 130, 246, 0.15);
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  color: #60a5fa;
+  background: var(--entity-browser-surface-soft-blue);
+  border: 1px solid var(--entity-browser-stroke-light-blue);
+  color: var(--entity-browser-text-blue-mid);
   border-radius: 0.375rem;
   white-space: nowrap;
 }
 
 .entity-card__id {
   font-size: 0.75rem;
-  color: var(--insight-text-tertiary, #64748b);
+  color: var(--insight-text-tertiary, var(--entity-browser-text-blue-mid-alt2));
   margin-top: 0.25rem;
   font-family: monospace;
 }
@@ -462,7 +487,7 @@ onMounted(() => {
 
 .entity-card__aliases-label {
   font-size: 0.75rem;
-  color: var(--insight-text-secondary, #94a3b8);
+  color: var(--insight-text-secondary, var(--entity-browser-text));
 }
 
 .entity-card__alias-tags {
@@ -473,17 +498,17 @@ onMounted(() => {
 
 .entity-alias-tag {
   font-size: 0.75rem;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--entity-browser-surface-faint-white);
+  border: 1px solid var(--entity-browser-stroke-whisper);
   padding: 0.1rem 0.375rem;
   border-radius: 0.25rem;
-  color: var(--insight-text-secondary, #cbd5e1);
+  color: var(--insight-text-secondary, var(--entity-browser-text-blue-bright));
 }
 
 .entity-card__no-aliases {
   margin-top: 0.75rem;
   font-size: 0.75rem;
-  color: var(--insight-text-tertiary, #64748b);
+  color: var(--insight-text-tertiary, var(--entity-browser-text-blue-mid-alt2));
   font-style: italic;
 }
 
@@ -493,23 +518,23 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-top: 1px dashed var(--insight-view-sidebar-divider, rgba(255, 255, 255, 0.06));
+  border-top: 1px dashed var(--insight-view-sidebar-divider, var(--entity-browser-surface-faint-white));
 }
 
 .entity-card__pages-summary {
   font-size: 0.75rem;
-  color: var(--insight-text-secondary, #94a3b8);
+  color: var(--insight-text-secondary, var(--entity-browser-text));
 }
 
 .entity-card__expand-arrow {
   font-size: 0.75rem;
-  color: #3b82f6;
+  color: var(--entity-browser-surface);
 }
 
 .entity-card__details {
   margin-top: 0.75rem;
   padding-top: 0.75rem;
-  border-top: 1px solid var(--insight-view-sidebar-divider, rgba(255, 255, 255, 0.08));
+  border-top: 1px solid var(--insight-view-sidebar-divider, var(--entity-browser-stroke-whisper));
 }
 
 .entity-card__detail-row {
@@ -521,7 +546,7 @@ onMounted(() => {
 .entity-card__detail-label {
   font-size: 0.75rem;
   font-weight: 500;
-  color: var(--insight-text-secondary, #94a3b8);
+  color: var(--insight-text-secondary, var(--entity-browser-text));
 }
 
 .entity-card__page-chips {
@@ -534,9 +559,9 @@ onMounted(() => {
 
 .entity-page-chip {
   font-size: 0.7rem;
-  background: rgba(59, 130, 246, 0.1);
-  border: 1px solid rgba(59, 130, 246, 0.2);
-  color: #93c5fd;
+  background: var(--entity-browser-surface-whisper-blue);
+  border: 1px solid var(--entity-browser-stroke-soft);
+  color: var(--entity-browser-text-blue-bright-alt2);
   padding: 0.1rem 0.35rem;
   border-radius: 0.25rem;
 }

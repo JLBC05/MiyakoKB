@@ -1,5 +1,4 @@
 :root {
-  --insight-surface-page: var(--color-surface-panel);
   --insight-surface-secondary: color-mix(in srgb, var(--color-surface-muted) 52%, transparent);
   --insight-surface-tertiary: var(--color-surface-quiet);
 
@@ -8,9 +7,6 @@
   --insight-text-muted: var(--color-text-muted);
 
   --insight-action-primary: var(--color-text-brand);
-  --insight-action-primary-strong: var(--color-surface-brand-strong);
 
-  --insight-status-success: var(--color-status-success);
-  --insight-status-warning: var(--color-status-warning);
   --insight-status-error: var(--color-status-error);
 }

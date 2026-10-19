@@ -4,12 +4,15 @@ import router from '@/router'
 import { APP_ROUTE_PATHS } from '@/constants/routes'
 import { useRuntimeStore } from '@/stores/runtimeStore'
 
+// 说明：translate / insight / character-studio 路由随翻译与角色工坊域在
+// 7e6e8d2 chore(cleanup) 中删除，这里改为校验当前仍在的路由表。
 const routeCases = [
   { label: 'bookshelf', name: 'bookshelf', path: APP_ROUTE_PATHS.bookshelf },
-  { label: 'translate', name: 'translate', path: APP_ROUTE_PATHS.translate },
   { label: 'reader', name: 'reader', path: APP_ROUTE_PATHS.reader },
-  { label: 'insight', name: 'insight', path: APP_ROUTE_PATHS.insight },
-  { label: 'character studio', name: 'character-studio', path: APP_ROUTE_PATHS.characterStudio },
+  { label: 'book detail', name: 'book-detail', path: APP_ROUTE_PATHS.bookDetail },
+  { label: 'graph', name: 'graph', path: APP_ROUTE_PATHS.graph },
+  { label: 'qa', name: 'qa', path: APP_ROUTE_PATHS.qa },
+  { label: 'settings', name: 'settings', path: APP_ROUTE_PATHS.settings },
 ] as const
 
 describe('router config', () => {

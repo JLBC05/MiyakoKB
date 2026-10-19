@@ -228,7 +228,9 @@ watch(
 
 <style scoped>
 .qa-page {
-  min-height: 100vh;
+  --qa-shadow-bar: 0 1px 3px rgba(0, 0, 0, 0.03);
+  --qa-shadow-card: 0 2px 8px rgba(0, 0, 0, 0.04);
+
   background-color: var(--color-bg-base);
   color: var(--color-text-primary);
   display: flex;
@@ -255,7 +257,7 @@ watch(
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 12px 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--qa-shadow-bar);
 }
 
 .qa-header-bar__left {
@@ -295,7 +297,7 @@ watch(
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--qa-shadow-card);
 }
 
 .qa-empty-icon {
@@ -323,7 +325,7 @@ watch(
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--qa-shadow-bar);
   display: flex;
   flex-direction: column;
   min-height: 700px;

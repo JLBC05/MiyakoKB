@@ -224,6 +224,12 @@ useInsightSettingsDraft<StoreLlmConfig>({
 
 <style scoped>
 .llm-settings-tab {
+  --llm-settings-surface: #f5f5f5;
+  --llm-settings-stroke: #e0e0e0;
+  --llm-settings-text: #666;
+  --llm-settings-surface-teal: #ecfdf5;
+  --llm-settings-stroke-teal: #a7f3d0;
+  --llm-settings-text-teal: #065f46;
   --ui-number-field-width: 100%;
   --ui-number-field-input-width: 100%;
   --ui-number-field-text-align: left;
@@ -241,25 +247,25 @@ useInsightSettingsDraft<StoreLlmConfig>({
 
 .llm-vlm-sync-card {
   padding: 12px 16px;
-  background: var(--color-surface-secondary, #f5f5f5);
+  background: var(--color-surface-secondary, var(--llm-settings-surface));
   border-radius: 8px;
-  border: 1px solid var(--color-border, #e0e0e0);
+  border: 1px solid var(--color-border, var(--llm-settings-stroke));
   margin-bottom: 8px;
 }
 
 .llm-vlm-sync-card__tip {
   margin: 6px 0 0 0;
   font-size: 0.82em;
-  color: var(--color-text-secondary, #666);
+  color: var(--color-text-secondary, var(--llm-settings-text));
   line-height: 1.5;
 }
 
 .llm-vlm-synced-notice {
   padding: 12px 16px;
-  background: var(--color-success-subtle, #ecfdf5);
-  border: 1px solid var(--color-success-border, #a7f3d0);
+  background: var(--color-success-subtle, var(--llm-settings-surface-teal));
+  border: 1px solid var(--color-success-border, var(--llm-settings-stroke-teal));
   border-radius: 8px;
-  color: var(--color-success-text, #065f46);
+  color: var(--color-success-text, var(--llm-settings-text-teal));
   font-size: 0.88em;
   line-height: 1.5;
 }

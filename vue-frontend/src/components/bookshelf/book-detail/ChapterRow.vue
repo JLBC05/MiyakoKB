@@ -113,6 +113,8 @@ const canSelect = computed(() => imageCount.value > 0)
 
 <style scoped>
 .chapter-row {
+  --chapter-row-surface-soft: rgba(16, 185, 129, 0.15);
+  --chapter-row-text: #10b981;
   --product-record-card-background: var(--color-surface-interactive-hover);
   --product-record-card-border: transparent;
   --product-record-card-accent: var(--color-border-brand-gradient);
@@ -171,8 +173,8 @@ const canSelect = computed(() => imageCount.value > 0)
   align-items: center;
   padding: 2px 8px;
   border-radius: 9999px;
-  background-color: var(--color-success-alpha-15, rgba(16, 185, 129, 0.15));
-  color: var(--color-success, #10b981);
+  background-color: var(--color-success-alpha-15, var(--chapter-row-surface-soft));
+  color: var(--color-success, var(--chapter-row-text));
   font-size: 0.72rem;
   font-weight: 600;
   white-space: nowrap;

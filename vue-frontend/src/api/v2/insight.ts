@@ -213,14 +213,10 @@ export function insightQaUrl(bookId: string): string {
   return `${ROOT}/books/${encodeURIComponent(bookId)}/qa`
 }
 
-export interface V2InsightEntity {
-  entity_id: string
-  canonical_name: string
-  category: string
-  aliases: string[]
-  pages: number[]
-  frequency: number
-}
+export type V2InsightEntity = components['schemas']['InsightEntity']
+export type V2InsightGraphNode = components['schemas']['InsightGraphNode']
+export type V2InsightGraphEdge = components['schemas']['InsightGraphEdge']
+export type V2InsightGraphData = components['schemas']['InsightGraphData']
 
 export function listInsightEntities(
   bookId: string,
@@ -232,28 +228,6 @@ export function listInsightEntities(
       ...(category ? { category } : {}),
     },
   })
-}
-
-export interface V2InsightGraphNode {
-  id: string
-  name: string
-  category: string
-  aliases: string[]
-  frequency: number
-  pages: number[]
-}
-
-export interface V2InsightGraphEdge {
-  id: string
-  source: string
-  target: string
-  weight: number
-  common_pages: number[]
-}
-
-export interface V2InsightGraphData {
-  nodes: V2InsightGraphNode[]
-  edges: V2InsightGraphEdge[]
 }
 
 export function getInsightGraph(

@@ -1,7 +1,5 @@
 :root {
-  --color-primary: #9977CC;
-  --color-primary-hover: #8560BD;
-  --color-accent: #F2B84B;
+  --color-brand-primary: #9977CC;
   --color-bg-base: #FAF8FC;
   --color-surface: #FFFFFF;
   --color-surface-secondary: #F3EEFA;
@@ -11,7 +9,7 @@
 }
 
 [data-theme="dark"] {
-  --color-primary: #A98EDA;
+  --color-brand-primary: #A98EDA;
   --color-bg-base: #130E1C;
   --color-surface: #1E162B;
   --color-text-primary: #F3EEFA;

@@ -14,6 +14,7 @@ import {
   updateV2WorkflowPreferences,
 } from '@/api/v2/settings'
 import { deepClone } from '@/utils/deepClone'
+import { STORAGE_KEY_THEME } from '@/constants'
 import { sameSettingValue } from '@/utils/providerSettings'
 import {
   parseCurrentExportPreferences,
@@ -28,7 +29,7 @@ export const useSettingsStore = defineStore('settings', () => {
     setTheme,
     toggleTheme,
     loadThemeFromStorage,
-  } = useThemePreference()
+  } = useThemePreference(STORAGE_KEY_THEME)
 
   const credentialSummaries = ref<V2CredentialSummary[]>([])
   const fontCatalog = ref<V2Font[]>([])
@@ -85,12 +86,6 @@ export const useSettingsStore = defineStore('settings', () => {
 
     credentialSummaries.value = Array.isArray(document.credentials)
       ? document.credentials.map(deepClone)
-      : []
-    fontCatalog.value = Array.isArray(document.fonts)
-      ? document.fonts.map(deepClone)
-      : []
-    promptCatalog.value = Array.isArray(document.prompts)
-      ? document.prompts.map(deepClone)
       : []
   }
 

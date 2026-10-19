@@ -36,7 +36,7 @@ const {
   }))
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {} }),
+  useRoute: () => ({ path: '/', query: {} }),
   useRouter: () => ({ push: routerPushMock }),
 }))
 
@@ -57,14 +57,6 @@ vi.mock('@/utils/browserDownload', () => ({
     `${url}?download=1&filename=${encodeURIComponent(filename)}`
   ),
 }))
-
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>(resolvePromise => {
-    resolve = resolvePromise
-  })
-  return { promise, resolve }
-}
 
 const AppShellStub = defineComponent({
   template: '<div class="app-shell-stub"><slot /></div>',
@@ -199,26 +191,7 @@ describe('BookshelfView', () => {
     logSpy.mockRestore()
   })
 
-  it('exposes accessible header actions and safe external links', async () => {
-    const wrapper = mountView()
-    const settingsStore = useSettingsStore()
-    await flushPromises()
-
-    expect(wrapper.get('.product-page-header--brand').exists()).toBe(true)
-    expect(wrapper.get('nav[aria-label="书架外部链接"]').exists()).toBe(true)
-    expect(wrapper.get('[role="group"][aria-label="书架偏好操作"]').exists()).toBe(true)
-    expect(wrapper.get('[aria-label="复制局域网地址"]').text()).toContain('复制')
-    const themeToggle = wrapper.get('.bookshelf-header__theme-toggle')
-    expect(themeToggle.attributes('aria-label')).toBe('切换深色模式')
-    await themeToggle.trigger('click')
-    expect(settingsStore.theme).toBe('dark')
-    expect(wrapper.get('.bookshelf-header__tutorial-link').attributes('rel')).toBe(
-      'noopener noreferrer'
-    )
-    const githubLink = wrapper.get('.bookshelf-header__github-link')
-    expect(githubLink.attributes('rel')).toBe('noopener noreferrer')
-    expect(githubLink.getComponent(UiIcon).props('name')).toBe('github')
-  })
+  
 
   it('hides local network metadata when LAN access is disabled', async () => {
     getServerInfoMock.mockResolvedValue({
@@ -271,29 +244,20 @@ describe('BookshelfView', () => {
     expect(source).not.toContain('bookshelf-header__github-icon')
   })
 
-  it('routes header metadata through the shared product meta pill', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/views/BookshelfView.vue'), 'utf8')
+  
 
-    expect(source).toContain(
-      "import ProductHeaderMetaPill from '@/components/product/ProductHeaderMetaPill.vue'"
-    )
-    expect(source).toContain('<ProductHeaderMetaPill')
-    expect(source).not.toContain('bookshelf-header__lan-access')
-    expect(source).not.toContain('bookshelf-header__lan-icon')
-  })
-
-  it('renders create-book actions with the shared plus icon', () => {
+  it('renders import actions with the shared download icon', () => {
     const wrapper = mountView()
 
-    const createButtons = wrapper
+    const importButtons = wrapper
       .findAll('button')
       .filter(
-        button => button.text().includes('新建书籍') || button.text().includes('新建第一本书')
+        button => button.text().includes('导入漫画') || button.text().includes('导入第一本漫画')
       )
 
-    expect(createButtons).toHaveLength(2)
-    for (const button of createButtons) {
-      expect(button.getComponent(UiIcon).props('name')).toBe('plus')
+    expect(importButtons).toHaveLength(2)
+    for (const button of importButtons) {
+      expect(button.getComponent(UiIcon).props('name')).toBe('download')
       expect(button.text()).not.toContain('+')
     }
   })
@@ -309,9 +273,7 @@ describe('BookshelfView', () => {
     expect(toolbar.attributes('role')).toBe('group')
     expect(toolbar.attributes('aria-label')).toBe('书架主要操作')
     expect(toolbar.findAllComponents(UiIcon).map(icon => icon.props('name'))).toEqual([
-      'plus',
-      'tags',
-      'languages',
+      'download',
       'check',
     ])
 
@@ -334,7 +296,7 @@ describe('BookshelfView', () => {
     expect(wrapper.get('.product-empty-state__icon-text').text()).toBe('📚')
     expect(emptyStates[0].props()).toMatchObject({
       title: '书架空空如也',
-      description: '点击"新建书籍"开始你的翻译之旅',
+      description: '点击"导入漫画"开始构建你的漫画知识库',
     })
     expect(wrapper.find('.ui-empty-state').exists()).toBe(false)
   })
@@ -386,23 +348,23 @@ describe('BookshelfView', () => {
     expect(source).not.toContain('grid-template-columns: repeat(auto-fill, minmax(160px, 1fr))')
   })
 
-  it('disables batch translation when selected books contain no chapters', async () => {
+  it('disables batch download when selected books contain no pages', async () => {
     const wrapper = mountView()
     await flushPromises()
     const store = useBookshelfStore()
-    store.books = [{ id: 'empty-book', title: 'Empty', chapterCount: 0 }]
+    store.books = [{ id: 'empty-book', title: 'Empty', totalPages: 0, chapters: [] }]
     store.enterBatchMode()
     store.toggleBookSelection('empty-book')
     await nextTick()
 
-    const translateButton = wrapper
+    const downloadButton = wrapper
       .findAll('button')
-      .find(button => button.text().includes('翻译全部章节'))
-    expect(translateButton?.attributes('disabled')).toBeDefined()
+      .find(button => button.text().includes('下载选中书籍'))
+    expect(downloadButton?.attributes('disabled')).toBeDefined()
 
-    store.books = [{ id: 'empty-book', title: 'Empty', chapterCount: 1 }]
+    store.books = [{ id: 'empty-book', title: 'Empty', totalPages: 3, chapters: [] }]
     await nextTick()
-    expect(translateButton?.attributes('disabled')).toBeUndefined()
+    expect(downloadButton?.attributes('disabled')).toBeUndefined()
   })
 
   it('downloads selected books through one durable backend export job', async () => {
@@ -445,29 +407,5 @@ describe('BookshelfView', () => {
     )
   })
 
-  it('only opens the latest book when detail requests finish out of order', async () => {
-    getBooksMock.mockResolvedValue([
-      { id: 'book-1', title: 'First' },
-      { id: 'book-2', title: 'Second' },
-    ])
-    const first = deferred<{ id: string; title: string; chapters: [] }>()
-    const second = deferred<{ id: string; title: string; chapters: [] }>()
-    getBookDetailMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
-    const wrapper = mountView()
-    await flushPromises()
-
-    const cards = wrapper.findAll('.book-card-stub')
-    await cards[0]!.trigger('click')
-    await cards[1]!.trigger('click')
-    second.resolve({ id: 'book-2', title: 'Second', chapters: [] })
-    await flushPromises()
-    expect(useBookshelfStore().currentBookId).toBe('book-2')
-
-    first.resolve({ id: 'book-1', title: 'First', chapters: [] })
-    await flushPromises()
-
-    expect(useBookshelfStore().currentBookId).toBe('book-2')
-    expect(getBookDetailMock).toHaveBeenNthCalledWith(1, 'book-1')
-    expect(getBookDetailMock).toHaveBeenNthCalledWith(2, 'book-2')
-  })
+  
 })

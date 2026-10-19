@@ -6,6 +6,7 @@ import * as insightApi from '@/api/insight'
 import { listInsightEntities, type V2InsightEntity } from '@/api/v2/insight'
 import type { TimelineData, TimelineEvent, PlotThread, TimelineArc } from '@/types/insightTimelineTypes'
 import UiButton from '@/components/ui/UiButton.vue'
+import BaseModal from '@/components/common/BaseModal.vue'
 import UiSpinner from '@/components/ui/UiSpinner.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import { triggerBlobDownload } from '@/utils/browserDownload'
@@ -504,27 +505,59 @@ onMounted(() => {
     </div>
 
     <!-- 缩略图大图弹窗 -->
-    <div
-      v-if="previewImageUrl"
-      class="thumbnail-modal-backdrop"
-      @click="closeThumbnailPreview"
+    <BaseModal
+      :model-value="Boolean(previewImageUrl)"
+      title="图片预览"
+      size="full"
+      backdrop="strong"
+      backdrop-effect="blur-sm"
+      body-padding="none"
+      @update:model-value="closeThumbnailPreview"
     >
-      <div class="thumbnail-modal-card" @click.stop>
-        <button
-          class="thumbnail-modal-close"
-          @click="closeThumbnailPreview"
-          aria-label="关闭预览"
-        >
-          ✕
-        </button>
-        <img :src="previewImageUrl" alt="全屏预览" class="thumbnail-modal-img" />
+      <div class="thumbnail-modal-card">
+        <img :src="previewImageUrl ?? undefined" alt="全屏预览" class="thumbnail-modal-img">
       </div>
-    </div>
+    </BaseModal>
   </div>
 </template>
 
 <style scoped>
 .story-synopsis-panel {
+  --synopsis-accent-faint: rgba(0, 0, 0, 0.03);
+  --synopsis-accent-faint-black: rgba(0, 0, 0, 0.05);
+  --synopsis-shadow-medium: rgba(0, 0, 0, 0.5);
+  --synopsis-accent-whisper: rgba(139, 92, 246, 0.12);
+  --synopsis-accent-whisper-violet: rgba(139, 92, 246, 0.1);
+  --synopsis-accent-soft: rgba(139, 92, 246, 0.2);
+  --synopsis-accent: #8b5cf6;
+  --synopsis-accent-red: #ec4899;
+  --synopsis-accent-amber: #f59e0b;
+  --synopsis-accent-soft-amber: rgba(245, 158, 11, 0.15);
+  --synopsis-accent-whisper-amber: rgba(245, 158, 11, 0.12);
+  --synopsis-accent-teal: #10b981;
+  --synopsis-accent-soft-teal: rgba(16, 185, 129, 0.15);
+  --synopsis-accent-red-mid: #ef4444;
+  --synopsis-accent-whisper-red: rgba(239, 68, 68, 0.1);
+  --synopsis-accent-soft-blue: rgba(148, 163, 184, 0.15);
+  --synopsis-accent-black: #000;
+  --synopsis-shadow: 0 1px 3px var(--synopsis-accent-faint);
+  --synopsis-shadow-gray: 0 1px 3px var(--synopsis-accent-faint-black);
+  --synopsis-accent-gray: 0 10px 30px var(--synopsis-shadow-medium);
+  --synopsis-surface: var(--synopsis-accent-whisper);
+  --synopsis-surface-gray: var(--synopsis-accent-whisper-violet);
+  --synopsis-shadow-gray-mid: var(--synopsis-accent-soft);
+  --synopsis-surface-gray-mid: linear-gradient(135deg, var(--synopsis-accent), var(--synopsis-accent-red));
+  --synopsis-text: var(--synopsis-accent-amber);
+  --synopsis-surface-gray-mid-alt2: var(--synopsis-accent-soft-amber);
+  --synopsis-surface-gray-mid-alt3: var(--synopsis-accent-whisper-amber);
+  --synopsis-text-gray: var(--synopsis-accent-teal);
+  --synopsis-surface-gray-mid-alt4: var(--synopsis-accent-soft-teal);
+  --synopsis-text-gray-mid: var(--synopsis-accent-red-mid);
+  --synopsis-surface-gray-mid-alt5: var(--synopsis-accent-whisper-red);
+  --synopsis-surface-gray-mid-alt6: var(--synopsis-accent-soft-blue);
+  --synopsis-surface-gray-mid-alt7: var(--synopsis-shadow-medium);
+  --synopsis-surface-gray-mid-alt9: var(--synopsis-accent-black);
+
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -547,7 +580,7 @@ onMounted(() => {
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 16px 20px;
-  box-shadow: var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.05));
+  box-shadow: var(--synopsis-shadow-gray);
   flex-wrap: wrap;
 }
 
@@ -561,8 +594,8 @@ onMounted(() => {
   align-self: flex-start;
   font-size: 11px;
   font-weight: 700;
-  color: var(--color-primary);
-  background: var(--color-primary-soft, rgba(139, 92, 246, 0.12));
+  color: var(--color-brand-primary);
+  background: var(--synopsis-surface);
   padding: 2px 8px;
   border-radius: 6px;
   text-transform: uppercase;
@@ -601,7 +634,7 @@ onMounted(() => {
 .stat-capsule__num {
   font-size: 15px;
   font-weight: 700;
-  color: var(--color-accent-gold, #f59e0b);
+  color: var(--synopsis-text);
 }
 
 .stat-capsule__label {
@@ -683,7 +716,7 @@ onMounted(() => {
   gap: 20px;
 }
 
-@media (max-width: 1024px) {
+@media (--breakpoint-xl-down) {
   .synopsis-columns {
     grid-template-columns: 1fr;
   }
@@ -702,7 +735,7 @@ onMounted(() => {
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 20px;
-  box-shadow: var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.05));
+  box-shadow: var(--synopsis-shadow-gray);
 }
 
 .synopsis-card__header {
@@ -727,8 +760,8 @@ onMounted(() => {
 .synopsis-card__badge {
   font-size: 12px;
   font-weight: 600;
-  color: var(--color-primary);
-  background: var(--color-primary-soft, rgba(139, 92, 246, 0.12));
+  color: var(--color-brand-primary);
+  background: var(--synopsis-surface);
   padding: 2px 8px;
   border-radius: 12px;
 }
@@ -789,8 +822,8 @@ onMounted(() => {
 .arc-item__range {
   font-size: 11.5px;
   font-weight: 600;
-  color: var(--color-primary);
-  background: var(--color-primary-soft, rgba(139, 92, 246, 0.1));
+  color: var(--color-brand-primary);
+  background: var(--synopsis-surface-gray);
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -834,7 +867,7 @@ onMounted(() => {
   font-size: 11px;
   font-weight: 600;
   color: var(--color-text-secondary);
-  background: rgba(148, 163, 184, 0.15);
+  background: var(--synopsis-surface-gray-mid-alt6);
   padding: 1px 6px;
   border-radius: 4px;
 }
@@ -847,13 +880,13 @@ onMounted(() => {
 }
 
 .status--open {
-  color: #f59e0b;
-  background: rgba(245, 158, 11, 0.15);
+  color: var(--synopsis-text);
+  background: var(--synopsis-surface-gray-mid-alt2);
 }
 
 .status--resolved {
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.15);
+  color: var(--synopsis-text-gray);
+  background: var(--synopsis-surface-gray-mid-alt4);
 }
 
 .thread-item__name {
@@ -893,7 +926,7 @@ onMounted(() => {
 }
 
 .char-card:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-brand-primary);
   transform: translateX(4px);
   background: var(--color-surface);
 }
@@ -902,8 +935,8 @@ onMounted(() => {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #8b5cf6, #ec4899);
-  color: #fff;
+  background: var(--synopsis-surface-gray-mid);
+  color: var(--color-text-inverse);
   font-weight: 700;
   font-size: 15px;
   display: flex;
@@ -939,8 +972,8 @@ onMounted(() => {
 .char-card__freq {
   font-size: 12px;
   font-weight: 600;
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.1);
+  color: var(--synopsis-text-gray-mid);
+  background: var(--synopsis-surface-gray-mid-alt5);
   padding: 1px 6px;
   border-radius: 10px;
   flex-shrink: 0;
@@ -966,7 +999,7 @@ onMounted(() => {
 .alias-pill {
   font-size: 11px;
   color: var(--color-text-secondary);
-  background: rgba(148, 163, 184, 0.15);
+  background: var(--synopsis-surface-gray-mid-alt6);
   padding: 1px 6px;
   border-radius: 4px;
 }
@@ -1005,15 +1038,15 @@ onMounted(() => {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: var(--color-primary);
-  color: #fff;
+  background: var(--color-brand-primary);
+  color: var(--color-text-inverse);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 12px;
   font-weight: 700;
-  box-shadow: 0 0 0 4px var(--color-primary-soft, rgba(139, 92, 246, 0.2));
-  z-index: 1;
+  box-shadow: 0 0 0 4px var(--synopsis-shadow-gray-mid);
+  z-index: var(--z-local);
 }
 
 .timeline-line {
@@ -1033,7 +1066,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  box-shadow: var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.03));
+  box-shadow: var(--synopsis-shadow);
 }
 
 .timeline-card__meta {
@@ -1045,8 +1078,8 @@ onMounted(() => {
 .timeline-card__page-tag {
   font-size: 12px;
   font-weight: 700;
-  color: var(--color-primary);
-  background: var(--color-primary-soft, rgba(139, 92, 246, 0.12));
+  color: var(--color-brand-primary);
+  background: var(--synopsis-surface);
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -1054,8 +1087,8 @@ onMounted(() => {
 .timeline-card__imp-tag {
   font-size: 11px;
   font-weight: 600;
-  color: var(--color-accent-gold, #f59e0b);
-  background: rgba(245, 158, 11, 0.12);
+  color: var(--synopsis-text);
+  background: var(--synopsis-surface-gray-mid-alt3);
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -1092,8 +1125,8 @@ onMounted(() => {
 .timeline-card__thumb-hover {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
+  background: var(--synopsis-surface-gray-mid-alt7);
+  color: var(--color-text-inverse);
   font-size: 12px;
   font-weight: 600;
   display: flex;
@@ -1107,45 +1140,15 @@ onMounted(() => {
   opacity: 1;
 }
 
-/* 大图预览 Modal */
-.thumbnail-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.75);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 24px;
-}
-
+/* 大图预览内容（弹窗外壳由 BaseModal 提供） */
 .thumbnail-modal-card {
   position: relative;
   max-width: 90vw;
   max-height: 90vh;
-  background: #000;
+  background: var(--synopsis-surface-gray-mid-alt9);
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-}
-
-.thumbnail-modal-close {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
-  border: none;
-  border-radius: 50%;
-  width: 32px;
-  height: 32px;
-  cursor: pointer;
-  font-size: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 2;
+  box-shadow: var(--synopsis-accent-gray);
 }
 
 .thumbnail-modal-img {

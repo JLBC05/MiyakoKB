@@ -121,11 +121,11 @@ function selectCitation(id: string | number): void {
   gap: 6px;
   padding: 4px 10px;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--color-primary, #9977CC) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-primary, #9977CC) 25%, transparent);
+  background: color-mix(in srgb, var(--color-brand-primary) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-brand-primary) 25%, transparent);
   font-size: 12px;
   line-height: 1.4;
-  color: var(--color-text-secondary, #6E5D85);
+  color: var(--color-text-secondary);
   align-self: flex-start;
 }
 
@@ -136,11 +136,11 @@ function selectCitation(id: string | number): void {
 
 .qa-entities-label {
   font-weight: 500;
-  color: var(--color-primary, #9977CC);
+  color: var(--color-brand-primary);
 }
 
 .qa-entities-list {
-  color: var(--color-text-primary, #231934);
+  color: var(--color-text-primary);
   font-weight: 500;
 }
 

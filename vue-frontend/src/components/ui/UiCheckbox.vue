@@ -1,11 +1,14 @@
 <script setup lang="ts">
-withDefaults(defineProps<{
+import { ref, watchEffect } from 'vue'
+
+const props = withDefaults(defineProps<{
   ariaLabel?: string
   inputId?: string
   modelValue?: boolean
   label?: string
   description?: string
   disabled?: boolean
+  indeterminate?: boolean
 }>(), {
   ariaLabel: '',
   inputId: '',
@@ -13,6 +16,15 @@ withDefaults(defineProps<{
   label: '',
   description: '',
   disabled: false,
+  indeterminate: false,
+})
+
+const inputRef = ref<HTMLInputElement | null>(null)
+
+// `indeterminate` is a DOM property, not an attribute, so it cannot be bound in
+// the template directly.
+watchEffect(() => {
+  if (inputRef.value) inputRef.value.indeterminate = props.indeterminate
 })
 
 const emit = defineEmits<{
@@ -38,11 +50,13 @@ function handleChange(event: Event) {
   >
     <input
       :id="inputId || undefined"
+      ref="inputRef"
       class="ui-checkbox__input"
       type="checkbox"
       :checked="modelValue"
       :disabled="disabled"
       :aria-label="ariaLabel || undefined"
+      :aria-checked="indeterminate ? 'mixed' : undefined"
       @change="handleChange"
     >
     <span class="ui-checkbox__content">

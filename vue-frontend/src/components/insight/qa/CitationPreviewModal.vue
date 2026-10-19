@@ -85,12 +85,12 @@ watch(
   >
     <div class="citation-preview">
       <div v-if="isLoading" class="citation-preview__loading">
-        <UiIcon name="loader" class="citation-preview__spinner" />
+        <UiIcon name="loading" class="citation-preview__spinner" />
         <span>正在加载漫画图片...</span>
       </div>
 
       <div v-else-if="errorMessage" class="citation-preview__error">
-        <UiIcon name="alert-circle" />
+        <UiIcon name="alert-triangle" />
         <span>{{ errorMessage }}</span>
       </div>
 
@@ -125,6 +125,13 @@ watch(
 
 <style scoped>
 .citation-preview {
+  --citation-text: #f87171;
+  --citation-surface-medium: rgba(0, 0, 0, 0.35);
+  --citation-shadow-medium: rgba(0, 0, 0, 0.4);
+  --citation-surface-faint: rgba(255, 255, 255, 0.04);
+  --citation-stroke: #a855f7;
+  --citation-text-blue: #cbd5e1;
+
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -142,7 +149,7 @@ watch(
 }
 
 .citation-preview__error {
-  color: var(--insight-status-error, #f87171);
+  color: var(--insight-status-error, var(--citation-text));
 }
 
 .citation-preview__spinner {
@@ -150,12 +157,8 @@ watch(
 }
 
 @keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .citation-preview__image-container {
@@ -164,7 +167,7 @@ watch(
   align-items: center;
   max-height: 65vh;
   overflow: auto;
-  background: var(--insight-surface-tertiary, rgba(0, 0, 0, 0.35));
+  background: var(--insight-surface-tertiary, var(--citation-surface-medium));
   border: 1px solid var(--color-border-muted);
   border-radius: 8px;
   padding: 8px;
@@ -175,14 +178,14 @@ watch(
   max-height: 60vh;
   object-fit: contain;
   border-radius: 4px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 20px var(--citation-shadow-medium);
 }
 
 .citation-preview__excerpt {
   padding: 10px 14px;
   border-radius: 6px;
-  background: var(--insight-surface-secondary, rgba(255, 255, 255, 0.04));
-  border-left: 3px solid var(--insight-action-primary, #a855f7);
+  background: var(--insight-surface-secondary, var(--citation-surface-faint));
+  border-left: 3px solid var(--insight-action-primary, var(--citation-stroke));
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -194,13 +197,13 @@ watch(
   gap: 6px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--insight-action-primary, #a855f7);
+  color: var(--insight-action-primary, var(--citation-stroke));
 }
 
 .citation-preview__excerpt-content {
   font-size: 13px;
   line-height: 1.6;
-  color: var(--insight-text-secondary, #cbd5e1);
+  color: var(--insight-text-secondary, var(--citation-text-blue));
   white-space: pre-wrap;
   word-break: break-word;
 }

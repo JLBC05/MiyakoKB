@@ -484,7 +484,7 @@ describe('UI architecture CSS variable ownership lint', () => {
     const token = '--translate-architecture-unused-owner-token'
     const componentPath = join(
       frontendRoot,
-      'src/components/translate/__UiArchitectureUnusedOwnerTokenFixture.vue'
+      'src/components/product/__UiArchitectureUnusedOwnerTokenFixture.vue'
     )
     // Keep the temporary source outside Vitest's *.spec.ts discovery pattern;
     // otherwise the runner can collect the file while this test is executing

@@ -399,7 +399,14 @@ watch(bookId, newId => {
 
 <style scoped>
 .book-detail-page {
-  min-height: 100vh;
+  --book-detail-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.03);
+  --book-detail-shadow-cover: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --book-detail-brand-deep: #7e5bb4;
+  --book-detail-brand-gradient: linear-gradient(135deg, var(--color-brand-primary) 0%, var(--book-detail-brand-deep) 100%);
+  --book-detail-success-surface: rgba(16, 185, 129, 0.15);
+  --book-detail-success-border: rgba(16, 185, 129, 0.3);
+  --book-detail-success-text: #10b981;
+
   background-color: var(--color-bg-base);
   color: var(--color-text-primary);
   display: flex;
@@ -432,7 +439,7 @@ watch(bookId, newId => {
   padding: 24px;
   display: flex;
   gap: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--book-detail-shadow-card);
 }
 
 .book-header-card__cover-box {
@@ -442,7 +449,7 @@ watch(bookId, newId => {
   border-radius: 8px;
   overflow: hidden;
   background: var(--color-surface-secondary);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--book-detail-shadow-cover);
 }
 
 .book-header-card__cover {
@@ -497,9 +504,9 @@ watch(bookId, newId => {
 }
 
 .meta-badge--success {
-  background-color: var(--color-success-alpha-15, rgba(16, 185, 129, 0.15));
-  color: var(--color-success, #10b981);
-  border: 1px solid var(--color-success-alpha-30, rgba(16, 185, 129, 0.3));
+  background-color: var(--book-detail-success-surface);
+  color: var(--book-detail-success-text);
+  border: 1px solid var(--book-detail-success-border);
 }
 
 .book-header-card__tags {
@@ -517,7 +524,7 @@ watch(bookId, newId => {
 }
 
 .action-btn--primary {
-  background: linear-gradient(135deg, var(--color-primary) 0%, #7e5bb4 100%);
+  background: var(--book-detail-brand-gradient);
   border: none;
   font-weight: 600;
 }
@@ -537,7 +544,7 @@ watch(bookId, newId => {
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--book-detail-shadow-card);
 }
 
 .chapters-card__header {

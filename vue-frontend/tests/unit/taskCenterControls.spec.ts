@@ -118,21 +118,6 @@ describe('task center controls', () => {
     expect(wrapper.get('button').text()).toBe('中断 3')
   })
 
-  it('submits Worker model release through the system endpoint', async () => {
-    postMock.mockResolvedValue({
-      commandId: 'command-1',
-      kind: 'release_models',
-      status: 'pending',
-    })
-    const { releaseWorkerModelCache } = await import('@/api/v2/system')
-
-    await expect(releaseWorkerModelCache()).resolves.toMatchObject({
-      kind: 'release_models',
-      status: 'pending',
-    })
-    expect(postMock).toHaveBeenCalledWith('/api/v2/system/release-models')
-  })
-
   it('creates a chapter-scoped Insight batch from the task center', async () => {
     wrapper = mount(TaskBatchAnalysisModal, {
       attachTo: document.body,

@@ -194,17 +194,17 @@ watch(
         </div>
 
         <div v-if="hasLoadedBook" class="graph-header-bar__tabs">
-          <button
+          <UiButton
             v-for="tab in graphTabs"
             :key="tab.id"
-            type="button"
+            variant="tab"
             class="graph-tab-btn"
             :class="{ 'graph-tab-btn--active': activeTab === tab.id }"
             @click="activeTab = tab.id"
           >
             <span class="graph-tab-btn__icon">{{ tab.icon }}</span>
             <span>{{ tab.label }}</span>
-          </button>
+          </UiButton>
         </div>
       </section>
 
@@ -270,7 +270,10 @@ watch(
 
 <style scoped>
 .graph-page {
-  min-height: 100vh;
+  --graph-shadow-bar: 0 1px 3px rgba(0, 0, 0, 0.03);
+  --graph-shadow-tab-active: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --graph-shadow-card: 0 2px 8px rgba(0, 0, 0, 0.04);
+
   background-color: var(--color-bg-base);
   color: var(--color-text-primary);
   display: flex;
@@ -297,7 +300,7 @@ watch(
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 12px 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--graph-shadow-bar);
 }
 
 .graph-header-bar__left {
@@ -340,11 +343,12 @@ watch(
   color: var(--color-text-primary);
 }
 
-.graph-tab-btn--active {
-  background-color: var(--color-surface) !important;
-  color: var(--color-primary) !important;
+.graph-tab-btn--active,
+.graph-tab-btn--active:hover {
+  background-color: var(--color-surface);
+  color: var(--color-brand-primary);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--graph-shadow-tab-active);
 }
 
 .graph-content {
@@ -373,7 +377,7 @@ watch(
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--graph-shadow-card);
 }
 
 .graph-empty-icon {
@@ -407,6 +411,6 @@ watch(
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--graph-shadow-bar);
 }
 </style>
