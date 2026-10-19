@@ -69,6 +69,20 @@ def test_failed_font_copy_does_not_publish_partial_install(directory_fonts, monk
     assert not list((root / 'fonts').glob('.install-*'))
 
 
+def _set_private_acl(path, *grants):
+    """Reproduce the private DACL the legacy TemporaryDirectory installer left.
+
+    Windows used to attach a protected SYSTEM/Administrators/OWNER DACL to
+    ``tempfile.mkdtemp`` output; current builds and sandboxed runtimes inherit
+    the parent ACL instead, so these regression tests establish the state.
+    """
+    subprocess.run(
+        ['icacls', str(path), '/inheritance:r', '/grant:r', *grants],
+        check=True, capture_output=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+
+
 def _windows_acl_is_protected(path):
     import ctypes
     from ctypes import wintypes
@@ -114,8 +128,22 @@ def test_legacy_shared_acl_is_repaired_without_changing_fonts_or_private_acl(dir
         Path(stage, 'Alpha.ttf').write_bytes(payload)
         Path(stage, '手动字体.ttf').write_bytes(payload)
         os.rename(stage, folder / 'shared')
+    # Modern Windows and sandboxed runtimes no longer attach the private DACL
+    # to mkdtemp output, so recreate the legacy state this test is about.
+    _set_private_acl(
+        folder / 'shared',
+        '*S-1-5-18:(OI)(CI)F',
+        '*S-1-5-32-544:(OI)(CI)F',
+        '*S-1-3-4:(OI)(CI)F',
+    )
     private = folder / 'users/alice'
     private.mkdir(parents=True, mode=0o700)
+    _set_private_acl(
+        private,
+        '*S-1-5-18:(OI)(CI)F',
+        '*S-1-5-32-544:(OI)(CI)F',
+        '*S-1-3-4:(OI)(CI)F',
+    )
     assert _windows_acl_is_protected(folder / 'shared')
     with engine.connect() as connection:
         before = list(connection.execute(select(fonts)).mappings())
@@ -138,11 +166,8 @@ def test_custom_shared_acl_is_preserved(directory_fonts):
     shared = root / 'fonts/shared'
     shared.mkdir(parents=True, mode=0o700)
     (shared / 'Alpha.ttf').write_bytes(payload)
-    subprocess.run(
-        ['icacls', str(shared), '/grant', '*S-1-1-0:(OI)(CI)R'],
-        check=True, capture_output=True,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
+    # A custom, non-inheriting ACL must survive the font directory preparation.
+    _set_private_acl(shared, '*S-1-1-0:(OI)(CI)R')
     assert _windows_acl_is_protected(shared)
     assert catalog.list()
     assert _windows_acl_is_protected(shared)

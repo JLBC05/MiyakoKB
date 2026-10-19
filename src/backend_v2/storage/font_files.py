@@ -144,7 +144,18 @@ def _restore_legacy_font_inheritance(shared: Path) -> None:
             raise ctypes.WinError(ctypes.get_last_error())
         acl = text.value
         legacy_entries = {'A;OICI;FA;;;SY', 'A;OICI;FA;;;BA', 'A;OICI;FA;;;OW'}
-        if not acl.startswith('D:P(') or set(acl[4:-1].split(')(')) != legacy_entries:
+        # Windows reports the same private DACL as "D:P(" on some builds and
+        # "D:PAI(" on others, so accept either prefix. The exact entry set is
+        # what guarantees that only the legacy TemporaryDirectory ACL is undone.
+        prefix = next(
+            (
+                candidate
+                for candidate in ('D:PAI(', 'D:P(')
+                if acl.startswith(candidate)
+            ),
+            '',
+        )
+        if not prefix or set(acl[len(prefix):-1].split(')(')) != legacy_entries:
             return
         # Keep every explicit entry and restore parent inheritance. Windows
         # propagates the inherited entries to existing font files as well.

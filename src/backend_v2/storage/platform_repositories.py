@@ -438,11 +438,13 @@ class SettingsRepository:
         translation_payload: Mapping[str, Any],
         providers: tuple[ProviderSettingMutation, ...],
     ) -> None:
-        proofreading = cast(Mapping[str, Any], translation_payload["proofreading"])
-        rounds = cast(list[Mapping[str, Any]], proofreading["rounds"])
+        # Decoupled translation settings may carry no proofreading section at all;
+        # an absent section simply means there are no active rounds to keep.
+        proofreading = translation_payload.get("proofreading")
+        rounds = proofreading.get("rounds", ()) if isinstance(proofreading, Mapping) else ()
         active_pairs = {
             (f"proofreading_{round_config['id']}", str(round_config["provider"]))
-            for round_config in rounds
+            for round_config in (rounds if isinstance(rounds, list) else ())
         }
         submitted_pairs = {
             (mutation.domain, mutation.provider)

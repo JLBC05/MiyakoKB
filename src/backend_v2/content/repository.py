@@ -892,7 +892,6 @@ class ContentRepository:
                     chapter_navigation_state.c.chapter_id == chapter_id
                 )
             ).mappings().one_or_none()
-            constraints = None
             active_jobs = list(
                 connection.execute(
                     select(
@@ -1003,8 +1002,12 @@ class ContentRepository:
                 "revision": navigation["revision"] if navigation else 0,
             },
             "constraints": {
+                # Translation constraints were retired with the translation
+                # pipeline (see v3_5_3); the reader keeps the response shape
+                # with an empty payload at revision 1, matching
+                # get_constraints(), so older clients still get a document.
                 "payload": constraint_payload,
-                "revision": constraints["revision"],
+                "revision": 1,
             },
             "activeJobs": [
                 {

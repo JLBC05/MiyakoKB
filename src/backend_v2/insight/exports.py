@@ -29,6 +29,7 @@ from src.backend_v2.insight.derived import (
 )
 from src.backend_v2.insight.page_schema import (
     InvalidPageAnalysis,
+    get_run_extra_entities,
     validate_persisted_page_analysis,
 )
 from src.backend_v2.timestamps import utcnow
@@ -340,6 +341,10 @@ class InsightExportWorkerService:
             raise InsightConflict("frozen Insight export config fields are invalid")
         book_id = _required_string(config["bookId"], "export book id")
         run_id = _required_string(config["sourceRunId"], "export source run id")
+        # Knowledge-mode runs persist the entity arrays next to the core page
+        # fields, so the frozen page analysis must be validated with the
+        # entity set the source run was configured with.
+        extra_entities = get_run_extra_entities(run_id, self.engine)
         raw_pages = config["pages"]
         if not isinstance(raw_pages, list) or not raw_pages:
             raise InsightConflict("frozen export pages must be a non-empty array")
@@ -539,7 +544,8 @@ class InsightExportWorkerService:
                 )
             try:
                 analysis = validate_persisted_page_analysis(
-                    _load_object(row["payload_json"], "export page analysis")
+                    _load_object(row["payload_json"], "export page analysis"),
+                    extra_entities=extra_entities,
                 )
             except InvalidPageAnalysis as exc:
                 raise InsightConflict(

@@ -43,6 +43,9 @@ JOB_LABELS: Final = {
     "vector_rebuild": "语义索引重建",
     "insight_export": "分析报告导出",
     "continuation": "漫画续写",
+    # Retained durable kind (existing databases still carry the CHECK value),
+    # so it keeps a product label even though no surface submits it anymore.
+    "plugin_agent": "插件任务",
 }
 
 STEP_LABELS: Final = {
@@ -93,6 +96,8 @@ STEP_LABELS: Final = {
     "bubble_color": "单气泡颜色分析",
     "bubble_translate": "单气泡翻译",
     "page_detect": "当前页文本检测",
+    # Retained operation kind (existing databases still carry the CHECK value).
+    "page_repair": "当前页文字修复",
     "studio_generate": "生成角色设定",
     "studio_chat": "角色工作室对话",
     "studio_summary": "总结角色对话",

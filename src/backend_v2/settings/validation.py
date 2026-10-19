@@ -913,4 +913,6 @@ def compose_editable_settings(
         }
     if domain == "translation":
         return validate_setting_payload(domain, result)
+    if domain == "text_style_defaults":
+        return validate_setting_payload(domain, result)
     return result
