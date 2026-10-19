@@ -85,7 +85,7 @@
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；
   2. ~~**衍生缺口补跑**~~：**已完成（2026-10-19）**。`POST /api/v2/jobs/<id>/retry-failed` 只重跑失败项（源 job `39c2c48f` → 重试 job `091d72b7` → 补跑 job `8431eb87`/run `2c9d40c2`，20/20 成功），概览 no_spoiler(293 字)/story_summary(535 字) 已发布、`entity_alignment` rev5 status=ready；发现 #18/#19 关闭；
   3. **排查 global 问答召回**：问"少年院"只返回第 1 话引用并答"证据不足"，而该场景在第 6-8 话（报告发现 #20）；
-  4. 清理收尾：`tests_backend` 失效 import 已清零（`python -m pytest tests_backend --collect-only -q` = 969 tests, 0 errors；扫描脚本 `tmp_scan_tests.py`）；`vue-frontend` 类型检查 23 条（均为存量基线：图标/按钮变体白名单 19 条 + settings 事务类型漂移 4 条，剪裁 spec 导致的 2 条已消除）；PySide6-Essentials 已从 requirements-cpu/gpu 删除；根目录临时脚本仍待归置（`tmp_*.py` 一律不入库）。
+  4. 清理收尾：`tests_backend` 失效 import 已清零（扫描脚本 `tmp_scan_tests.py`），后端全量 **937 passed / 0 failed / 0 error**（2026-10-19）；`vue-frontend` 六项门禁全部 0（vitest **88 files / 642 tests**、vue-tsc、eslint、stylelint、`lint:ui`、`lint:ui:audit`），生成类型与静态产物已与源码同步（见坑 16）；PySide6-Essentials 已从 requirements-cpu/gpu 删除；根目录临时脚本仍待归置（`tmp_*.py` 一律不入库）。
 
 ---
 
@@ -139,6 +139,12 @@
   - *背景*：见坑 14 / 发现 #32——裸 launcher（也是打包入口默认角色）被 `e843a4e` 从受管启动器改路由到一键守护，而后者不准备存储、以 `--test-mode` 拉起子进程：全新数据根上 API 报 `no such table: job_events`、启动器 epoch 与重启监护被绕过。
   - *实现*：`src/backend_v2/dispatch.py` 恢复裸 `--role launcher` → `run_launcher`（受管：存储准入 + 签发 epoch + 重启监护），新增 `--unified-launcher` 选择 `run_unified_launcher`，`--legacy-launcher` 保留为兼容别名；同时给 `run_unified_launcher` 补 `StorageManager.prepare(initialize_database)` + `before_start()`，使一键守护在全新数据根也可用（`python run.py` 用户路径）。
   - *验证*：受管启动器新根 health 200 + 76 表（epoch 由启动器签发）；一键启动器新根 health 200 + 76 表；`tests_backend/v2/test_role_boundaries.py` **19 passed**（此前 4 红：`condition did not become true before timeout`）。
+
+- **决策 13：对外可见层统一为 `MiyakoKB`，但后端 Python 包路径 / 数据目录 / 库文件名一律不动**（2026-10-19 用户批准）
+  - *背景*：项目定位已从翻译器变成漫画知识库，而窗口标题、打包产物、发行资产名、README 仍沿用 `Saber-Translator`；README 还带着作者个人赞赏码与翻译时代的截图。
+  - *范围与理由*：只改**对外可见层**（`app.spec` 的 EXE/COLLECT 名、`release.yml` 的探测路径 / 资产名 / 发布说明、`launcher/entrypoint.py` 的窗口标题与日志文件名、`web_import/worker.py` 的 UA、`PublicTrialNotice.vue` / `AdminView.vue` 文案、README / RELEASE_NOTES）；**不动** `src/backend_v2/*`、`src/shared/*`、`saber_v2.py`、`saber.sqlite3`、`data-v2/`、`SABER_*` 环境变量——这些是 import 路径与既有用户数据的位置，改名会破坏升级与全部测试，收益只有「好看」。
+  - *同时*：README 重写为知识库定位（功能 / 快速上手 / 运行架构 / 源码开发 / 常见问题），删除两张作者个人赞赏码与 10 个翻译时代截图（`pic/` 只留 logo 与本代 5 张知识库截图）；`app.spec` 的 datas 补入 `LICENSE` / `THIRD_PARTY_LICENSES.md` / `RELEASE_NOTES.md`；`.github/scripts/check_models.py`（已无引用）删除；release.yml 残留的 torch/onnxruntime/模型搬运开关清理干净。
+  - *验证*：`dist/MiyakoKB/MiyakoKB.exe` 打包成功（2863 文件 / 483.1 MB，仅 3 款字体）；CI 同款 `probe_package.py` 逐角色 exit=0；`release.yml` 中已无 `torch|onnxruntime|SABER_BUILD_MOVE_MODELS|models.z` 命中。提交 `cbc23ff`（品牌 + README + 产物重建）、`faf5210`（前端陈旧用例）、`f1ef3aa`（删死脚本）。
 
 ---
 
@@ -199,9 +205,14 @@
   - *现状*：**已修**（决策 12 / 报告 §6 发现 #32）——裸 `--role launcher` 回到受管启动器、一键守护改为 `--unified-launcher` 并补存储准备；`test_role_boundaries.py` **19 passed**。教训：改 CLI 默认路由时，必须确认「默认路径仍满足生产契约（存储准入 / epoch / 重启监护）」，并让两条路径都跑一遍「全新数据根 + health」冒烟。
 
 - **坑 15：打包产物从未包含存储契约 SQL（发布版无法初始化全新数据根）**
-  - *现象*：本地 `PyInstaller app.spec` 构建出的 `Saber-Translator.exe` 执行 `--role launcher --probe --test-mode` 立即以 `StorageError: 存储契约 3.5.3 未找到` 退出；CI 的 `probe_package.py` 本应在发布前拦住这种产物。
+  - *现象*：本地 `PyInstaller app.spec` 构建出的 `MiyakoKB.exe`（当时仍叫 `Saber-Translator.exe`）执行 `--role launcher --probe --test-mode` 立即以 `StorageError: 存储契约 3.5.3 未找到` 退出；CI 的 `probe_package.py` 本应在发布前拦住这种产物。
   - *根因*（发现 #33）：`src/storage_migrator/contracts.py:78` 用 `Path(__file__).parent / "schemas" / f"{version}.sql"` 取契约，而 `app.spec` 的 `datas` 只收集 `src/backend_v2/static`、`src/backend_v2/resources`、三个 `src/shared/*.json` 与 `openapi/v2.yaml`——**从未收集 `src/storage_migrator/schemas`**。
   - *现状*：**已修**（报告 §6 发现 #33）——`app.spec` 增加 `src/storage_migrator/schemas` 的 datas 条目（冻结后保持同相对路径），并把 `LICENSE` / `THIRD_PARTY_LICENSES.md` / `RELEASE_NOTES.md` 一并打进产物；重建后按 CI 同款 `probe_package.py` 逐角色校验。教训：**凡是运行时按 `Path(__file__).parent` 找的 `.sql`/`.json`，都必须显式进 spec 的 `datas`**；打包改动后必须跑一次 probe（本机沙箱下需先把 `TEMP/TMP/TMPDIR` 指向可写目录，否则 PyInstaller 的 matplotlib 运行时钩子在 cwd 位于 `%TEMP%` 时找不到可用临时目录而启动即失败）。
+
+- **坑 16：前端「门禁全绿」≠ 测试全绿——`npm run test` 扫的范围比手跑 `tests/unit` 更宽，且提交过期的生成物会让 CI 必红**
+  - *现象*：项目内一直记着「vitest 全绿」，实为只跑 `tests/unit`；按 `package.json` 的 `test` 脚本跑**全量**时是 `Test Files 5 failed | 85 passed`、`Tests 22 failed | 634 passed`——`src/**/*.test.ts`（store 层）与 `tests/property/*.property.ts`（属性测试）从未纳入过门禁。同一天还发现已提交的 `vue-frontend/src/api/generated/v2.ts` 含 86 行契约已裁剪的 `Operation*` 类型、`src/backend_v2/static/vue` 也不是当前源码的产物——CI 的 `check:api`（`git diff --exit-code`）与「generated frontend is current」两道门禁必然失败。
+  - *根因*：翻译 / OCR 域退休后，这些规格仍在断言已删的 store 字段（`pluginAgent`、`ocrEngine`、`hints`、`saberYolo*`）与已删路由 `/translate`、`/translation-batches`；生成物与构建产物没有在源码改动时同步重建。
+  - *现状*：**已修**（提交 `cbc23ff` 重建类型与静态产物、`faf5210` 清理陈旧用例）——22 条红全部处置（删除 3 个随域退役的规格、按当前 store/路由面重写 2 个属性测试、新增 `settings.backend-loading.test.ts`）；全量 vitest **88 files / 642 tests 全绿**。自检命令（改前端后固定跑）：`node node_modules/vitest/vitest.mjs run --configLoader runner`（**不要**只跑 `tests/unit`）；提交前确认 `node node_modules/openapi-typescript/bin/cli.js ../openapi/v2.yaml -o src/api/generated/v2.ts` 后 `git diff --exit-code` 无输出，且 `vite build` 后 `git status --porcelain -- src/backend_v2/static/vue` 为空。
 
 ---
 
@@ -249,3 +260,5 @@
 5. 问答召回异常（报告发现 #20）待复现定位（exact 模式已复验正常：7 条引用 + 结构化答案）。注意 `global` 模式已在决策 9 并入 `generic`（`generic` = 页面/向量检索 + 最多 2 条全库产物候选，重排只覆盖页面候选），复验请用 `--mode generic`。
 6. 旧全局裁决缓存 `llm_entity_judge_cache.json`（3013 对、父工作区）里可能残留被上游异常写成 `false` 的真合并对——已被新的按书缓存取代，建议直接归档删除，不要迁移进新缓存。
 7. **退休域的「接缝」是否裁剪**（报告发现 #30）：bubble 持久化已移除，但 `POST/GET /pages/<page_id>/bubbles`、`/pages/<page_id>/bubble-overrides`、`/translation/bootstrap` 仍在运行时路由与契约里（前者返回空投影、后者返回空 prompts/内存桩约束）。恢复实现还是从路由与 `openapi/v2.yaml` 一并裁掉，需要产品拍板。
+8. **发布前的两步（都在用户侧）**：①仓库当前仍是**私有**（未认证访问 `https://api.github.com/repos/JLBC05/MiyakoKB` 返回 404），而 README 的下载 / Issues 链接与 v* Release 资产都按「公开仓库」预期——要发布需先在仓库设置里改为公开；②建议先手动 `workflow_dispatch` 跑一次 `.github/workflows/release.yml` 验证 CI（它会跑后端 pytest + 前端门禁 + 打包 probe + 分卷上传），确认全绿后再打 `v3.5.17` tag。
+9. **发行包形态**：`release.yml` 仍按 `cpu` / `gpu` 两个 variant 各出一个包，但 `requirements-cpu.txt` 与 `requirements-gpu.txt` 已逐字节相同（本地模型与 CUDA 栈移除后二者内容一致）——是否收敛为单一发行包，需要产品决定（收敛可省一半 CI 时间并避免用户选错）。
