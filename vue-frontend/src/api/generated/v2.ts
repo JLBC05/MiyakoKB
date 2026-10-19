@@ -2666,49 +2666,7 @@ export interface components {
             textStyle: string;
         };
         /** @enum {string} */
-        OperationStatus: "pending" | "running" | "completed" | "failed" | "cancelled";
-        /** @enum {string} */
         OperationKind: "bubble_ocr" | "bubble_color" | "page_detect" | "page_repair" | "bubble_translate" | "studio_generate" | "studio_chat" | "studio_summary";
-        Operation: {
-            operationId: components["schemas"]["Uuid"];
-            kind: components["schemas"]["OperationKind"];
-            status: components["schemas"]["OperationStatus"];
-            /** @enum {string} */
-            executorRole: "api" | "worker";
-            pageId: components["schemas"]["Uuid"] | null;
-            bubbleId: components["schemas"]["Uuid"] | null;
-            studioDocumentId: components["schemas"]["Uuid"] | null;
-            studioSessionId: components["schemas"]["Uuid"] | null;
-            baseRevision: number | null;
-            baseGeneration: number | null;
-            request: {
-                [key: string]: unknown;
-            };
-            result: {
-                [key: string]: unknown;
-            } | null;
-            error: components["schemas"]["OperationError"] | null;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            startedAt: string | null;
-            /** Format: date-time */
-            finishedAt: string | null;
-        };
-        OperationAccepted: {
-            operationId: components["schemas"]["Uuid"];
-            kind: components["schemas"]["OperationKind"];
-            /** @constant */
-            status: "pending";
-            /** @enum {string} */
-            executorRole: "api" | "worker";
-            baseRevision?: number | null;
-            baseGeneration?: number | null;
-            sessionRevision?: number;
-            sessionGeneration?: number;
-            userMessageId?: components["schemas"]["Uuid"];
-            documentRevision?: number;
-        };
         OperationError: {
             code: string;
             message: string;
@@ -2722,15 +2680,6 @@ export interface components {
             };
             /** Format: date-time */
             createdAt: string;
-        };
-        OperationEventList: {
-            items: components["schemas"]["OperationEvent"][];
-        };
-        PageOperationCommand: {
-            /** @enum {string} */
-            kind: "bubble_ocr" | "bubble_color" | "page_detect" | "bubble_translate";
-            baseRevision: number;
-            bubbleId?: components["schemas"]["Uuid"];
         };
         BubbleOcrResult: {
             text: string;
@@ -2956,40 +2905,6 @@ export interface components {
         PatchBubbleCommand: {
             baseRevision: number;
             fields: components["schemas"]["BubbleMutationFields"];
-        };
-        BubbleRepairCommand: {
-            /** @constant */
-            target: "bubble";
-            bubble_id: components["schemas"]["Uuid"];
-            base_revision: number;
-        };
-        MaskSolidRepairCommand: {
-            /** @constant */
-            target: "mask";
-            /** Format: binary */
-            mask: string;
-            base_revision: number;
-            /** @constant */
-            method: "solid";
-            fill_color: string;
-        };
-        MaskModelRepairCommand: {
-            /** @constant */
-            target: "mask";
-            /** Format: binary */
-            mask: string;
-            base_revision: number;
-            /** @enum {string} */
-            method: "lama_mpe" | "litelama" | "lama_manga";
-        };
-        MaskRestoreCommand: {
-            /** @constant */
-            target: "mask";
-            /** Format: binary */
-            mask: string;
-            base_revision: number;
-            /** @constant */
-            method: "restore_source";
         };
         Book: {
             id: components["schemas"]["Uuid"];
@@ -4098,7 +4013,6 @@ export interface components {
     parameters: {
         PageId: components["schemas"]["Uuid"];
         BubbleId: components["schemas"]["Uuid"];
-        OperationId: components["schemas"]["Uuid"];
         JobId: components["schemas"]["Uuid"];
         BatchId: components["schemas"]["Uuid"];
         SessionId: components["schemas"]["Uuid"];
