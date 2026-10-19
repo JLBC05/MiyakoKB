@@ -44,7 +44,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--legacy-launcher",
         action="store_true",
-        help="Run legacy isolated launcher instead of unified daemon launcher.",
+        help="Deprecated alias for the supervised launcher (the default).",
+    )
+    parser.add_argument(
+        "--unified-launcher",
+        action="store_true",
+        help="Run the one-click daemon launcher used by run.py (expects a prepared data root).",
     )
     parser.add_argument(
         "--log-level",
@@ -77,18 +82,22 @@ def dispatch(argv: Sequence[str] | None = None) -> int:
             return 1
 
     if args.role == "launcher":
-        if getattr(args, "probe", False) or getattr(args, "legacy_launcher", False):
-            from src.backend_v2.launcher.entrypoint import run_launcher
-            return run_launcher(args)
+        if getattr(args, "unified_launcher", False):
+            # One-click developer entry (also used by run.py): assumes a
+            # prepared data root and starts API/Worker in explicit test mode.
+            from src.backend_v2.launcher.unified_launcher import run_unified_launcher
+            return run_unified_launcher(
+                host=args.host,
+                port=args.port,
+                data_dir=args.data_dir,
+                log_level=args.log_level,
+                open_browser=not args.no_browser,
+            )
 
-        from src.backend_v2.launcher.unified_launcher import run_unified_launcher
-        return run_unified_launcher(
-            host=args.host,
-            port=args.port,
-            data_dir=args.data_dir,
-            log_level=args.log_level,
-            open_browser=not args.no_browser,
-        )
+        # Default: the supervised launcher owns storage preparation,
+        # launcher-issued epochs, and child restarts.
+        from src.backend_v2.launcher.entrypoint import run_launcher
+        return run_launcher(args)
 
     from src.backend_v2.launcher.entrypoint import run_launcher
 

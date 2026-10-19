@@ -22,7 +22,9 @@ from typing import Sequence
 import psutil
 
 from src.backend_v2.launcher.windows_job import ChildProcessJob
-from src.backend_v2.paths import project_root, resolve_data_root
+from src.backend_v2.paths import ensure_data_root, project_root, resolve_data_root
+from src.backend_v2.storage.lifecycle import initialize_database
+from src.storage_migrator.runner import StorageManager
 
 LOGGER = logging.getLogger("saber.unified_launcher")
 
@@ -74,6 +76,20 @@ class UnifiedLauncher:
             self.job = ChildProcessJob()
         except Exception as exc:
             LOGGER.debug("ChildProcessJob initialization bypassed: %s", exc)
+
+    def _prepare_storage(self) -> None:
+        """Admit the data root before starting children.
+
+        The one-click launcher starts API/Worker in explicit test mode, so the
+        locked conversion step that normally guards child startup has to run
+        here; otherwise a fresh data root has no schema at all.
+        """
+        data_root = ensure_data_root(resolve_data_root(self.data_dir))
+        profile = "local"
+        with StorageManager(data_root, profile) as manager:
+            result = manager.prepare(initialize_database)
+            manager.before_start()
+        LOGGER.debug("统一启动器存储准备完成：%s", result.get("status"))
 
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -238,6 +254,12 @@ class UnifiedLauncher:
         print("----------------------------------------------------------------------")
         print("  提示: 按 Ctrl+C 退出全部服务")
         print("======================================================================\n")
+
+        try:
+            self._prepare_storage()
+        except Exception as exc:
+            print(f"[错误] 存储准备失败: {exc}")
+            return 1
 
         # Register cleanup hooks
         atexit.register(self.stop)

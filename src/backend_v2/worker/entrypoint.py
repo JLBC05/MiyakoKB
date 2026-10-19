@@ -88,7 +88,12 @@ def run_worker(args: object) -> int:
             log_path,
         )
     identity = RuntimeIdentity.for_worker(test_mode=args.test_mode)
-    engine = create_sqlite_engine(database_path_for(data_root))
+    database_path = database_path_for(data_root)
+    # Test mode also backs schema-free probes (see current_storage_process), so
+    # the engine is only opened when the data root already carries a database.
+    engine = None
+    if not identity.test_mode or database_path.exists():
+        engine = create_sqlite_engine(database_path)
     if not identity.test_mode:
         repository = ProcessEpochRepository(engine)
         if not repository.validate(
@@ -98,25 +103,35 @@ def run_worker(args: object) -> int:
         ):
             engine.dispose()
             raise RuntimeError("Launcher-issued Worker epoch is missing or invalid")
-    else:
+    elif engine is not None:
+        from sqlalchemy import inspect as sqlalchemy_inspect
+
         from src.backend_v2.storage.database import immediate_transaction
         from src.backend_v2.storage.schema import process_epochs
         from src.backend_v2.timestamps import utcnow
-        with immediate_transaction(engine) as conn:
-            conn.execute(
-                process_epochs.delete().where(process_epochs.c.id == identity.epoch_id)
-            )
-            conn.execute(
-                process_epochs.insert().values(
-                    id=identity.epoch_id,
-                    role="worker",
-                    token_hash="",
-                    pid=os.getpid(),
-                    status="active",
-                    heartbeat_at=utcnow(),
-                    lease_expires_at=utcnow(),
+
+        if sqlalchemy_inspect(engine).has_table(process_epochs.name):
+            with immediate_transaction(engine) as conn:
+                conn.execute(
+                    process_epochs.delete().where(process_epochs.c.id == identity.epoch_id)
                 )
-            )
+                conn.execute(
+                    process_epochs.insert().values(
+                        id=identity.epoch_id,
+                        role="worker",
+                        token_hash="",
+                        pid=os.getpid(),
+                        status="active",
+                        heartbeat_at=utcnow(),
+                        lease_expires_at=utcnow(),
+                    )
+                )
+        else:
+            engine.dispose()
+            engine = None
+            LOGGER.debug("Worker 测试模式运行在无 schema 的数据根，跳过测试 epoch 登记")
+    else:
+        LOGGER.debug("Worker 测试模式运行在无数据库的数据根，跳过测试 epoch 登记")
 
     if args.probe:
         print(
