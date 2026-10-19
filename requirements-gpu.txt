@@ -57,6 +57,8 @@ gallery-dl>=1.26.0
 
 # --- Build ---
 # Required by .github/workflows/release.yml ("Build with PyInstaller") and app.spec.
+# app.spec probes and collects this package explicitly.
+packaging>=24.0
 pyinstaller==6.19.0
 
 # --- Dev / test ---

@@ -87,9 +87,6 @@ hiddenimports += [
     'src.core.manga_insight.embedding_client', 'src.core.manga_insight.vlm_client',
     'src.core.manga_insight.clients', 'src.core.manga_insight.clients.image_gen_client',
 
-    # backend v2 immutable plugin agent metadata/controller
-    'src.core.plugin_agent', 'src.core.plugin_agent.controller', 'src.core.plugin_agent.models',
-
     # web import agent（网页漫画导入）
     'src.core.web_import', 'src.core.web_import.agent', 'src.core.web_import.firecrawl_tools',
 
