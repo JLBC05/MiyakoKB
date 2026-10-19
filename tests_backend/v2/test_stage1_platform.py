@@ -759,6 +759,9 @@ def test_removed_custom_ai_profile_credential_can_be_deleted(platform) -> None:
         ("insight_embedding", "openai", "rpmLimit", 1.5),
         ("insight_embedding", "openai", "transportRetries", -1),
         ("insight_vlm", "gemini", "imageMaxSize", -1),
+        ("insight_vlm", "gemini", "analyzeConcurrency", 0),
+        ("insight_vlm", "gemini", "analyzeConcurrency", 9),
+        ("insight_vlm", "gemini", "analyzeConcurrency", 2.5),
         ("insight_image_gen", "gpt2api", "timeoutSeconds", -0.5),
     ],
 )
@@ -791,6 +794,31 @@ def test_provider_timeouts_accept_fractional_seconds() -> None:
             provider,
             payload,
         ) == payload
+
+
+def test_vlm_page_analysis_concurrency_is_a_provider_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.backend_v2.insight.provider_runtime import frozen_analyze_concurrency
+    from src.backend_v2.insight.worker import _analyze_concurrency
+
+    payload = _current_insight_provider_payload("insight_vlm")
+    payload["analyzeConcurrency"] = 5
+    assert validate_provider_setting_payload("insight_vlm", "gemini", payload) == payload
+    # 老库里的载荷没有该键，必须继续合法（可选键）。
+    legacy = _current_insight_provider_payload("insight_vlm")
+    assert "analyzeConcurrency" not in legacy
+    assert validate_provider_setting_payload("insight_vlm", "gemini", legacy) == legacy
+
+    monkeypatch.setenv("INSIGHT_ANALYZE_PARALLEL", "2")
+    assert frozen_analyze_concurrency({"vlm": {"analyze_concurrency": 6}}) == 6
+    assert frozen_analyze_concurrency({"vlm": {"analyze_concurrency": 99}}) == 8
+    assert frozen_analyze_concurrency({"vlm": {"analyze_concurrency": True}}) is None
+    assert frozen_analyze_concurrency({"vlm": {}}) is None
+    assert frozen_analyze_concurrency({}) is None
+    # 供应商设置优先，环境变量只作兜底。
+    assert _analyze_concurrency({"vlm": {"analyze_concurrency": 5}}) == 5
+    assert _analyze_concurrency({"vlm": {}}) == 2
 
 
 def test_translation_payload_is_stored_exactly_as_submitted() -> None:

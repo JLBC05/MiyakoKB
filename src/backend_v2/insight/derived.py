@@ -3276,11 +3276,20 @@ class InsightDerivedRepository:
                 }
                 for page in frozen.pages
             ]
-            group_size = _required_integer(
+            default_group_size = _required_integer(
                 analysis_config.get("pagesPerBatch"),
                 "frozen Insight pagesPerBatch",
                 minimum=1,
             )
+            # 自定义架构下第 1 层的 unitsPerGroup 表示「每组合并多少页」，用于把多个
+            # 页批次合并成一次聚合；内置架构沿用每批页数，保持历史行为不变。
+            custom_group_size = (
+                units_per_group
+                if analysis_config.get("architecturePreset") == "custom"
+                and units_per_group >= 1
+                else 0
+            )
+            group_size = custom_group_size or default_group_size
         else:
             with self.engine.connect() as connection:
                 rows = list(

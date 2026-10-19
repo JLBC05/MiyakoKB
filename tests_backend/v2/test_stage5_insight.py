@@ -1201,6 +1201,61 @@ def test_full_analysis_respects_first_layer_chapter_alignment(
     assert algorithms.previous_batches == [(), ((1, 2),)]
 
 
+def test_custom_architecture_groups_first_layer_units_by_its_own_size(
+    insight_platform,
+) -> None:
+    platform = insight_platform
+    for index, color in enumerate(((210, 200, 200), (200, 210, 200)), 3):
+        _import_insight_test_page(
+            platform,
+            chapter_id=str(platform["chapter"]["id"]),
+            logical_path=f"custom-layer-page-{index}.png",
+            color=color,
+            idempotency_key=f"custom-layer-page-{index}",
+        )
+    with platform["engine"].begin() as connection:
+        row = connection.execute(
+            select(
+                app_settings.c.payload_json,
+                app_settings.c.revision,
+            ).where(app_settings.c.domain == "insight")
+        ).mappings().one()
+        payload = json.loads(row["payload_json"])
+        batch = payload.setdefault("analysis", {}).setdefault("batch", {})
+        batch["pagesPerBatch"] = 1
+        batch["architecturePreset"] = "custom"
+        batch["customLayers"] = [
+            {"name": "批量分析", "unitsPerGroup": 2, "alignToChapter": False},
+            {"name": "全书总结", "unitsPerGroup": 0, "alignToChapter": False},
+        ]
+        connection.execute(
+            update(app_settings)
+            .where(app_settings.c.domain == "insight")
+            .values(
+                payload_json=json.dumps(payload, separators=(",", ":")),
+                revision=int(row["revision"]) + 1,
+            )
+        )
+
+    InsightAnalysisCommandService(platform["engine"]).create_analysis_job(
+        command={"bookId": str(platform["book"]["id"]), "scope": "full"},
+        idempotency_key="custom-layer-grouping",
+    )
+    algorithms = FakeInsightAlgorithms()
+    assert _run_job(platform, algorithms) == "completed"
+    # 页分析仍按每批 1 页，但自定义第 1 层声明每 2 页合并，因此只产生 2 个汇总单元。
+    assert algorithms.batches == [(1,), (2,), (3,), (4,)]
+    with platform["engine"].connect() as connection:
+        indices = list(
+            connection.execute(
+                select(analysis_layer_results.c.unit_index).where(
+                    analysis_layer_results.c.layer_index == 0,
+                )
+            ).scalars()
+        )
+    assert sorted(indices) == [0, 1]
+
+
 def test_chapter_analysis_keeps_batches_separate_but_shares_previous_context(
     insight_platform,
 ) -> None:

@@ -189,6 +189,7 @@ def _provider_section(
         "batchSize": "batch_size",
         "minImageSize": "min_image_size",
         "imageMaxSize": "image_max_size",
+        "analyzeConcurrency": "analyze_concurrency",
         "rpmLimit": "rpm_limit",
         "transportRetries": "transport_retries",
         "businessRetries": "business_retries",

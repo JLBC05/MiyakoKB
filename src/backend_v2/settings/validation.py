@@ -125,7 +125,13 @@ TRANSLATION_PROVIDER_SECTIONS = {
 
 _INSIGHT_PROVIDER_PAYLOAD_FIELDS = {
     "insight_vlm": frozenset(
-        {"modelName", "customBaseUrl", "openaiOptions", "imageMaxSize"}
+        {
+            "modelName",
+            "customBaseUrl",
+            "openaiOptions",
+            "imageMaxSize",
+            "analyzeConcurrency",
+        }
     ),
     "insight_chat": frozenset(
         {"modelName", "customBaseUrl", "openaiOptions"}
@@ -159,6 +165,10 @@ _INSIGHT_PROVIDER_PAYLOAD_FIELDS = {
         }
     ),
 }
+# 可选键：老库里的 provider 载荷没有这些键，读取时必须继续合法。
+_OPTIONAL_INSIGHT_PROVIDER_PAYLOAD_FIELDS: dict[str, frozenset[str]] = {
+    "insight_vlm": frozenset({"analyzeConcurrency"}),
+}
 _WEB_IMPORT_AGENT_PROVIDER_PAYLOAD_FIELDS = frozenset(
     {"modelName", "customBaseUrl"}
 )
@@ -190,11 +200,14 @@ def _exact_keys(
     value: Mapping[str, object],
     expected: set[str] | frozenset[str],
     path: str,
+    *,
+    optional: set[str] | frozenset[str] = frozenset(),
 ) -> None:
     actual = set(value)
-    if actual != set(expected):
+    required = set(expected) - set(optional)
+    if not required <= actual or actual - set(expected):
         unknown = sorted(actual - set(expected))
-        missing = sorted(set(expected) - actual)
+        missing = sorted(required - actual)
         detail = []
         if unknown:
             detail.append("unknown=" + ",".join(unknown))
@@ -710,6 +723,10 @@ def validate_provider_setting_payload(
             result,
             expected_insight_fields,
             f"provider_settings.{domain}",
+            optional=_OPTIONAL_INSIGHT_PROVIDER_PAYLOAD_FIELDS.get(
+                domain,
+                frozenset(),
+            ),
         )
     if is_proofreading_provider_domain(domain):
         allowed_fields = _PROOFREADING_PROVIDER_PAYLOAD_FIELDS
@@ -765,6 +782,13 @@ def validate_provider_setting_payload(
                 f"provider_settings.{domain}.{key}",
                 minimum=0,
                 maximum=100,
+            )
+        elif key == "analyzeConcurrency":
+            _integer(
+                value,
+                f"provider_settings.{domain}.{key}",
+                minimum=1,
+                maximum=8,
             )
         elif key in {"minImageSize", "imageMaxSize"}:
             _integer(

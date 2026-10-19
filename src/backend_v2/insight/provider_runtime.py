@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     )
 
 _CREDENTIAL_FIELDS = {"api_key", "credential_version_id"}
+# 供应商可选参数：缺失时沿用引擎默认值，历史冻结配置无需回填。
+_OPTIONAL_FIELDS = {"analyze_concurrency"}
 
 
 def _section(
@@ -30,7 +32,7 @@ def _section(
         raise InsightConflict(f"frozen Insight {name} config must be an object")
     actual = set(value)
     missing = required_fields - actual
-    unknown = actual - required_fields - _CREDENTIAL_FIELDS
+    unknown = actual - required_fields - _CREDENTIAL_FIELDS - _OPTIONAL_FIELDS
     if missing or unknown:
         details: list[str] = []
         if missing:
@@ -84,6 +86,17 @@ def _parse_config(factory, payload: dict[str, Any], *, name: str):
         return factory.from_dict(payload)
     except (TypeError, ValueError) as exc:
         raise InsightConflict(f"frozen Insight {name} config is invalid") from exc
+
+
+def frozen_analyze_concurrency(config: Mapping[str, Any]) -> int | None:
+    """VLM 批量内并发分片数（供应商设置），未配置时返回 None。"""
+    vlm = config.get("vlm")
+    if not isinstance(vlm, Mapping):
+        return None
+    raw = vlm.get("analyze_concurrency")
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        return None
+    return min(8, raw)
 
 
 def frozen_vlm_config(config: Mapping[str, Any]) -> VLMConfig:

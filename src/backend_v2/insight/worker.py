@@ -18,7 +18,10 @@ from src.backend_v2.insight.page_schema import (
     normalize_model_page,
     normalize_page_analysis,
 )
-from src.backend_v2.insight.provider_runtime import frozen_vlm_config
+from src.backend_v2.insight.provider_runtime import (
+    frozen_analyze_concurrency,
+    frozen_vlm_config,
+)
 from src.backend_v2.insight.repository import InsightConflict, InsightRepository
 from src.backend_v2.jobs.repository import (
     AttemptFence,
@@ -196,7 +199,11 @@ class ProviderInsightAlgorithms:
                 return {"pages": [valid_pages[number] for number in chunk_pages if number in valid_pages]}
 
         pages_list = list(page_numbers)
-        chunks = _split_batch(pages_list, list(image_bytes), _batch_concurrency())
+        chunks = _split_batch(
+            pages_list,
+            list(image_bytes),
+            _analyze_concurrency(config),
+        )
 
         async def execute() -> Mapping[str, Any]:
             if len(chunks) == 1:
@@ -223,8 +230,16 @@ class ProviderInsightAlgorithms:
         return asyncio.run(execute())
 
 
+def _analyze_concurrency(config: Mapping[str, Any]) -> int:
+    """VLM 批量内并发分片数：供应商设置优先，环境变量兜底，最后默认 3。"""
+    configured = frozen_analyze_concurrency(config)
+    if configured is not None:
+        return configured
+    return _batch_concurrency()
+
+
 def _batch_concurrency() -> int:
-    """VLM 批量内并发分片数（环境变量 INSIGHT_ANALYZE_PARALLEL，默认 3）。"""
+    """环境变量 INSIGHT_ANALYZE_PARALLEL 提供的并发兜底（默认 3，范围 1..8）。"""
     raw = os.environ.get("INSIGHT_ANALYZE_PARALLEL", "").strip()
     try:
         value = int(raw) if raw else 3
