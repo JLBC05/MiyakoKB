@@ -3856,6 +3856,15 @@ class InsightDerivedRepository:
                                 if it_type and str(it_type).strip():
                                     raw_stats[cat][name]["types"].append(str(it_type).strip())
 
+            # 2.1 词频按页去重：同一页可能因局部重跑（多个 run 的已发布结果同时被喂入）而出现多次，
+            #     词频必须按「出现页数」统计，而不是按分析行数累加，否则重跑后频次会成倍虚高。
+            for stats in raw_stats.values():
+                for info in stats.values():
+                    known_pages = [pn for pn in info["pages"] if pn not in (None, "", 0)]
+                    if known_pages:
+                        info["pages"] = sorted(set(known_pages))
+                        info["count"] = len(info["pages"])
+
             # 3. 解析 alias_seed_config
             seed = dict(alias_seed_config or {})
             global_terms = seed.get("global_terms", {})
@@ -4309,6 +4318,12 @@ class InsightDerivedRepository:
                 if "original_names" not in ent:
                     ent["original_names"] = [ent["canonical_name"]] + ent.get("aliases", [])
                 ent["original_names"] = sorted(list(set(ent["original_names"])))
+                # 词频语义：按页去重后的出现页数。历史产物按分析行累加造成的虚高（同一页被多个
+                # run 的已发布结果重复喂入）在此一并纠正，保证 total_frequency == len(pages)。
+                known_pages = [p for p in ent.get("pages", []) if p not in (None, "", 0)]
+                if known_pages:
+                    ent["pages"] = sorted(set(known_pages))
+                    ent["total_frequency"] = len(ent["pages"])
 
             final_payload = {
                 "canonical_entities": final_canonical_entities,

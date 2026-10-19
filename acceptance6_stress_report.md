@@ -162,11 +162,32 @@
 | 缺陷 | 机制 | 处置 |
 | --- | --- | --- |
 | 向量索引静默按 0 条事件发布 | `_layer_zero_event_records(frozen)` 只查本 run；重试 run 没有 `analysis_layer_results` → `vector_generations.event_count=0`、`eventTotal=0`，而 `coverage` 因 `expected_total = 页数 + 0` 仍算出 1.0 被当作成功发布；`qa/status.coverage.events` 随之从 152 掉到 0，global 问答失去事件召回 | **已修**：源 run 取不到 layer-0 时，回退到本书最近一次产出 layer-0 的 run（按 `analysis_runs.created_at` 倒序找首个有结果者）；`source_run_id=None` 的旧语义保持不变 |
-| 对齐产物 `total_frequency` 翻倍 | 归并统计按 `analysis_page_results` 行累加，而 `pages` 已按页去重（虎杖悠仁 `total_frequency` 146 → 292，`pages` 仍 146；实体总数 252/别名 279/合并 34 均未变） | **待定**：属展示语义选择（按行累计 vs 按页去重），需产品决策（见 §6 发现 #25） |
+| 对齐产物 `total_frequency` 翻倍 | 归并统计按 `analysis_page_results` 行累加，而 `pages` 已按页去重（虎杖悠仁 `total_frequency` 146 → 292，`pages` 仍 146；实体总数 252/别名 279/合并 34 均未变）。复现时 rev4 达 **448**（4 轮 × 112 页）vs 去重页数 156，**252/257 实体频次与页数不一致** | **已修（2026-10-19，用户拍板「按页去重」）**：见 §4.7 |
 
 离线验证（`tmp_verify_vector_events.py`，零 token）：原始 run `bf374dbe` 自身有 layer → 152 条事件；重试 run `43bf699e` 自身无 layer → 回退后 152 条；不存在的 run → 同样回退 152 条；`source_run_id=None` → 保持 0 条。`python -m compileall -q src/backend_v2/insight/derived.py` exit 0；`tests_backend/v2/test_stage5_insight.py` = **4 failed / 148 passed**（181s；本轮修 `repository.py` 后由 5 降到 4，HEAD 基线为 5），失败项均为既有期望漂移，无新增回归。
 
-遗留：已发布的那一代向量（generation 2）目前仍是 `event_count=0`，需在网关恢复后重跑 vectors 步骤才会被改写；在网关全故障期间（`/v1/models` 持续 502）无法在线复验。
+遗留（已于 2026-10-19 网关恢复后消解）：已发布的那一代向量（generation 2）当时仍是 `event_count=0`，需重跑 vectors 步骤才会被改写——见 §5.4，重跑后 published generation 3 的 `coverage = {events: 160, pages: 234}`。
+
+### 4.7 `total_frequency` 改为「按页去重」（2026-10-19，用户拍板）
+
+**语义决策**：`total_frequency` 定义为**去重后的出现页数**（与 `pages` 同源同义），而非跨 run/跨修订的累加计数。理由：产物是「实体 → 出现页集合」的事实快照，同一页被重析两次不应等于出现两次；跨修订累加使数值随重跑次数漂移，无法作为频次排序依据（前端图谱、Top 榜、问答上下文都读它）。
+
+**实现（两处，均 `src/backend_v2/insight/derived.py`）**
+1. 统计累积循环之后新增「按页去重」块（约 3858 行）：`raw_stats` 的每个 `info` 先过滤掉 `None/""/0` 的非法页号，再 `info["pages"] = sorted(set(known_pages))`、`info["count"] = len(info["pages"])`；
+2. 最终归一化循环（约 4312–4326 行、`final_payload` 组装前）再按同样规则重算一次：`known_pages` 过滤 → `ent["pages"] = sorted(set(known_pages))`、`ent["total_frequency"] = len(ent["pages"])`。**这一步是必需的**——`align_entities` 会以**已激活产物为基底**做增量归并（`existing_canonical_entities`，derived.py:3788-3799），历史产物里被撑大的 `total_frequency` 只有在这里才能被纠正。
+
+**验证（重建对齐产物 + 复跑分析器）**
+| 项 | 修复前（rev4） | 修复后（rev5） |
+| --- | --- | --- |
+| `total_frequency` ≠ 去重页数的实体 | **252 / 257** | **0 / 257** |
+| 虎杖悠仁 | 448（页 156） | **156**（页 156） |
+| 伏黑惠 / 钉崎野蔷薇 / 五条悟 / 两面宿傩 | 273 / 132 / 130 / 117 | **123 / 60 / 58 / 53** |
+| 产物状态 | degraded | **ready**（rev5） |
+
+分析器 `verify_acceptance6_alignment.py` 相应新增 [7] 不变量检查（`total_frequency == len(pages)` 全量比对）与 `run_id` 缺失时的回退（见发现 #26）。
+
+**顺带确证（发现 #27）**：产物 `status` 由 `_publication_status`（derived.py:6650-6658）决定——`frozen/current` 任一侧的 `source_run_status == "completed_with_errors"` 即记 `degraded`。故手动重建的 entity_alignment 转 **ready**，而 compressed_context/overviews 仍 `degraded`：它们的 layer 结果来自那个含失败页的旧 run，**需重建才会转 ready**。
+
 
 ## 5. 阶段4：下游验证（已填）
 
@@ -189,7 +210,21 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 - **两个阻断性缺陷（已修）**：① `retry.py:660` 的 `job_plugin_snapshots` 在插件域清理时被误删 import → `NameError` 直接 500；② `src/backend_v2/insight/routes.py:475` 的 `LOGGER` 既未 import logging 也未定义。修复后 `retry-failed` 正常受理（job `091d72b7-241c-4f61-99d2-0f98668f766f`，20 项 = 10 个失败页 + 5 个失败衍生项 + 5 个被取消衍生项，`_reuse_book_results` 复用已发布页）。
 - **重试通道改造**：`src/shared/openai_execution.py` 的业务重试由固定 `sleep(1)` 改为指数退避 `_business_retry_delay(attempt)`（1/2/4…上限 16s，±20% 抖动，`OPENAI_COMPATIBLE_RETRY_BASE_SECONDS`/`_CAP_SECONDS` 可调），日志可直接观测：`模型服务暂时不可用（HTTP 502）｜1.4 秒后重试｜第 1/3 次重试`。
 - **本次结果**：重跑窗口内旧网关再次进入 502 全故障（00:20–00:23 连续 44 次 502、0 次成功），10 个页面项再次全失败（错误全为 `INSIGHT_BATCH_FAILED | API 错误 502: `），5 个衍生项在退避重试中 → **产物仍未发布**。
-- **结论**：局部重跑链路与退避重试**已验证可用**（不再需要整轮重跑），本次发布失败的唯一原因是上游网关可用性；待网关恢复后再次 `retry-failed` 即可补齐概览/总结与时间线降级。
+- **结论**：局部重跑链路与退避重试**已验证可用**（不再需要整轮重跑），本次发布失败的唯一原因是上游网关可用性。
+- **2026-10-19 补跑（网关恢复后，发现 #18/#19 关闭）**：`POST /api/v2/jobs/091d72b7-241c-4f61-99d2-0f98668f766f/retry-failed` → 新 job `8431eb87` / 新 run `2c9d40c2`，**20/20 项 completed、234/234 页成功、0 失败**（12:38→12:54，约 16 分钟）。产物发布：`compressed_context/default` rev1、`overview/no_spoiler` rev1（293 字）、`overview/story_summary` rev1（535 字）、`entity_alignment` rev4→rev5；时间线从 `mode=simple / fallback_reason="API 错误 502:"` 变为 **`mode=enhanced`**；`qa/status` generation 3、`coverage={events:160, pages:234}`（事件数 0 → 160 正是发现 #24 的修复生效）。详见 §5.4。
+
+### 5.4 完整复验（2026-10-19，三脚本全绿）
+
+样本：旧 book `4c33cc46` 迁移出的 `29011e06-5c43-41ab-905d-42891e2955de`，已发布 234 页（前 10 话）+ 全部衍生。
+
+| 脚本 | 结果 |
+| --- | --- |
+| `verify_acceptance6_alignment.py` | 257 实体 / 286 别名 / 36 条归并日志；characters 35、items 35、locations 60、abilities 23、concepts 104；**频次不变量 0/257 违例**；章覆盖恢复（虎杖悠仁 10/10、伏黑惠 10/10、钉崎野蔷薇 8/10、五条悟 7/10、两面宿傩 7/10） |
+| `verify_acceptance6_downstream.py` | 图谱 **257 节点 / 1339 边 / 0 孤立**（类目分布与对齐一致；度 Top 与频次一致：虎杖悠仁 195、伏黑惠 167、五条悟 94、钉崎野蔷薇 91、两面宿傩 71；边权 {1:930, 2:184, 3:73, 4:48, 5:31}）；时间线 **events=5 / mode=enhanced**、人物条目 6、页覆盖 25/2998（范围 1–234）；概览 no_spoiler 293 字、story_summary 535 字（**均不再 404**，status=degraded 原因见发现 #27）；`qa/status` available=True、generation=3、coverage `{events:160, pages:234}` |
+| `verify_acceptance6_qa.py`（SSE，`--mode exact`） | 问「虎杖悠仁为什么能压制宿傩？」：匹配实体 1（虎杖悠仁）、**引用 7 条**（带 pageNumber + chapterOrdinal）、11 chunks / 12.1s；答案分「事实依据 / 资料推断」并显式标注证据不足项（容器体质成因资料未说明） |
+
+**同时完成的回归验证**：`tests_backend/v2/test_stage5_insight.py` = **4 failed / 148 passed**（178s，与改动前基线一致，无新增回归；4 条失败为既有期望漂移，明细见 `tmp_pytest_insight_dedupe.txt`）。
+
 
 ## 6. 发现与建议汇总（滚动）
 
@@ -219,11 +254,14 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 | 22 | 低 | 页面 schema 强校验（CORE_PAGE_FIELDS 含 warnings，无默认值，insight/page_schema.py:115-119）导致模型漏字段时整批 5 页重试（本 run 第 55-58 页同类现象后恢复） | 可缺省字段给出默认值，或把校验失败降级为单页重试 |
 | 23 | 中 | 清理插件域时遗漏「未定义全局名」：`jobs/retry.py:660` 的 `job_plugin_snapshots` 未导入、`insight/routes.py:475` 的 `LOGGER` 未定义 → `retry-failed` 直接 500（已修复，见 §5.3） | 把「未定义全局名」静态扫描（`tmp_scan_undefined.py`，基于 symtable）纳入 CI，防止"删域漏使用点"这类回归 |
 | 24 | 高 | **局部重跑（retry-failed）后向量索引静默按 0 条事件发布**：新 run 自身没有 layer 结果，`_layer_zero_event_records(frozen)` 只查 `frozen.source_run_id` → `eventTotal=0`，而 `coverage` 仍报 1.0；同一现象使 `qa/status` 的 `coverage.events` 从 152 掉到 0（`vector_generations.event_count`，derived.py:5622-5631）。实测：原始 run 45 条 layer-0 / 224 页，重试 run 0 条 | **已修复**：源 run 无 layer-0 时回退到本书最近产出 layer-0 的 run（实测重试 run 恢复 152 条事件）；后续应把「向量覆盖率为 1.0 但事件数 0」列为发布前校验项 |
-| 25 | 中 | 同一批页面被重跑后，对齐产物 `total_frequency` 翻倍（虎杖悠仁 146 → 292，`pages` 仍 146）：归并以已有产物为基底**累加**计数（`total_frequency += info["count"]`，derived.py:4186/4237/4254），而 `pages` 是去重并集 | 需要语义决策：增量范围（新增章节）才累加，同页重析应替换；建议按「页 → 计数」存证或按页集合重算，而非跨修订累加 |
+| 25 | 中 | 同一批页面被重跑后，对齐产物 `total_frequency` 翻倍（虎杖悠仁 146 → 292 → 448，`pages` 仍 146）：归并以已有产物为基底**累加**计数（`total_frequency += info["count"]`，derived.py:4186/4237/4254），而 `pages` 是去重并集 | **已实施（§4.7，按页去重）**：统计累积后与最终归一化各做一次 `pages=sorted(set(...))` + `total_frequency=len(pages)`（后者必需，才能纠正历史产物里被撑大的值）；复验 252/257 违例 → **0/257**。建议后续把「频次 == 去重页数」纳入产物发布前校验 |
+| 26 | 低 | 手动重建（`POST /books/<id>/entity-alignment/rebuild`）产出的对齐产物 `run_id` 为 **NULL**，于是所有依赖「产物 run → 页 → 章」映射的展示（分析器/前端章覆盖）失去依据 | 重建时写入源 run（或按 `pages → analysis_page_results` 反查）；下游读者应容忍 NULL 并回退到最近 run（分析器已如此实现） |
+| 27 | 低 | 产物 `status=degraded` 的判据是「source_run_status 含 `completed_with_errors`」（`_publication_status`，derived.py:6650-6658），且**不会因后来补跑成功而自动变绿**：`entity_alignment` 手动重建后转 ready，而 compressed_context/overviews 仍 degraded（其 layer 结果源自旧失败 run） | UI 应说明 degraded 的含义与消除方式（重建对应产物）；或让补跑成功后自动使下游衍生产物失效并排队重建 |
 
 ## 7. 附录
 - 监控手段：job_items 状态分布查询（tmp_job_status.py）、worker 日志（data-v2/logs/saber-worker.log）、守护脚本（tmp_guard_job.py，空闲 360s 触发 reconcile+continue）。
 - 验收脚本：verify_acceptance6_alignment.py / verify_acceptance6_downstream.py / verify_acceptance6_qa.py（用法：`python verify_acceptance6_qa.py <bookId> "问题" [--mode exact|global]`）。
 - 消歧分析脚本（§4 数据来源，均可重复运行、零 token）：tmp_judge_cache_stats.py（裁决缓存 true/false 分布与分类目统计）、tmp_candidate_rules_eval.py（候选规则 R0-R6 离线回放）、tmp_candidate_rules_eval2.py（确定性拒绝规则 P1-P4、弱字面证据分布）、**tmp_replay_rules.py（§4.5 整改后的规则回放：硬拒绝命中分布、误伤清单、已发布合并/别名回归）**、tmp_failed_and_artifacts.py（失败项与产物发布状态）、tmp_timeline_probe.py / tmp_timeline_probe2.py（时间线 mode/fallback_reason/人物条目）、**tmp_retry_failed.py（只重跑失败项）**、**tmp_scan_undefined.py（未定义全局名扫描）**。
+- 运维/诊断脚本（§5.3、§5.4 数据来源）：tmp_inspect_retry_job.py（打印 job 状态 + items 逐项错误 + 冻结配置 vlm/chat/embedding + 产物行，`python tmp_inspect_retry_job.py <jobId>`）、tmp_artifact_detail.py（产物全列 + payload 键 + warnings）、tmp_wait_job.py（轮询至终态，`<jobId> <maxMinutes>`）、tmp_guard_job.py（空闲 360s 自动 reconcile + continue）、tmp_verify_vector_events.py（向量事件回退专项验证）。
 - 落盘证据：tmp_alignment_jjk.txt、tmp_downstream_jjk.txt、tmp_qa_jjk.txt、tmp_judge_cache_stats.txt、tmp_candidate_rules_eval.txt、tmp_candidate_rules_eval2.txt、tmp_failed_and_artifacts.txt。
 - 基线数据：kurumi_ch1_5_accumulation_report.txt（243 实体/329 别名/90 归并/LLM 缓存命中 685 vs 调用 123）。
