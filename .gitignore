@@ -93,6 +93,8 @@ Thumbs.db
 docs/*
 !docs/storage-migrations.md
 !docs/storage-audit-report.md
+!docs/legacy-cleanup-report.md
+!docs/insight-cleanup-plan.md
 !docs/refactor/
 !docs/refactor/**
 !vue-frontend/docs/
