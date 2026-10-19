@@ -79,7 +79,7 @@
 - [x] 验收点 3：关系图谱轻量化、丝滑无卡顿，故事梗概合并打通实体。
 - [x] 验收点 4：问答引用消除冗余括号章节号，优先显示真实话数。
 - [x] 验收点 5：统一启动器拉起双进程稳定运行。
-- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#29）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
+- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#32）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；
@@ -135,6 +135,11 @@
   - *验证*：capabilities / `server-info` / `jobs` / `settings` / `qa/status` 全 200，`/api/v2/plugins` 与 `/api/v2/tasks` 404，`/api/v2/openapi.json` 0 个 plugin 路径，`vue-tsc` 23 个错误与基线一致（未新增）；提交 `557679b`、`8f334ae`。
   - *遗留*：`plugin_agent` 属「半删除域」——`JOB_KINDS` 仍含该 job 类型（`storage/schema.py:93`，与 OpenAPI job-kind 枚举、DB CHECK 一致）、设置域仍被接受（`settings/validation.py:42,97,120`）、前端设置类型仍列它；与 DB CHECK 兼容一起另案清理（不在本轮范围）。
 
+- **决策 12：`--role launcher` 默认走受管启动器，一键守护改为显式 `--unified-launcher`**（2026-10-19 修复）
+  - *背景*：见坑 14 / 发现 #32——裸 launcher（也是打包入口默认角色）被 `e843a4e` 从受管启动器改路由到一键守护，而后者不准备存储、以 `--test-mode` 拉起子进程：全新数据根上 API 报 `no such table: job_events`、启动器 epoch 与重启监护被绕过。
+  - *实现*：`src/backend_v2/dispatch.py` 恢复裸 `--role launcher` → `run_launcher`（受管：存储准入 + 签发 epoch + 重启监护），新增 `--unified-launcher` 选择 `run_unified_launcher`，`--legacy-launcher` 保留为兼容别名；同时给 `run_unified_launcher` 补 `StorageManager.prepare(initialize_database)` + `before_start()`，使一键守护在全新数据根也可用（`python run.py` 用户路径）。
+  - *验证*：受管启动器新根 health 200 + 76 表（epoch 由启动器签发）；一键启动器新根 health 200 + 76 表；`tests_backend/v2/test_role_boundaries.py` **19 passed**（此前 4 红：`condition did not become true before timeout`）。
+
 ---
 
 ## 5. 踩过的坑 / 阻塞
@@ -178,6 +183,21 @@
   - *现状*：**已修**（决策 11 / 报告 §5.7）——capabilities 200（`features={localProviders,webImport}`）、契约裁剪 36 块、`v2.ts` 重生成、前端产物重建（50 文件 / 2.4 MiB）；提交 `557679b`、`8f334ae`。
   - *自检命令*（删域后固定跑）：`python tmp_scan_undefined.py`（未定义全局名扫描）；`Select-String -Path openapi/v2.yaml -Pattern '^  /(plugins|plugin-agent)'`（应无输出）；重建产物后 grep 已删接口路径（本轮为 `release-models`、`/api/v2/plugins`、`features.plugins`，均应为 0）。排查 API 500 时先看 `data-v2/logs/saber-api-diagnostic.log`，`saber-api.log` 只有摘要。
 
+- **坑 12：退休域只拆了「落库」没拆「接缝」**
+  - *现象*：`tests_backend/v2/test_stage2_content.py` 累积 12 条红，全都在断言已不存在的行文（bubble 会落库并带修订、glossary 跨书拒绝、渲染状态 `not_rendered`、客户端命令体拒绝等），而 `POST/GET /pages/<page_id>/bubbles`、`/translation/bootstrap` 仍返回 200。
+  - *根因*（发现 #30）：bubble 持久化在提交 `12c37e6` 被改为 `existing_rows = []`（`src/backend_v2/content/repository.py`）；`translation_constraints` 只剩内存桩（`get_constraints` → `revision=1, payload={}`，表已在 3.5.3 退役）；工厂提示词只剩 7 个 insight 类型。但路由（`src/backend_v2/content/routes.py:517/521/529`）与契约（`openapi/v2.yaml:1556/1578`）没同步裁剪。
+  - *现状*：**已处置**（报告 §6 发现 #30）——删除 9 条陈旧用例、改写 2 条（bootstrap 期望 `payload=={}` + 7 个 insight 提示词；quick workspace 断言「章节存在但无页面/无译文行」）、新增 `test_published_page_bubbles_read_returns_empty_projection` 钉住现状；`test_stage2_content.py` **62 passed**。遗留：`/pages/<id>/bubbles` 这类「200 但什么都不落库」的接口仍在契约里，恢复还是裁剪需产品拍板。
+
+- **坑 13：Windows ACL 用例依赖 `mkdtemp` 的历史私有 DACL（顺带暴露真实产品缺陷）**
+  - *现象*：`tests_backend/v2/test_directory_fonts.py` 的 legacy-ACL 用例在本机红（`assert False`），但看代码像是「没动过」。
+  - *根因*（发现 #31）：用例假设 `tempfile.mkdtemp` 产出带 `SYSTEM/Administrators/OWNER` 三条 ACE 的受保护 DACL；本机（沙箱运行时）实测得到的是**继承型** ACL（`control=0x8404`，icacls 显示 `D:PAI(...)`）。同时产品 `_restore_legacy_font_inheritance`（`src/backend_v2/storage/font_files.py:146`）只接受 `D:P(` 前缀，遇到实机的 `D:PAI(` 直接放弃修复——**真实缺陷**：换台机器字体目录权限不再自愈。
+  - *现状*：**已修**——产品接受 `D:PAI(`/`D:P(` 两种前缀（ACE 集合仍须完全等于 legacy 三条，保守性不变）；测试新增 `_set_private_acl()` 显式用 icacls 复现 shared/private/自定义三种 ACL 现状；`test_directory_fonts.py` **15 passed**。
+
+- **坑 14：`--role launcher` 的默认实现被换成「不准备存储」的一键守护**
+  - *现象*：`tests_backend/v2/test_role_boundaries.py` 4 条用例长期红（`condition did not become true before timeout`）；手工用真启动器启动全新数据根时 `saber.sqlite3` 始终停在 4096 字节（0 表），API 报 `no such table: job_events`，`runtime/worker-ready.json` 里 `epochId=test-worker`。
+  - *根因*（发现 #32）：基线提交 `5777d36` 把裸 launcher 路由到受管启动器；提交 `e843a4e` 改为路由到 `run_unified_launcher`，该实现跳过存储准备并以 `--test-mode` 启动子进程（提交 `8857592` 又给 worker 的 test-mode 分支加了 epoch 写入，但没有 schema 时必然失败）。
+  - *现状*：**已修**（决策 12 / 报告 §6 发现 #32）——裸 `--role launcher` 回到受管启动器、一键守护改为 `--unified-launcher` 并补存储准备；`test_role_boundaries.py` **19 passed**。教训：改 CLI 默认路由时，必须确认「默认路径仍满足生产契约（存储准入 / epoch / 重启监护）」，并让两条路径都跑一遍「全新数据根 + health」冒烟。
+
 ---
 
 ## 6. 新会话先读
@@ -187,7 +207,7 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#29、裁决候选对离线回放数据、附录里的分析脚本清单）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#32、裁决候选对离线回放数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
 9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）。
 
@@ -221,5 +241,6 @@
 2. 如需接入其它第三方模型（非 Gemini），可在 `/settings` 页面中配置对应的 API Key 与自定义 Base URL。
 3. **对齐裁决第二阶段**（报告 §4.3-4.4、发现 #13-#17）：方案 4→1→5 已落地；方案 3（给裁决器注入频次/出现页/描述上下文）与方案 2（改提议通道 + 向量召回）待评估，量化基线已离线算出。
 4. ~~本轮构建的衍生缺口补跑（job `091d72b7`）~~：**已于 2026-10-19 完成**（补跑 job `8431eb87` 20/20 成功）——概览 no_spoiler/story_summary 已发布、时间线升级为 enhanced（人物条目 6）、向量事件数 160；仍需产品侧拍板的是**产物 `status=degraded` 的语义**：局部范围 run 的派生产物必然 degraded，且**重建不能转 ready**（真实分母是全书页数，见报告发现 #28 与坑 10），需在「保留语义 + UI 显示 coverage」与「按本次 run 的目标页判定状态」之间选择。**已于 2026-10-19 拍板为「按本次 run 的目标页判定状态」并落地**：`derived.py` 快照不再用全书页数改写状态、`repository.py` 的 `derived_status` 只看本次 run 的 `final_status`；重建后 compressed_context / overview(no_spoiler) / overview(story_summary) 均 rev3 `ready`（见报告 §5.6、决策 10、坑 10 解法）。
-5. global 问答召回异常（报告发现 #20）待复现定位（exact 模式已复验正常：7 条引用 + 结构化答案）。
+5. 问答召回异常（报告发现 #20）待复现定位（exact 模式已复验正常：7 条引用 + 结构化答案）。注意 `global` 模式已在决策 9 并入 `generic`（`generic` = 页面/向量检索 + 最多 2 条全库产物候选，重排只覆盖页面候选），复验请用 `--mode generic`。
 6. 旧全局裁决缓存 `llm_entity_judge_cache.json`（3013 对、父工作区）里可能残留被上游异常写成 `false` 的真合并对——已被新的按书缓存取代，建议直接归档删除，不要迁移进新缓存。
+7. **退休域的「接缝」是否裁剪**（报告发现 #30）：bubble 持久化已移除，但 `POST/GET /pages/<page_id>/bubbles`、`/pages/<page_id>/bubble-overrides`、`/translation/bootstrap` 仍在运行时路由与契约里（前者返回空投影、后者返回空 prompts/内存桩约束）。恢复实现还是从路由与 `openapi/v2.yaml` 一并裁掉，需要产品拍板。

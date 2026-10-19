@@ -1,6 +1,6 @@
 # MiyakoKB 验收点6 压测报告
 
-> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #29。
+> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #32。
 > 目标：生产环境大体量漫画（50+ 话）端到端压力测试与跨章节实体消歧观察。
 
 ## 1. 测试范围与环境
@@ -12,7 +12,7 @@
 | 运行栈 | `python run.py`（unified launcher）→ API(127.0.0.1:5000) + Worker，`--test-mode` |
 | 验收样本（最终采用） | job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5` / run `bf374dbe-d391-4676-99ec-ac485f139399`，scope=chapter 前 10 话（234 页 + 10 衍生），2026-10-18 22:34–23:48 |
 | 历史尝试 | job `804b8d94`（GLM-4.6V-Flash 免费层，21:09 取消，无产物发布）、job `b81c4a31`/run `87fa8174`（DeepSeek 调优，见 §3.4-3.6） |
-| VLM 上游（最终采用） | 自建网关 `http://8.216.18.224:8317/v1`，`gemini-3.8-flash-high`，5 页/批、批内分片并发 1、未压缩图 |
+| VLM 上游（最终采用） | 自建网关 `<内部网关>/v1`，`gemini-3.8-flash-high`，5 页/批、批内分片并发 1、未压缩图 |
 | 图片压缩 | 历史调优配置 imageMaxSize=1024（最长边，Pillow LANCZOS → JPEG q85，实测 190–279 KiB/页）；本轮采用配置为默认 0（不压缩） |
 | 基线参照 | FX久留美 387 页全量构建 46.4 分钟（≈7.2s/页）；DeepSeek 调优后吞吐 57 页/分钟，本轮旧网关约 10 页/分钟 |
 
@@ -85,9 +85,9 @@
 
 
 ### 3.5 VLM 供应商切换（DeepSeek）+ 对齐裁决器代码修复
-- **触发**：原供应商网关（http://8.216.18.224:8317/v1）持续 502，无法支撑全量构建；用户提供 DeepSeek 官方凭据。
+- **触发**：原供应商网关（<内部网关>/v1）持续 502，无法支撑全量构建；用户提供 DeepSeek 官方凭据。
 - **配置切换**（全程 API，无 UI）：`PUT /api/v2/settings/transactions` 单事务写入 ①credentialEdits（insight_vlm/deepseek，secret={api_key}）②providerSettings（insight_vlm/deepseek，modelName=deepseek-flash，customBaseUrl 留空走 manifest 默认，openaiOptions 沿用流式+JSON 模式）③settings.insight rev 6→7（vlm.provider=deepseek）。chat 段 `useSameAsVlm=true` → story_summary 等 chat 调用自动跟随；embedding（Cloudflare）/reranker（jina）不受影响。
-- **【代码修复·高】对齐语义裁决器硬编码网关**：原 `get_default_llm_judge()` 固定指向 http://8.216.18.224:8317/v1 + gemini-3.8-flash-high（与设置脱钩，切换供应商后裁决仍打旧网关；`judge_batch` 异常被吞 → 全部判定 False → 语义合并静默失效）。修复于 `src/backend_v2/insight/derived.py`：`LLMBatchJudge.__init__` 增加 provider 参数；`align_entities` 增加 `llm_judge` 参数；10 处调用点改为优先使用注入裁决器；生产调用点改为按 frozen chat 配置构造（`_alignment_judge`，解析失败回退默认）。→ 本次 JJK 构建是**带设置跟随裁决器的首次生产规模对齐**。
+- **【代码修复·高】对齐语义裁决器硬编码网关**：原 `get_default_llm_judge()` 固定指向 <内部网关>/v1 + gemini-3.8-flash-high（与设置脱钩，切换供应商后裁决仍打旧网关；`judge_batch` 异常被吞 → 全部判定 False → 语义合并静默失效）。修复于 `src/backend_v2/insight/derived.py`：`LLMBatchJudge.__init__` 增加 provider 参数；`align_entities` 增加 `llm_judge` 参数；10 处调用点改为优先使用注入裁决器；生产调用点改为按 frozen chat 配置构造（`_alignment_judge`，解析失败回退默认）。→ 本次 JJK 构建是**带设置跟随裁决器的首次生产规模对齐**。
 - **连接测试假阴性**：内置 `connection-tests/vlm` 对 DeepSeek 返回 "DeepSeek不支持 vision_ocr"（该测试复用 vision OCR 能力位，deepseek manifest 无此能力）→ 不能作为 VLM 通道判据；实际通道由直连探测与应用构建双重验证（见 3.4）。
 
 ### 3.6 调优记录（18:26–18:32，用户要求）
@@ -301,6 +301,9 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 | 27 | 低 | 产物 `status=degraded` 的判据是「source_run_status 含 `completed_with_errors`」（`_publication_status`，derived.py:6650-6658），且**不会因后来补跑成功而自动变绿**：`entity_alignment` 手动重建后转 ready，而 compressed_context/overviews 仍 degraded（其 layer 结果源自旧失败 run）（真实分母见 #28） | UI 应说明 degraded 的含义与消除方式（重建对应产物）；或让补跑成功后自动使下游衍生产物失效并排队重建。**已于 2026-10-19 按 #28 拆分语义：`degraded` 现仅表示本次 run 自身有失败（见 §5.6 / 决策 10）** |
 | 28 | 高 | **产物「永远 degraded」的真实根因：派生状态把「全书页数」当分母**。局部范围 run（前 10 话 234 页，全书 2998 页）即使自身目标 234/234 全部成功，仍被判为「有失败」：①`derived.py:3044-3051` 用全书页数算 `source_run_status`（234 < 2998）→ 快照写 `completed_with_errors` → 经 `_publication_status`（derived.py:6650-6658）令产物 degraded；②`repository.py:1944-1952` 的 `derived_status` 同样用 `success_count < 全书页数`。因此**手动重建不可能转 ready**：2026-10-19 对 compressed_context / overview(no_spoiler) / overview(story_summary) 三个端点各重建一次，新 rev2 仍为 degraded（源 run `2c9d40c2` 运行状态确为 `completed`、目标 234/234 成功、`analysis_heads` 全部指向它）。口径也不一致：`entity_alignment` 的生成点硬编码 `status="ready"`（derived.py:4354-4361），同一批产物里只有它「干净」。测试 `test_stage5_insight.py:5474-5495` 把 degraded 当作期望行为 | 二选一：①**保留语义**（degraded ＝ 派生输入只覆盖全书一部分，信息量为真），由 UI 说明并在产物上显式展示 coverage；②**拆分「失败」与「覆盖不全」**：状态只按本次 run 的目标页判定（干净 run → ready），另在快照/payload 记录 coverage 与 partial 标志，同时统一 `entity_alignment` 口径并改那条测试。若不动代码，唯一能让产物真变 ready 的路径是跑完整本 2998 页。**已修复（2026-10-19，用户选方案②，见 §5.6 / 决策 10）**：删除 `derived.py` 快照里「全书页数当分母」的改写（改为采信 run 自身 status），`repository.py` 的 `derived_status` 只按本次 run 的 `final_status`；重建三个产物均 rev3 `status=ready`；测试期望同步 3 处、删除 1 条过期断言。保留取舍：`entity_alignment` 独立重建仍硬编码 ready（其产物无 run 可判定） |
 | 29 | 高 | **已删插件域的残留使用点 + 陈旧前端产物**：`cleanup` 删除插件域后，①`src/backend_v2/api/app.py` 的 capabilities 载荷仍读 `RuntimeProfile.allow_plugins` → `AttributeError` → `GET /api/v2/system/capabilities` 自 2026-10-19 13:53 起持续 500（与 #23 同一族缺陷）；②`openapi/v2.yaml` 仍留 `/plugins`、`/plugin-agent` 共 13 条死路径与 19 个 `Plugin*` schema（后端已无路由）；③`src/backend_v2/static/vue` 旧产物（10-18 16:16）仍在调用已删的 `POST /api/v2/system/release-models` | **已修复（§5.7）**：capabilities 去掉 `features.plugins`（不复活已删域）、契约裁剪 36 块并重生成 `v2.ts`、前端产物重建；建议把「未定义全局名扫描（`tmp_scan_undefined.py`）+ 契约死引用扫描 + 前端产物重建」列为删域后的固定收尾动作，并在排障指引中注明「`saber-api.log` 只记状态码，栈帧在 `saber-api-diagnostic.log`」 |
+| 30 | 中 | **退休域只删了「持久化」没删「接缝」**：bubble 落库在提交 `12c37e6` 被改为 `existing_rows = []`（`src/backend_v2/content/repository.py`），但 `POST/GET /pages/<page_id>/bubbles` 与 `<page_id>/bubble-overrides` 路由（`src/backend_v2/content/routes.py:517/521/529`）与契约（`openapi/v2.yaml:1556/1578`）仍在；`/translation/bootstrap` 的 `prompts` 现为 `[]`（工厂提示词只剩 7 个 insight 类型）、`translation_constraints` 只有内存桩（`get_constraints` 返回 `revision=1, payload={}`，表已在 3.5.3 退役）。整套 `tests_backend/v2/test_stage2_content.py` 因此积了 12 条「按已删表断言」的陈旧期望 | **已实施**：删除 9 条陈旧用例（bubble 落库/修订、跨书 glossary 拒绝、渲染状态 `not_rendered→stale`、客户端命令体拒绝），改写 2 条（bootstrap 期望 `payload=={}` + 7 个 insight 提示词；quick workspace 断言「章节存在但无页面/无译文行」），新增钉住现状的 `test_published_page_bubbles_read_returns_empty_projection`；`test_stage2_content.py` **62 passed**。建议：删域时同步裁剪契约与路由（否则「接口 200 但什么都不落库」是长期误导），并把「测试断言的表是否仍在 metadata 里」纳入收尾检查 |
+| 31 | 低 | **Windows ACL 用例依赖 `tempfile.mkdtemp` 的历史私有 DACL**：`test_directory_fonts.py` 的两个用例（原 13 红在 fixture 里）断言 mkdtemp 产出带 SYSTEM/Administrators/OWNER 三 ACE 的受保护 DACL，但本机（沙箱运行时）实测 `mkdtemp`/`os.mkdir(0o700)` 得到的是**继承型** ACL（`GetNamedSecurityInfoW` → `control=0x8404`，icacls 显示 `D:PAI(...)`）；同时发现产品 `_restore_legacy_font_inheritance`（`src/backend_v2/storage/font_files.py:146`）只接受 `D:P(` 前缀，遇到实机的 `D:PAI(` 直接放弃修复（**真实缺陷**：换台机器字体目录权限就不再自愈） | **已实施**：测试新增 `_set_private_acl()` 显式用 icacls 复现两种现状（shared 目录的 legacy 三 ACE、private 目录的受保护 ACL、自定义 ACL 不被改写）；产品改为接受 `D:PAI(` 与 `D:P(` 两种前缀（ACE 集合仍必须**完全等于** legacy 三条，保守性不变）；`test_directory_fonts.py` **15 passed**。建议 CI 若用 Windows 跑测试，保留这类 ACL 用例但一律显式设置 ACL，不要依赖 mkdtemp 的历史行为 |
+| 32 | 高 | **启动器路由回归：默认 launcher 不再准备存储**（`saber_v2.py --role launcher`，也是打包入口默认角色）。基线提交 `5777d36` 把裸 launcher 路由到受管启动器（`run_launcher`：存储准入 + 启动器签发 epoch + 子进程重启监护）；提交 `e843a4e` 改为路由到一键守护 `run_unified_launcher`，而该实现**跳过存储准备**并以 `--test-mode` 拉起 API/Worker。后果：①全新数据根上 API 因 `no such table: job_events` 起不来（实测 `saber.sqlite3` 停在 4096 字节 / 0 表）；②生产启动器的 epoch 校验与重启监护被绕过（`runtime/worker-ready.json` 里出现 `epochId=test-worker`）；③`tests_backend/v2/test_role_boundaries.py` 4 条用例因此长期红（`condition did not become true before timeout`） | **已修复**：裸 `--role launcher` 恢复路由到受管启动器，新增 `--unified-launcher` 显式选择一键守护（`--legacy-launcher` 保留为兼容别名），`src/backend_v2/dispatch.py` 注明两条路径的职责；同时给 `run_unified_launcher` 补存储准备（`StorageManager.prepare(initialize_database)` + `before_start()`），使其在全新数据根也可用。复验：受管启动器新根 health 200 + **76 表**；一键启动器新根 health 200 + 76 表；`test_role_boundaries.py` **19 passed** |
 
 ## 7. 附录
 - 监控手段：job_items 状态分布查询（tmp_job_status.py）、worker 日志（data-v2/logs/saber-worker.log）、守护脚本（tmp_guard_job.py，空闲 360s 触发 reconcile+continue）。
