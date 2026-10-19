@@ -65,6 +65,7 @@ export const useInsightStore = defineStore('insight', () => {
         execution: { useStream: true, rpmLimit: 0, transportRetries: 3, businessRetries: 3 },
       },
       imageMaxSize: 0,
+      analyzeConcurrency: 3,
     },
     llm: {
       useSameAsVlm: false,
@@ -214,6 +215,7 @@ export const useInsightStore = defineStore('insight', () => {
       baseUrl: c.baseUrl ?? config.value.vlm.baseUrl,
       openaiOptions: c.openaiOptions ?? config.value.vlm.openaiOptions,
       imageMaxSize: c.imageMaxSize ?? config.value.vlm.imageMaxSize,
+      analyzeConcurrency: c.analyzeConcurrency ?? config.value.vlm.analyzeConcurrency ?? 3,
     }
     configManager.vlmManager.save(config.value.vlm.provider, config.value.vlm)
   }

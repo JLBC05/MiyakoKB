@@ -78,6 +78,7 @@ export interface StoreVlmConfig {
   baseUrl: string
   openaiOptions: StoreOpenAICompatibleOptions
   imageMaxSize: number
+  analyzeConcurrency: number
 }
 
 export interface StoreLlmConfig {

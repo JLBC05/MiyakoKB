@@ -52,6 +52,7 @@ export function useInsightConfigManager(providerConfigs: Ref<InsightProviderDraf
       baseUrl: config.baseUrl,
       openaiOptions: cloneOpenAiOptions(config.openaiOptions),
       imageMaxSize: config.imageMaxSize,
+      analyzeConcurrency: config.analyzeConcurrency,
     }),
     (config, draft) => {
       config.apiKey = draft.apiKey
@@ -59,6 +60,7 @@ export function useInsightConfigManager(providerConfigs: Ref<InsightProviderDraf
       config.baseUrl = draft.baseUrl
       config.openaiOptions = cloneOpenAiOptions(draft.openaiOptions)
       config.imageMaxSize = draft.imageMaxSize
+      config.analyzeConcurrency = draft.analyzeConcurrency ?? 3
     },
     provider => ({
       apiKey: '',
@@ -74,6 +76,7 @@ export function useInsightConfigManager(providerConfigs: Ref<InsightProviderDraf
         },
       },
       imageMaxSize: 0,
+      analyzeConcurrency: 3,
     })
   )
 

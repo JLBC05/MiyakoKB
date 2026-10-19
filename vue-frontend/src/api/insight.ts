@@ -253,8 +253,13 @@ const INSIGHT_PROVIDER_DOMAINS = {
 } as const
 type InsightProviderDomain =
   (typeof INSIGHT_PROVIDER_DOMAINS)[keyof typeof INSIGHT_PROVIDER_DOMAINS]
+const OPTIONAL_PROVIDER_PAYLOAD_FIELDS: Partial<
+  Record<InsightProviderDomain, readonly string[]>
+> = {
+  insight_vlm: ['analyzeConcurrency'],
+}
 const INSIGHT_PROVIDER_PAYLOAD_FIELDS: Record<InsightProviderDomain, readonly string[]> = {
-  insight_vlm: ['modelName', 'customBaseUrl', 'openaiOptions', 'imageMaxSize'],
+  insight_vlm: ['modelName', 'customBaseUrl', 'openaiOptions', 'imageMaxSize', 'analyzeConcurrency'],
   insight_chat: ['modelName', 'customBaseUrl', 'openaiOptions'],
   insight_embedding: [
     'modelName',
@@ -1164,6 +1169,27 @@ function requireProviderInteger(
   return value
 }
 
+function optionalProviderBoundedInteger(
+  payload: Record<string, unknown>,
+  key: string,
+  fallback: number,
+  label: string,
+  minimum: number,
+  maximum: number
+): number {
+  const value = payload[key]
+  if (value === undefined) return fallback
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < minimum ||
+    value > maximum
+  ) {
+    throw new Error(`${label}.${key} 格式无效`)
+  }
+  return value
+}
+
 function requireProviderNumber(
   payload: Record<string, unknown>,
   key: string,
@@ -1217,10 +1243,11 @@ function requireProviderPayload(
   domain: InsightProviderDomain,
   row: V2ProviderSettingEntry
 ): Record<string, unknown> {
-  if (
-    !isRecord(row.payload) ||
-    !hasExactKeys(row.payload, INSIGHT_PROVIDER_PAYLOAD_FIELDS[domain])
-  ) {
+  const optional = OPTIONAL_PROVIDER_PAYLOAD_FIELDS[domain] ?? []
+  const required = INSIGHT_PROVIDER_PAYLOAD_FIELDS[domain].filter(
+    field => !optional.includes(field)
+  )
+  if (!isRecord(row.payload) || !hasRequiredKeys(row.payload, required, optional)) {
     throw new Error(`后端 ${domain} provider 设置字段不完整`)
   }
   return row.payload
@@ -1249,6 +1276,7 @@ function defaultVlmDraft(provider: string): InsightVlmProviderDraft {
       },
     }),
     imageMaxSize: 0,
+    analyzeConcurrency: 3,
   }
 }
 
@@ -1312,6 +1340,14 @@ function readVlmDraft(row: V2ProviderSettingEntry): InsightVlmProviderDraft {
       requireOpenAiOptionsWire(payload, label)
     ),
     imageMaxSize: requireProviderInteger(payload, 'imageMaxSize', label),
+    analyzeConcurrency: optionalProviderBoundedInteger(
+      payload,
+      'analyzeConcurrency',
+      3,
+      label,
+      1,
+      8
+    ),
   }
 }
 
@@ -1467,6 +1503,18 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
   )
 }
 
+function hasRequiredKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[]
+): boolean {
+  const actual = Object.keys(value)
+  return (
+    actual.every(key => required.includes(key) || optional.includes(key)) &&
+    required.every(key => Object.prototype.hasOwnProperty.call(value, key))
+  )
+}
+
 function requireInsightAppPayload(value: unknown): InsightAppPayload {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('后端 Insight 设置格式无效')
@@ -1612,10 +1660,19 @@ function serializeVlmDraft(draft: InsightVlmProviderDraft, label: string): Recor
   const openaiOptions = serializeOpenAICompatibleOptionsForApi(draft.openaiOptions)
   requireOpenAiOptionsWire({ openaiOptions }, label)
   requireProviderInteger({ imageMaxSize: draft.imageMaxSize }, 'imageMaxSize', label)
+  optionalProviderBoundedInteger(
+    { analyzeConcurrency: draft.analyzeConcurrency },
+    'analyzeConcurrency',
+    3,
+    label,
+    1,
+    8
+  )
   return {
     ...providerCommonPayload(draft, label),
     openaiOptions,
     imageMaxSize: draft.imageMaxSize,
+    analyzeConcurrency: draft.analyzeConcurrency ?? 3,
   }
 }
 

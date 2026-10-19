@@ -52,6 +52,10 @@ watch(architecturePreset, preset => {
 const batchEstimate = computed(() => `每批次分析 ${pagesPerBatch.value || 5} 页`)
 const showCustomLayersEditor = computed(() => architecturePreset.value === 'custom')
 
+// 第 1 层的 units 表示「每组合并多少页」（自定义架构下生效，内置架构仍等于每批页数）。
+// 用户没有单独调整过它时，跟随每批页数一起变化；调整过就保留用户的值。
+const lastSyncedPagesPerBatch = ref(pagesPerBatch.value)
+
 const architectureDescription = computed(() => {
   if (architecturePreset.value === 'custom') return '完全自定义层级架构，灵活配置分析流程'
   return ARCHITECTURE_PRESETS[architecturePreset.value]?.description || '根据漫画类型选择合适的分析架构'
@@ -59,8 +63,15 @@ const architectureDescription = computed(() => {
 
 const previewLayers = computed(() => {
   if (architecturePreset.value === 'custom') return customLayers.value
-  return ARCHITECTURE_PRESETS[architecturePreset.value]?.layers || ARCHITECTURE_PRESETS['standard']!.layers
+  const preset =
+    ARCHITECTURE_PRESETS[architecturePreset.value]?.layers || ARCHITECTURE_PRESETS['standard']!.layers
+  return preset.map((layer, idx) => (idx === 0 ? { ...layer, units: pagesPerBatch.value } : layer))
 })
+
+function formatLayerUnits(layer: CustomLayer, idx: number): string {
+  if (layer.units <= 0) return ' - 汇总全部'
+  return idx === 0 ? ` - 每 ${layer.units} 页汇总` : ` - 每 ${layer.units} 个单元汇总`
+}
 
 function addCustomLayer(): void {
   const insertIdx = customLayers.value.length - 1
@@ -80,16 +91,16 @@ function updateCustomLayer(idx: number, field: keyof CustomLayer, value: string 
     layer.name = value
   } else if (field === 'units' && typeof value === 'number') {
     layer.units = value
-    if (idx === 0) pagesPerBatch.value = value
   } else if (field === 'align' && typeof value === 'boolean') {
     layer.align = value
   }
 }
 
 function onPagesPerBatchChange(): void {
-  if (customLayers.value.length > 0 && customLayers.value[0]) {
-    customLayers.value[0].units = pagesPerBatch.value
-  }
+  const layer = customLayers.value[0]
+  if (!layer) return
+  if (layer.units === lastSyncedPagesPerBatch.value) layer.units = pagesPerBatch.value
+  lastSyncedPagesPerBatch.value = pagesPerBatch.value
 }
 
 function canDeleteLayer(idx: number): boolean {
@@ -105,7 +116,9 @@ function canEditLayerUnits(idx: number): boolean {
 }
 
 function getLayerUnitsTitle(idx: number): string {
-  return idx === 0 ? '每批分析的页数' : '每组包含单元数（0=全部汇总）'
+  return idx === 0
+    ? '每组合并页数（0 或未调整时跟随每批页数，调大可以减少汇总请求次数）'
+    : '每组包含单元数（0=全部汇总）'
 }
 
 function buildDraftConfig(): BatchConfig {
@@ -165,7 +178,7 @@ useInsightSettingsDraft<BatchConfig>({
     </UiField>
 
     <div v-if="showCustomLayersEditor" class="batch-settings-tab__custom-layers">
-      <UiField variant="settings" label="自定义层级" hint="第一层固定为批量分析，最后一层固定为全书总结。中间可添加任意汇总层级。">
+      <UiField variant="settings" label="自定义层级" hint="第一层固定为批量分析，最后一层固定为全书总结。中间可添加任意汇总层级。第一层的数值是每组合并页数。">
         <div class="batch-settings-tab__custom-layer-list">
           <div
             v-for="(layer, idx) in customLayers"
@@ -227,7 +240,7 @@ useInsightSettingsDraft<BatchConfig>({
           class="batch-settings-tab__preview-layer"
         >
           <strong class="batch-settings-tab__preview-layer-title">第{{ idx + 1 }}层 - {{ layer.name }}</strong>
-          {{ layer.units > 0 ? ` - 每${layer.units}个单元汇总` : ' - 汇总全部' }}
+          {{ formatLayerUnits(layer, idx) }}
           <span v-if="layer.align" class="batch-settings-tab__align-badge">(按章节对齐)</span>
         </li>
       </ol>

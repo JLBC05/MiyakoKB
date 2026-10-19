@@ -35,6 +35,7 @@ const forceJsonOutput = ref(insightStore.config.vlm.openaiOptions.request.forceJ
 const extraBody = ref(insightStore.config.vlm.openaiOptions.request.extraBody)
 const useStream = ref(insightStore.config.vlm.openaiOptions.execution.useStream)
 const imageMaxSize = ref(insightStore.config.vlm.imageMaxSize ?? 0)
+const analyzeConcurrency = ref(insightStore.config.vlm.analyzeConcurrency ?? 3)
 
 const showBaseUrl = computed(() => provider.value === 'custom')
 const {
@@ -97,6 +98,7 @@ function buildDraftConfig(): StoreVlmConfig {
       },
     },
     imageMaxSize: imageMaxSize.value,
+    analyzeConcurrency: analyzeConcurrency.value,
   }
 }
 
@@ -113,6 +115,7 @@ function applyDraftConfig(config: StoreVlmConfig): void {
   extraBody.value = config.openaiOptions.request.extraBody
   useStream.value = config.openaiOptions.execution.useStream
   imageMaxSize.value = config.imageMaxSize ?? 0
+  analyzeConcurrency.value = config.analyzeConcurrency ?? 3
 }
 
 useInsightSettingsDraft<StoreVlmConfig>({
@@ -129,6 +132,7 @@ useInsightSettingsDraft<StoreVlmConfig>({
     extraBody,
     useStream,
     imageMaxSize,
+    analyzeConcurrency,
   ],
   buildDraft: buildDraftConfig,
   emitDraft: config => emit('update:config', config),
@@ -243,6 +247,20 @@ useInsightSettingsDraft<StoreVlmConfig>({
         input-id="insight-vlm-image-max-size"
         :min="0"
         :step="128"
+      />
+    </UiField>
+
+    <UiField
+      variant="settings"
+      label="批量并发分片"
+      hint="同一批次内并行发送的图片分片数（1-8），越大越快，但更容易触发供应商限流；默认 3"
+      control-id="insight-vlm-analyze-concurrency"
+    >
+      <UiNumberField
+        v-model="analyzeConcurrency"
+        input-id="insight-vlm-analyze-concurrency"
+        :min="1"
+        :max="8"
       />
     </UiField>
   </InsightSettingsPanel>
