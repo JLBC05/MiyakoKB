@@ -270,38 +270,6 @@ def _console_level(explicit: str | None) -> int:
     return level
 
 
-def set_backend_console_level(console_level: str | None) -> None:
-    """Update owned product-output handlers without changing log files."""
-
-    level = _console_level(console_level)
-    for handler in logging.getLogger().handlers:
-        if _owned(handler) and not isinstance(handler, logging.FileHandler):
-            handler.setLevel(level)
-
-
-def configure_product_handler(
-    handler: logging.Handler,
-    *,
-    role: str,
-    level: str | None,
-    colored: bool = False,
-) -> None:
-    """Apply the same product-log rules to console and desktop handlers."""
-
-    resolved = _console_level(level)
-    handler.setLevel(resolved)
-    for existing in list(handler.filters):
-        if isinstance(existing, ProductLogFilter):
-            handler.removeFilter(existing)
-    handler.addFilter(ProductLogFilter())
-    handler.setFormatter(
-        ProductLogFormatter(
-            role,
-            colored=colored,
-        )
-    )
-
-
 def _owned(handler: logging.Handler) -> bool:
     return bool(getattr(handler, _HANDLER_MARKER, False))
 

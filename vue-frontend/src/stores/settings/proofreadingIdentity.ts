@@ -10,7 +10,3 @@ export function isProofreadingRoundId(value: unknown): value is string {
 export function newProofreadingRoundId(): string {
   return createUuid()
 }
-
-export function proofreadingProviderDomain(roundId: string): string {
-  return `proofreading_${roundId}`
-}

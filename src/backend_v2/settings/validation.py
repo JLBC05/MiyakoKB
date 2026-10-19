@@ -28,7 +28,7 @@ from src.shared.ai_providers import (
     get_provider_manifest,
     provider_supports_capability,
 )
-from src.shared.paddleocr_vl import PADDLEOCR_VL_LANGUAGE_NAMES
+from src.shared.constants import PADDLEOCR_VL_LANGUAGE_NAMES
 
 
 APP_SETTING_DOMAINS = frozenset({

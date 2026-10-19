@@ -240,26 +240,3 @@ def validate_translation_constraints(payload: object) -> dict[str, Any]:
             "entries": _non_translate_entries(non_translate["entries"]),
         },
     }
-
-
-def with_glossary_delta(
-    payload: Mapping[str, Any],
-    delta: list[Mapping[str, Any]],
-) -> tuple[dict[str, Any], int]:
-    """Append non-conflicting text terms and return the normalized payload/count."""
-
-    result = validate_translation_constraints(deepcopy(dict(payload)))
-    glossary = result["glossary"]
-    existing = {
-        (entry["matchMode"], entry["source"])
-        for entry in glossary["entries"]
-    }
-    added = 0
-    for entry in _glossary_entries(list(delta)):
-        key = (entry["matchMode"], entry["source"])
-        if key in existing:
-            continue
-        glossary["entries"].append(entry)
-        existing.add(key)
-        added += 1
-    return validate_translation_constraints(result), added

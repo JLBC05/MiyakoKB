@@ -344,16 +344,6 @@ export function promoteQuickWorkspace(
   )
 }
 
-export function updateLastVisitedPage(
-  chapterId: string,
-  pageId: string,
-): Promise<V2ChapterNavigation> {
-  return apiClient.patch<V2ChapterNavigation>(
-    `${API_ROOT}/chapters/${encodeURIComponent(chapterId)}/last-visited-page`,
-    { pageId },
-  )
-}
-
 export function updateChapterSettingsMemory(
   chapterId: string,
   payload: Record<string, unknown>,
@@ -372,17 +362,5 @@ export async function getPageDocument(
   return apiClient.get<V2PageDocument>(
     `${API_ROOT}/pages/${encodeURIComponent(pageId)}/document`,
     { signal },
-  )
-}
-
-export async function mutatePageDocument(
-  pageId: string,
-  command: V2PageDocumentBatchMutation,
-  idempotencyKey: string,
-): Promise<V2PageDocumentMutationResponse> {
-  return apiClient.patch<V2PageDocumentMutationResponse>(
-    `${API_ROOT}/pages/${encodeURIComponent(pageId)}/document`,
-    command,
-    { headers: { 'Idempotency-Key': idempotencyKey } },
   )
 }

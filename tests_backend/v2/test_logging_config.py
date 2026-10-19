@@ -18,7 +18,6 @@ from src.backend_v2.logging_config import (
     ProductRotatingFileHandler,
     SecretSafeFormatter,
     configure_backend_logging,
-    set_backend_console_level,
 )
 from src.backend_v2.storage.schema import JOB_KINDS, OPERATION_KINDS
 from src.shared.user_logging import (
@@ -287,49 +286,6 @@ def test_api_request_logging_keeps_failures_visible(caplog) -> None:
     assert "接口请求失败｜GET /unavailable｜状态码 503" in (
         product_records[0].getMessage()
     )
-
-
-def test_console_level_can_change_without_disabling_detailed_file_logging(
-    tmp_path: Path,
-) -> None:
-    root = logging.getLogger()
-    original_handlers = list(root.handlers)
-    original_level = root.level
-    try:
-        configure_backend_logging(
-            role="api",
-            data_root=tmp_path,
-            console_level="INFO",
-        )
-        owned_handlers = [
-            handler
-            for handler in root.handlers
-            if getattr(handler, "_saber_v2_handler", False)
-        ]
-        console = next(
-            handler
-            for handler in owned_handlers
-            if not isinstance(handler, logging.FileHandler)
-        )
-        file_handlers = [
-            handler
-            for handler in owned_handlers
-            if isinstance(handler, logging.FileHandler)
-        ]
-
-        set_backend_console_level("WARNING")
-
-        assert console.level == logging.WARNING
-        assert {handler.level for handler in file_handlers} == {logging.DEBUG}
-    finally:
-        for handler in list(root.handlers):
-            if handler not in original_handlers:
-                root.removeHandler(handler)
-                handler.close()
-        for handler in original_handlers:
-            if handler not in root.handlers:
-                root.addHandler(handler)
-        root.setLevel(original_level)
 
 
 def test_api_request_logging_ignores_normal_stream_disconnects(caplog) -> None:

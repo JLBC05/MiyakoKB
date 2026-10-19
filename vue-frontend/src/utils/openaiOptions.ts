@@ -59,26 +59,6 @@ export interface OpenAiOptionsPatch {
   extraBody?: Record<string, unknown>
 }
 
-const OPENAI_OPTIONS_PATCH_FIELD_NAMES = [
-  'rpmLimit',
-  'transportRetries',
-  'businessRetries',
-  'forceJsonOutput',
-  'useStream',
-  'extraBody',
-] as const
-
-export function omitOpenAiOptionsPatchFields<T extends object>(
-  updates: T
-): Omit<T, keyof OpenAiOptionsPatch> {
-  const scopedUpdates = { ...updates } as Record<string, unknown>
-  for (const fieldName of OPENAI_OPTIONS_PATCH_FIELD_NAMES) {
-    delete scopedUpdates[fieldName]
-  }
-
-  return scopedUpdates as Omit<T, keyof OpenAiOptionsPatch>
-}
-
 export function applyOpenAiOptionsPatch(
   options: OpenAICompatibleOptions,
   updates: OpenAiOptionsPatch

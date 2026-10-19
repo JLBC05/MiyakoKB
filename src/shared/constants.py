@@ -2,6 +2,9 @@
 常量定义模块，用于存储应用程序中使用的各种常量
 """
 import os
+from types import MappingProxyType
+from typing import Final, Mapping
+
 from src.shared.prompt_defaults import get_prompt_factory_defaults
 from src.shared.text_style_defaults import (
     get_text_style_factory_defaults,
@@ -189,3 +192,30 @@ DEFAULT_TRANSLATION_MAX_RETRIES = 3  # 普通翻译默认重试次数
 # --- 超长图片处理 (Large Image Rearrange) ---
 LARGE_IMAGE_ENABLED = True  # 是否启用超长图片自动切割
 LARGE_IMAGE_TARGET_SIZE = 1536  # 切片目标尺寸（与检测器一致）
+
+# --- PaddleOCR-VL OCR 语言名（原 src/shared/paddleocr_vl.py） ---
+PADDLEOCR_VL_DEFAULT_LANGUAGE: Final = "japanese"
+PADDLEOCR_VL_LANGUAGE_NAMES: Final[Mapping[str, str]] = MappingProxyType({
+    "japanese": "日语",
+    "chinese": "简体中文",
+    "chinese_cht": "繁体中文",
+    "korean": "韩语",
+    "english": "英语",
+    "french": "法语",
+    "german": "德语",
+    "spanish": "西班牙语",
+    "italian": "意大利语",
+    "portuguese": "葡萄牙语",
+    "dutch": "荷兰语",
+    "polish": "波兰语",
+    "thai": "泰语",
+    "vietnamese": "越南语",
+    "indonesian": "印尼语",
+    "malay": "马来语",
+    "russian": "俄语",
+    "arabic": "阿拉伯语",
+    "hindi": "印地语",
+    "turkish": "土耳其语",
+    "greek": "希腊语",
+    "hebrew": "希伯来语",
+})

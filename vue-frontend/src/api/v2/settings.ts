@@ -19,7 +19,6 @@ export type V2SettingsTransactionResult = components['schemas']['SettingsTransac
 export type V2WorkflowPreferences = components['schemas']['WorkflowPreferences']
 export type V2ExportPreferences = components['schemas']['ExportPreferences']
 
-type V2FontList = components['schemas']['FontList']
 type V2ModelCatalogResponse = components['schemas']['ModelCatalogResponse']
 type V2PromptList = components['schemas']['PromptList']
 type V2DeletedResponse = components['schemas']['DeletedResponse']
@@ -47,22 +46,6 @@ export function saveV2SettingsTransaction(
 export function deleteV2Credential(credentialId: string): Promise<V2DeletedResponse> {
   return apiClient.delete<V2DeletedResponse>(
     `/api/v2/credentials/${encodeURIComponent(credentialId)}`,
-    { headers: { 'Idempotency-Key': newIdempotencyKey() } },
-  )
-}
-
-export async function listV2Fonts(): Promise<V2Font[]> {
-  const result = await apiClient.get<V2FontList>('/api/v2/fonts')
-  return result.items
-}
-
-export function uploadV2Font(file: File): Promise<V2Font> {
-  const form = new FormData()
-  form.append('file', file)
-  form.append('displayName', file.name.replace(/\.[^.]+$/, ''))
-  return apiClient.upload<V2Font>(
-    '/api/v2/fonts',
-    form,
     { headers: { 'Idempotency-Key': newIdempotencyKey() } },
   )
 }
@@ -137,14 +120,6 @@ export function updateV2WorkflowPreferences(
   return apiClient.patch<V2SettingEntry>(
     '/api/v2/settings/workflow-preferences',
     { payload, baseRevision },
-    { headers: { 'Idempotency-Key': newIdempotencyKey() } },
-  )
-}
-
-export function cleanV2TempFiles(): Promise<{ recovered: number }> {
-  return apiClient.post<{ recovered: number }>(
-    '/api/v2/maintenance/clean-temp',
-    undefined,
     { headers: { 'Idempotency-Key': newIdempotencyKey() } },
   )
 }

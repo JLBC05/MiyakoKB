@@ -6,9 +6,6 @@ export const DEFAULT_SINGLE_BUBBLE_PROMPT = promptDefaults.singleNormal
 export const DEFAULT_SINGLE_BUBBLE_JSON_PROMPT = promptDefaults.singleJson
 export const DEFAULT_TRANSLATE_PROMPT = promptDefaults.batchNormal
 export const DEFAULT_TRANSLATE_JSON_PROMPT = promptDefaults.batchJson
-export const DEFAULT_AI_VISION_OCR_JSON_PROMPT = promptDefaults.aiVisionOcrJson
-
-export const PADDLEOCR_VL_DEFAULT_LANGUAGE: PaddleOcrVlLanguage = 'japanese'
 
 export const PADDLEOCR_VL_LANG_MAP = {
   japanese: '日语',
@@ -39,24 +36,6 @@ export function isPaddleOcrVlLanguage(value: unknown): value is PaddleOcrVlLangu
   return typeof value === 'string' && Object.hasOwn(PADDLEOCR_VL_LANG_MAP, value)
 }
 
-export function getPaddleOcrVlPrompt(
-  sourceLanguage: PaddleOcrVlLanguage = PADDLEOCR_VL_DEFAULT_LANGUAGE,
-): string {
-  return `对图中的${PADDLEOCR_VL_LANG_MAP[sourceLanguage]}进行OCR:`
-}
-
-export function inferPaddleOcrVlPromptLanguage(
-  prompt: string,
-  fallback: PaddleOcrVlLanguage = PADDLEOCR_VL_DEFAULT_LANGUAGE,
-): PaddleOcrVlLanguage {
-  const normalizedPrompt = prompt.trim()
-  const matched = (Object.keys(PADDLEOCR_VL_LANG_MAP) as PaddleOcrVlLanguage[]).find(
-    language => normalizedPrompt === getPaddleOcrVlPrompt(language),
-  )
-  return matched ?? fallback
-}
-
 export const DEFAULT_HQ_TRANSLATE_PROMPT = promptDefaults.hqTranslation
-export const DEFAULT_PROOFREADING_PROMPT = promptDefaults.proofreading
+
 export const DEFAULT_AUTO_GLOSSARY_PROMPT = promptDefaults.autoGlossary
-export const DEFAULT_WEB_IMPORT_EXTRACTION_PROMPT = promptDefaults.webImportExtraction

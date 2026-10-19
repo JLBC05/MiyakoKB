@@ -190,14 +190,6 @@ def to_romanized_slug(
 
     return f"romanized_{pinyin_str}"
 
-def calculate_confidence(best_freq: int, other_freqs: list[int]) -> str:
-    if not other_freqs:
-        return "high"
-    second_best = max(other_freqs)
-    if best_freq >= 2 * second_best and (best_freq - second_best) >= 2:
-        return "high"
-    return "low"
-
 
 def calculate_char_overlap_ratio(str1: str, str2: str) -> float:
     """计算两个中文实体名称的字符重合度比例。
@@ -540,11 +532,6 @@ def can_merge_character_names(name1: str, name2: str) -> bool:
                 return True
 
     return False
-
-
-def is_character_name_alias(name1: str, name2: str) -> bool:
-    """向后兼容别名函数，委托给 can_merge_character_names。"""
-    return can_merge_character_names(name1, name2)
 
 
 def can_merge_ability_names(name1: str, name2: str) -> bool:

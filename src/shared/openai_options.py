@@ -240,28 +240,3 @@ def clone_openai_compatible_options(options: OpenAICompatibleOptions) -> OpenAIC
     if not isinstance(options, OpenAICompatibleOptions):
         raise TypeError("options 必须是 OpenAICompatibleOptions")
     return OpenAICompatibleOptions.from_dict(options.to_dict())
-
-
-def create_openai_compatible_options(
-    *,
-    force_json_output: bool = False,
-    temperature: Optional[float] = None,
-    extra_body: Optional[Mapping[str, Any]] = None,
-    use_stream: bool = False,
-    rpm_limit: int = 0,
-    transport_retries: int = DEFAULT_OPENAI_COMPATIBLE_TRANSPORT_RETRIES,
-    business_retries: int = 3,
-) -> OpenAICompatibleOptions:
-    return OpenAICompatibleOptions(
-        request=OpenAICompatibleRequestOptions(
-            force_json_output=force_json_output,
-            temperature=temperature,
-            extra_body={} if extra_body is None else extra_body,
-        ),
-        execution=OpenAICompatibleExecutionOptions(
-            use_stream=use_stream,
-            rpm_limit=rpm_limit,
-            transport_retries=transport_retries,
-            business_retries=business_retries,
-        ),
-    )

@@ -8,7 +8,10 @@ from src.shared.openai_execution import (
     OpenAICompatibleBusinessRetryableError,
     OpenAICompatibleSyncExecutor,
 )
-from src.shared.openai_options import create_openai_compatible_options
+from src.shared.openai_options import (
+    OpenAICompatibleExecutionOptions,
+    OpenAICompatibleOptions,
+)
 
 
 def test_shared_business_retry_does_not_hide_nested_memory_failure() -> None:
@@ -35,7 +38,9 @@ def test_shared_business_retry_does_not_hide_nested_memory_failure() -> None:
         api_key="key",
         model="model",
         messages=[{"role": "user", "content": "hello"}],
-        openai_options=create_openai_compatible_options(business_retries=3),
+        openai_options=OpenAICompatibleOptions(
+            execution=OpenAICompatibleExecutionOptions(business_retries=3)
+        ),
     )
     with pytest.raises(OpenAICompatibleBusinessRetryableError, match="解析失败"):
         executor.execute(

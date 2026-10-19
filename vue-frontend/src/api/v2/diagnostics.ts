@@ -36,10 +36,6 @@ export function fetchModels(
   })
 }
 
-export function testSakuraConnection(baseUrl?: string): Promise<V2ConnectionTestResult> {
-  return runV2ConnectionTest('sakura', { baseUrl, domain: 'translation' })
-}
-
 export function testBaiduOcrConnection(
   apiKey: string,
   secretKey: string
@@ -77,25 +73,5 @@ export function testAiTranslateConnection(
     baseUrl: params.baseUrl || undefined,
     domain: params.domain || 'translation',
     secret: { api_key: params.apiKey },
-  })
-}
-
-export function testBaiduTranslateConnection(
-  appId: string,
-  appKey: string
-): Promise<V2ConnectionTestResult> {
-  return runV2ConnectionTest('baidu_translate', {
-    domain: 'translation',
-    secret: { app_id: appId, app_key: appKey },
-  })
-}
-
-export function testYoudaoTranslateConnection(
-  appKey: string,
-  appSecret: string
-): Promise<V2ConnectionTestResult> {
-  return runV2ConnectionTest('youdao_translate', {
-    domain: 'translation',
-    secret: { app_key: appKey, app_secret: appSecret },
   })
 }

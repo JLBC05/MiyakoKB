@@ -79,13 +79,13 @@
 - [x] 验收点 3：关系图谱轻量化、丝滑无卡顿，故事梗概合并打通实体。
 - [x] 验收点 4：问答引用消除冗余括号章节号，优先显示真实话数。
 - [x] 验收点 5：统一启动器拉起双进程稳定运行。
-- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#38）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
+- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#39）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；**2026-10-19 追加：全书构建 69% 墙钟耗在逐对裁决的问题已定案并落地**（报告发现 #34 / 决策 14 / 坑 19）：超集预取 + 批量裁决（30 对/批、3 并发）、对齐拆为独立步骤 `insight_stage_entity_alignment`、每批进度写用户日志；
   2. ~~**衍生缺口补跑**~~：**已完成（2026-10-19）**。`POST /api/v2/jobs/<id>/retry-failed` 只重跑失败项（源 job `39c2c48f` → 重试 job `091d72b7` → 补跑 job `8431eb87`/run `2c9d40c2`，20/20 成功），概览 no_spoiler(293 字)/story_summary(535 字) 已发布、`entity_alignment` rev5 status=ready；发现 #18/#19 关闭；
   3. **排查 global 问答召回**：问"少年院"只返回第 1 话引用并答"证据不足"，而该场景在第 6-8 话（报告发现 #20）；
-  4. 清理收尾：`tests_backend` 失效 import 已清零（扫描脚本 `tmp_scan_tests.py`），后端全量 **947 passed / 0 failed / 0 error**（2026-10-19 深夜，含 E/D2 与收窄候选面共 10 条新增）；`vue-frontend` 六项门禁全部 0（vitest **88 files / 642 tests**、vue-tsc、eslint、stylelint、`lint:ui`、`lint:ui:audit`），生成类型与静态产物已与源码同步（见坑 16）；PySide6-Essentials 已从 requirements-cpu/gpu 删除；根目录临时脚本仍待归置（`tmp_*.py` 一律不入库）。
+  4. 清理收尾：`tests_backend` 失效 import 已清零（扫描脚本 `tmp_scan_tests.py`），后端全量 **946 passed / 0 failed / 0 error**（2026-10-19 深夜，P1 死代码清理删掉 1 条只测被删函数的用例后为 946，含 E/D2 与收窄候选面共 10 条新增）；`vue-frontend` 六项门禁全部 0（vitest **88 files / 642 tests**、vue-tsc、eslint、stylelint、`lint:ui`、`lint:ui:audit`），生成类型与静态产物已与源码同步（见坑 16；P1 删完 23 个前端导出后 `vite build` 产物字节未变，反证其早被 tree-shaking 排除）；PySide6-Essentials 已从 requirements-cpu/gpu 删除；根目录临时脚本仍待归置（`tmp_*.py` 一律不入库）。**P1 死代码清理已完成**（决策 17 / 报告发现 #39，22 文件 +57/−684）；**P2b/P3 等拍板**——剩余四个半死模块（`rendering.py` 1902 行、`config_models.py` 439 行、`ocr_types.py` 余 92 行、`translation_constraints.py` 242 行）的活符号只被测试与退役路由引用，删除须先下线 12 条退役路由并改契约。
   5. ~~**提速复测**~~：**已完成（2026-10-19 21:34）**。供应商级并发 `analyzeConcurrency=3` 写入 insight_vlm 供应商行（rev29→30）并确认进入作业冻结配置；久留美 387 页全书构建 job `c95406a7-66a4-466d-af31-ba03442d060c` / run `c3730509-3b35-424a-9753-8398561a57ec`（398 项，含新步骤 `insight_stage_entity_alignment`）**5048.7s（84.1 min）completed**，对照基线 9168.40s（152.8 min）＝ **1.82×**，少 68.7 min。分段：逐页分析 1658.3→1065.9s、第 1 层 777.5→714.6s、**实体对齐 6354s（未记账）→2783.9s（正式步骤）**、其余约持平（compressed_context 28→115s、timeline 23.8→43.3s 为同网关单次调用时延波动）。产出质量：实体 810（32/98/148/532）、别名 1213、归并 410（旧 500/646/147，全部 high、无 `None→None`）、频次=去重页数 810/810、金额日期概念 124 个 0 重复 ID、图谱 810 节点/5107 边/0 孤立、概览与时间线 ready、`qa/status` generation=2（events 238/pages 387）、问答 10.7s 带页引用。结论与下一杠杆见报告 §5.8 与发现 #37（超集预取把候选对放大 6.4×，对齐仍占 55%）。 同日深夜又按发现 #37 建议①**收窄了裁决候选面**（决策 16 / 报告 §5.9 / 发现 #38）：新增 `INSIGHT_JUDGE_TOP_K`（默认 16，`0` 关闭），线上库候选对 8,195 → 5,381，重建对齐步骤 **9.88s**（缓存全命中）且产物与未收窄版本逐项一致（810 实体 / 410 别名 / 410 归并，规则分布相同）。
 
 ---
@@ -165,6 +165,14 @@
   - *理由*：离线回放 8,613 条真实判词（1,364 判同）与 275 条 `llm_semantic_judge` 归并，得到「保留率 ↔ 真实归并召回」曲线：K=8 → 56.3%/96.3%、K=12 → 66.2%/98.1%、**K=16 → 73.8%/98.6%**、K=24 → 83.4%/99.5%、K=48 → 96.8%/100%。线上库用生产函数复算：旧口径 8,195 个无序对（有向 12,433）→ K=16 后 5,381（65.7%）；首建 4,238 → 3,442（81.2%）。选默认 16 的理由是「候选对 −26% 换 1.4% 召回损失」，需要保守可调 24/48，需要更快可调 12。前缀优先排序（包含 > 共同前缀≥2 > 重合度）实测更差（K=16 只保留 66.6% 对、丢的真合并没有更少），故弃用。
   - *验证*：新增 5 条用例（env 解析与夹紧、收窄后对数上限、确定性别名对在 K=1 下仍保留、硬拒绝对不进候选、`RecordingJudge` 集成断言「批量裁决收到的对 == 允许集合且主循环单对裁决全在允许集合内」），`test_stage5_insight.py` **158 passed**（原 153 + 5）。
   - *未做*：两遍走（干跑记录真实发问对 + 真跑）需拆解巨型归并循环，风险高于收益；给对齐单配便宜/无思考裁决模型属成本优化，留待后续。
+
+- **决策 17：死代码清理只删「零引用」符号，孤儿模块必须先用真实入口集复核**（2026-10-19 用户问「前后端确定全部代码都有用吗」→ 审计；批准「P1+P2 一起做」）
+  - *审计方法*：后端从 `saber_v2.py`/`run.py`/`scripts/` 做 AST import 可达性 + 780 个顶层符号的引用计数；前端对 `vue-frontend/src` 的 203 个文件做导出名反向引用扫描（区分「零引用」「仅测试引用」「仅本文件引用」），组件层（`components/ui` 21/21、`components/product` 22/22、`views` 9/9）全部真实引用。
+  - *做法*：后端删除 `src/core/ocr_types.py` 的 `OcrTextlineResult`/`create_ocr_result`/`create_ocr_textline_result`/`ocr_results_to_dicts`/`extract_texts_from_ocr_results`/`_polygon`/`_rgb`、`logging_config` 的 `set_backend_console_level`/`configure_product_handler`、`derived` 的 `calculate_confidence`/`is_character_name_alias`、`translation_constraints.with_glossary_delta`、`openai_options.create_openai_compatible_options`、孤儿测试夹具 `tests_backend/fake_provider.py`，并把 `src/shared/paddleocr_vl.py` 的语言名常量迁进 `src/shared/constants.py` 后整份删模块（`settings/validation.py` 改 import）；前端删除 23 个零引用导出（`api/insight.ts` 5 个 v1 残留函数 + 4 个随之无用的导入、`api/v2/content.ts` 2 个、`api/v2/diagnostics.ts` 3 个 OCR/翻译连通性测试、`api/v2/settings.ts` 3 个字体/临时文件接口、`config/aiProviders.ts` 1 个、`constants/prompts.ts` 6 个 OCR 提示词/语言常量、`defaults/textStyleDefaults.ts` 1 个、`stores/settings/proofreadingIdentity.ts` 1 个、`utils/openaiOptions.ts` 1 个）以及因此变成死代码的模块内私有常量。
+  - *理由*：这些符号**没有任何生产调用点**，保留只会让读者误以为存在对应功能（翻译/OCR 时代残留最典型）；而「仅测试引用」的导出（如 `mutatePageDocument`、`cleanV2TempFiles`、`parseReaderSettingsPayload`）**不删**——它们对应的后端路由/契约还在，删前端会与 P3「下线路由 + 删契约」脱节。
+  - *取舍与实证*：审计报出的两个「孤儿模块」经复核都是**活的**，一律保留——`src/backend_v2/storage/consistency.py` 被 CLI `scripts/check_v2_consistency.py` 使用（`test_stage1_platform.py::test_consistency_cli_is_directly_executable` 钉住），`src/backend_v2/standard_streams.py` 被入口 `saber_v2.py:14,16` 调用；`src/backend_v2/auth/bootstrap.py` 也保留，因为它是 public 部署**唯一**的首个管理员创建入口（`AuthRepository.create_admin` 只被它调用，无 setup 路由）→ 改为在文档补说明。
+  - *验证*：后端全量 **946 passed**（947 − 1：删掉的 `test_console_level_can_change_without_disabling_detailed_file_logging` 只在测被删函数）；前端 `vue-tsc` 0、`vitest` 88 files / **642 tests** 全绿、`eslint` 0 errors（20 warnings，与清理前一致）、`stylelint` 0、`lint:ui`/`--audit` 0、`vite build` 0——**构建产物 `src/backend_v2/static/vue` 字节未变**，反证这些导出早已被 tree-shaking 排除。
+  - *未做（P2b/P3，等拍板）*：`src/core/rendering.py`(1902 行)、`src/core/config_models.py`、`src/core/ocr_types.py` 的 `OcrResult`、`src/backend_v2/content/translation_constraints.py` 的删除都牵连 `mutate_page_document` 与 `PATCH /api/v2/pages/<id>/document` 路由、4 个渲染测试套件与契约，属破坏性 API 变更；12 条退役路由（`/pages/<id>/bubbles`、`/books/<id>/translation-constraints`、`/translation/bootstrap` 等）同理。
 
 ---
 
@@ -272,6 +280,11 @@
   - *现象*：只改 `prefetch_alignment_judgements` 的枚举、不管主循环，被收窄掉的对在批量缓存里没有条目，主循环 `judge_pair_sync` 便会**逐对发单请求**——看似省了对数，实则把发现 #34 修掉的「1,158 次单对调用」重新引回来，且这些请求不在预取进度日志里、外部完全看不见。
   - *解法*：把候选集算一次（`build_alignment_candidate_pairs`），预取直接用它，主循环通过 `judge_candidates` 集合 + `judge_same()` 闭包只对集合内对发问；用 `RecordingJudge` 断言「`batched` 与 `synced` 的每一对都在允许集合内」。
   - *附带教训*：`build_alignment_candidate_pairs` 返回的是**无序对去重**结果，所以「某词条的伙伴数」可以超过 K（它被很多别的词条选中），能保证的只有「每个词条最多**选出** K 个伙伴」——写断言时要按 out-degree 而非 in-degree，否则会写成 `max(partner_counts) <= K` 这种必然失败的用例（本轮真实踩到）。
+
+- **坑 24：扫死代码时入口集必须包含 CLI 脚本与打包入口，否则会把活模块判成孤儿**
+  - *现象*：第一轮可达性扫描只从 `src/` 内部相互 import 出发，把 `src/backend_v2/storage/consistency.py`（145 行、含 `ConsistencyChecker`）与 `src/backend_v2/standard_streams.py` 判成「孤儿模块」，准备删除。复核引用时才发现前者被 CLI `scripts/check_v2_consistency.py` 使用（并有 `test_stage1_platform.py` 的可执行性用例钉住），后者被入口 `saber_v2.py:14` 直接 import。
+  - *解法*：入口集必须至少包含 `saber_v2.py`、`run.py`、`scripts/*.py`、`.github/scripts/*`，以及 `app.spec` 的 hiddenimports/运行时钩子；前端同理要把 `tests/`（spec 与 property）单列一档，区分「零引用」与「仅测试引用」，后者随对应路由下线一起处理。
+  - *附带教训*：本仓库开启了 `core.autocrlf`，工作区文件是 CRLF 而 HEAD 是 LF；用 Python 脚本批量改写文件时 `read_text()` 会把 CRLF 归一成 LF，提交前要看 `git diff --stat` 是否出现整文件级改动（本轮 diff 干净，说明只是行尾归一，无实质污染）。
 
 
 ---

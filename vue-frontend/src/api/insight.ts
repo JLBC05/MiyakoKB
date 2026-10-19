@@ -31,17 +31,13 @@ import { readSseStream } from '@/api/sse'
 import { ApiClientError } from '@/api/client'
 import {
   createInsightAnalysisJob,
-  createInsightExport,
   createInsightNote,
   deleteInsightNote,
   getInsightBootstrap,
   getInsightOverview,
   getInsightNote,
-  getInsightPage,
   getInsightQaStatus,
   getInsightTimeline,
-  insightCurrentExportUrl,
-  insightPageExportUrl,
   insightQaUrl,
   listInsightNotes,
   listInsightOverviewTemplates,
@@ -423,39 +419,6 @@ export async function getAnalysisStatus(bookId: string): Promise<InsightAnalysis
 
 export function reanalyzePage(bookId: string, pageNum: number): Promise<AnalysisJobSubmission> {
   return startAnalysis(bookId, { mode: 'pages', pages: [pageNum] })
-}
-
-export function reanalyzeChapter(
-  bookId: string,
-  chapterId: string
-): Promise<AnalysisJobSubmission> {
-  return startAnalysis(bookId, { mode: 'chapters', chapters: [chapterId] })
-}
-
-export async function getPageData(bookId: string, pageNum: number): Promise<PageData> {
-  const page = await pageForNumber(bookId, pageNum)
-  if (!page) throw new Error('页面不存在')
-  const detail = await getInsightPage(page.pageId)
-  if (!detail.analysis) {
-    return {
-      analysis: {
-        analysisState: detail.analysisState,
-        page_num: pageNum,
-      },
-      sourceUrl: detail.sourceUrl,
-    }
-  }
-  return {
-    analysis: {
-      analysisState: detail.analysisState,
-      continuity_notes: detail.analysis.continuity_notes,
-      key_events: detail.analysis.key_events,
-      page_summary: detail.analysis.page_summary,
-      warnings: detail.analysis.warnings,
-      page_num: pageNum,
-    },
-    sourceUrl: detail.sourceUrl,
-  }
 }
 
 export async function getInsightChapters(bookId: string): Promise<ChapterInfo[]> {
@@ -2041,23 +2004,4 @@ export async function importPromptsLibrary(
   return saved
     .filter(prompt => !prompt.isFactoryDefault && isInsightPromptType(prompt.type))
     .map(savedPrompt)
-}
-
-export async function exportAnalysis(bookId: string): Promise<string> {
-  const accepted = await createInsightExport(bookId)
-  return accepted.jobIds[0]
-}
-
-export async function downloadPageAnalysis(bookId: string, pageNum: number): Promise<Blob> {
-  const page = await pageForNumber(bookId, pageNum)
-  if (!page) throw new Error('页面不存在')
-  const response = await fetch(insightPageExportUrl(page.pageId, 'markdown'))
-  if (!response.ok) throw new Error(`导出失败: HTTP ${response.status}`)
-  return response.blob()
-}
-
-export async function downloadCurrentOverview(bookId: string, template: string): Promise<Blob> {
-  const response = await fetch(insightCurrentExportUrl(bookId, template, 'markdown'))
-  if (!response.ok) throw new Error(`导出失败: HTTP ${response.status}`)
-  return response.blob()
 }
