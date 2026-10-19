@@ -89,14 +89,18 @@ def _render_vertical_bbox(text: str, font_path: str, font_size: int = 48, start_
 
 
 class VerticalPunctuationRenderingTests(unittest.TestCase):
+    # Only freely licensed fonts ship with the repository (GPL/OFL); the former
+    # proprietary samples (msyh.ttc / Arial_Unicode.ttf) were removed with the
+    # font licence cleanup, so the vertical layout assertions now run against two
+    # bundled CJK-capable free fonts instead.
     FONTS = (
-        os.path.join("src", "backend_v2", "resources", "fonts", "msyh.ttc"),
+        os.path.join("src", "backend_v2", "resources", "fonts", "思源黑体SourceHanSansK-Bold.TTF"),
         os.path.join(
             "src",
             "backend_v2",
             "resources",
             "fonts",
-            "Arial_Unicode.ttf",
+            "ChisugaShotai_Regular0.2.12.1.ttf",
         ),
     )
 

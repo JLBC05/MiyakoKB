@@ -219,9 +219,16 @@
   - *正确方法*（本轮新建两个只读脚本）：**三维对照**——①`schema.py` 的 `metadata.tables` 定义（75 表）；②`src/**/*.py` + `tests_backend/**/*.py` 里对表标识符的引用（含字符串字面量）；③线上库逐表 `COUNT(*)`。三者交叉后，「只被 `schema.py` 引用的悬空表」只有 4 张（`operation_asset_inputs`、`operation_credential_snapshots`、`operation_plugin_snapshots`、`studio_message_assets`），而 plugin 集群与 durable-operations 残留是按**域**成簇 0 行。
   - *结论*：**发布前不删**——删除需要一次 `3.5.4` 迁移（新冻结 SQL + convert/validate + registry + 测试版本号）并改动仍在读这些表的活代码（`jobs/retry.py` 读 `job_plugin_snapshots`；`jobs/repository.py`、`storage/epochs.py`、`content/repository.py`、`auth/authorization.py` 读 `operations`），收益为 0 而跨安装存在数据丢失风险。已登记为下一版清理项（清理报告 §10 第 1 条）。
 
+- **坑 18：删随包资源（字体）必须连带更新「按文件名枚举资源」的测试夹具，且必须重跑后端全量**
+  - *现象*：字体授权清理提交 `b277e5e` 删掉 24 款专有字体后，只同步了 `ALGER.TTF` 的两处用例；`tests_backend/test_vertical_punctuation_rendering.py` 的 `FONTS` 元组仍写死 `msyh.ttc` / `Arial_Unicode.ttf` → 后端全量 **37 failed**（35 条来自该模块的 `subTest(font=...)`，2 条是本地给 `PYTHONIOENCODING=utf-8` 导致的 `test_role_boundaries` 假红），而当时只跑了受影响的定向子集，没跑全量，所以直到发布前复验才暴露。
+  - *根因*：`FONTS` 是硬编码文件名列表，不是「扫描 `resources/fonts` 目录」；产品侧 `src/core/rendering.py` 仍被 `src/backend_v2/content/repository.py:2054`（`calculate_auto_font_size`）使用，测试因此必须保留而不是删除。
+  - *现状*：**已修**——`FONTS` 改为两款随包自由字体（`思源黑体SourceHanSansK-Bold.TTF`、`ChisugaShotai_Regular0.2.12.1.ttf`），模块 **14 passed / 45 subtests passed**。
+  - *教训*：①删资源后必须跑一次**后端全量**（`python -m pytest tests_backend -q`），定向子集会漏；②**不要**给全量套件设 `PYTHONIOENCODING=utf-8`——`_clean_role_environment()` 会把它继承给子进程，而 `_run_probe`（`tests_backend/v2/test_role_boundaries.py`）以 locale 解码，立刻产生两条假红。
+
 ---
 
 ## 6. 新会话先读
+
 1. `AGENTS.md`：核心数据库脚本防手写约束与行为规范。
 2. `PROGRESS.md`：重构完整演进历史与各模块设计细节。
 3. `run.py` & `src/backend_v2/launcher/unified_launcher.py`：服务启动与进程架构。
