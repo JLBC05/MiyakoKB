@@ -55,6 +55,9 @@ from src.backend_v2.insight.qa import (
     QAConflict,
     TransientRequestRepository,
     citations_for,
+    entity_page_candidates,
+    page_locations,
+    retrieval_diagnostics,
     select_candidates,
     validate_retrieval_candidates,
 )
@@ -65,6 +68,7 @@ from src.shared.user_logging import (
     log_step_failed,
     log_step_finished,
     log_step_started,
+    user_log,
     user_log_context,
 )
 from src.backend_v2.public_policy import PublicUserPolicyAccess
@@ -445,38 +449,16 @@ def create_insight_blueprint(
                     threshold=handle.options["threshold"],
                     top_k=handle.options["topK"] * 4,
                 )
-                config: Mapping[str, Any] = {}
-                if candidates:
-                    # 通用模式：全库材料（type=global）不参与重排，也不占页面候选配额，
-                    # 否则重排会把它挤出 topK，问答就失去了全局脉络。
-                    global_candidates = [
-                        value for value in candidates if value["type"] == "global"
-                    ]
-                    rankable = [
-                        value for value in candidates if value["type"] != "global"
-                    ]
-                    should_rerank = (
-                        handle.options["useReranker"]
-                        and len(rankable) > 1
+                retrieval = retrieval_diagnostics(result)
+                warnings: list[str] = []
+                if retrieval["degraded"]:
+                    warnings.append(
+                        str(
+                            retrieval["reason"]
+                            or "语义检索不可用，本次回答仅基于有限证据。"
+                        )
                     )
-                    config = qa_commands.materialize_api_config(
-                        handle.config,
-                        include_reranker=should_rerank,
-                    )
-                    if should_rerank:
-                        ranked = [
-                            dict(value)
-                            for value in qa_api.rerank(
-                                question=handle.question,
-                                candidates=rankable,
-                                top_k=handle.options["topK"],
-                                config=config,
-                            )
-                        ]
-                    else:
-                        ranked = rankable[: handle.options["topK"]]
-                    candidates = global_candidates + ranked
-                citations = citations_for(candidates, engine=engine)
+                    user_log("warning", f"漫画问答检索降级：{warnings[-1]}")
                 try:
                     resolved_entities = resolve_entities_in_question(
                         book_id=book_id,
@@ -487,12 +469,73 @@ def create_insight_blueprint(
                     LOGGER.exception("Entity resolution failed: %s", exc)
                     resolved_entities = {"matched_entities": [], "is_structured_query": False}
 
+                try:
+                    snapshot_pages = list(derived.snapshot(book_id=book_id).pages)
+                except Exception as exc:
+                    LOGGER.warning("Failed to read snapshot pages for QA evidence: %s", exc)
+                    snapshot_pages = []
+                locations = page_locations(snapshot_pages, engine=engine)
+                evidence_candidates = entity_page_candidates(
+                    resolved_entities,
+                    snapshot_pages=snapshot_pages,
+                    locations=locations,
+                )
+
+                global_candidates: list[dict[str, Any]] = []
+                rankable: list[dict[str, Any]] = []
+                if candidates:
+                    # 通用模式：全库材料（type=global）不参与重排，也不占页面候选配额，
+                    # 否则重排会把它挤出 topK，问答就失去了全局脉络。
+                    global_candidates = [
+                        value for value in candidates if value["type"] == "global"
+                    ]
+                    rankable = [
+                        value for value in candidates if value["type"] != "global"
+                    ]
+                should_rerank = handle.options["useReranker"] and len(rankable) > 1
+                config: Mapping[str, Any] = qa_commands.materialize_api_config(
+                    handle.config,
+                    include_reranker=should_rerank,
+                )
+                if should_rerank:
+                    ranked = [
+                        dict(value)
+                        for value in qa_api.rerank(
+                            question=handle.question,
+                            candidates=rankable,
+                            top_k=handle.options["topK"],
+                            config=config,
+                        )
+                    ]
+                else:
+                    ranked = rankable[: handle.options["topK"]]
+                # 实体知识库记录的「出现页码」必须作为证据页进入候选，否则回答只能转述
+                # 一个没有页面依据的页码，模型也无法给出话数。
+                selected_page_ids = {
+                    value.get("pageId") for value in global_candidates + ranked
+                }
+                evidence = [
+                    value
+                    for value in evidence_candidates
+                    if value.get("pageId") not in selected_page_ids
+                ]
+                evidence_page_ids = {
+                    value.get("pageId") for value in evidence
+                }
+                candidates = global_candidates + ranked + evidence
+                citations = citations_for(candidates, engine=engine)
+                for citation in citations:
+                    if citation.get("pageId") in evidence_page_ids:
+                        citation["source"] = "entity"
+
                 yield _qa_sse(
                     "context",
                     {
                         "mode": handle.options["mode"],
                         "citations": citations,
                         "resolvedEntities": resolved_entities,
+                        "degraded": bool(warnings),
+                        "warnings": warnings,
                     },
                 )
                 if not candidates and not resolved_entities.get("matched_entities"):
@@ -512,13 +555,16 @@ def create_insight_blueprint(
                         step_kind="insight_qa_answer",
                     ):
                         log_step_started()
+                        details = [
+                            f"问题：{handle.question}",
+                            f"参考资料：{len(candidates)} 条",
+                            f"匹配实体：{len(resolved_entities.get('matched_entities', []))} 个",
+                        ]
+                        if warnings:
+                            details.append(f"检索降级：{'；'.join(warnings)}")
                         log_result(
                             "漫画问答输入",
-                            (
-                                f"问题：{handle.question}",
-                                f"参考资料：{len(candidates)} 条",
-                                f"匹配实体：{len(resolved_entities.get('matched_entities', []))} 个",
-                            ),
+                            tuple(details),
                         )
                         answer_emitted = False
                         try:
@@ -528,6 +574,7 @@ def create_insight_blueprint(
                                 config=config,
                                 cancelled=cancelled,
                                 resolved_entities=resolved_entities,
+                                locations=locations,
                             ):
                                 if chunk:
                                     answer_emitted = True

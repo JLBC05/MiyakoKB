@@ -46,6 +46,7 @@ export interface QACitation {
   chapterTitle?: string
   sourceUrl?: string
   excerpt?: string
+  source?: 'page' | 'entity'
 }
 
 export interface QAMessage {
@@ -57,6 +58,7 @@ export interface QAMessage {
   citations?: QACitation[]
   saved?: boolean
   resolvedEntities?: QAResolvedEntities
+  warnings?: string[]
 }
 
 export interface BatchConfig {

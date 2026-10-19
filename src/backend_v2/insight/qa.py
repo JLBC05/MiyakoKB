@@ -319,14 +319,37 @@ def _candidate(value: object) -> dict[str, Any]:
 def validate_retrieval_candidates(
     value: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    if set(value) != {"mode", "candidates"}:
+    allowed = {"mode", "candidates", "retrieval"}
+    if not {"mode", "candidates"}.issubset(value) or not set(value).issubset(allowed):
         raise QAConflict("QA retrieval result fields are invalid")
     if value["mode"] not in QA_MODES:
         raise QAConflict("QA retrieval result mode is invalid")
     raw_candidates = value["candidates"]
     if not isinstance(raw_candidates, list):
         raise QAConflict("QA retrieval candidates must be an array")
+    diagnostics = value.get("retrieval")
+    if diagnostics is not None:
+        if not isinstance(diagnostics, Mapping):
+            raise QAConflict("QA retrieval diagnostics must be an object")
+        if set(diagnostics) != {"degraded", "reason", "mode", "candidateCount"}:
+            raise QAConflict("QA retrieval diagnostics fields are invalid")
     return [_candidate(item) for item in raw_candidates]
+
+
+def retrieval_diagnostics(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Read the retrieval degradation record carried alongside QA candidates."""
+    raw = value.get("retrieval")
+    if not isinstance(raw, Mapping):
+        return {"degraded": False, "reason": None, "mode": None, "candidateCount": 0}
+    reason = raw.get("reason")
+    mode = raw.get("mode")
+    count = raw.get("candidateCount")
+    return {
+        "degraded": bool(raw.get("degraded")),
+        "reason": reason if isinstance(reason, str) and reason else None,
+        "mode": mode if isinstance(mode, str) and mode else None,
+        "candidateCount": count if isinstance(count, int) and not isinstance(count, bool) else 0,
+    }
 
 
 class TransientRequestRepository:
@@ -882,46 +905,26 @@ class InsightQAWorkerService:
                 continue
             if isinstance(page_number, bool) or not isinstance(page_number, int) or page_number < 1:
                 continue
+            if not isinstance(analysis, Mapping):
+                analysis = {}
 
-            summary = analysis.get("page_summary") or ""
-            events = analysis.get("key_events") or []
-            event_strs = []
-            if isinstance(events, list):
-                for ev in events:
-                    if isinstance(ev, Mapping) and ev.get("summary"):
-                        event_strs.append(str(ev["summary"]))
-                    elif isinstance(ev, str) and ev:
-                        event_strs.append(ev)
-
-            doc_parts = []
-            if summary:
-                doc_parts.append(str(summary))
-            if event_strs:
-                doc_parts.append("关键事件：" + "；".join(event_strs))
-            doc = "\n".join(doc_parts).strip()
-            if not doc:
-                doc = f"第 {page_number} 页"
-
-            if keywords:
-                lexical = _lexical_score(doc, keywords)
-                score = round(0.5 + 0.5 * lexical, 4) if lexical > 0 else 0.5
-            else:
-                score = 1.0
+            document = _page_document(page_number, analysis)
+            # 关键词兜底只保留真正命中的页面：没有命中就返回空，交由调用方降级。
+            # 之前按页码升序截断会退化成「全书最前面几页」，产生看似有据的错误引用。
+            lexical = _lexical_score(document, keywords or ())
+            if lexical <= 0:
+                continue
 
             candidates.append({
                 "id": f"page_{page_id}",
                 "type": "page",
                 "pageId": page_id,
                 "pageNumber": page_number,
-                "document": doc,
-                "hybridScore": score,
+                "document": document,
+                "hybridScore": round(0.5 + 0.5 * lexical, 4),
             })
 
-        if keywords:
-            candidates.sort(key=lambda c: (-c["hybridScore"], c["pageNumber"]))
-        else:
-            candidates.sort(key=lambda c: c["pageNumber"])
-
+        candidates.sort(key=lambda c: (-c["hybridScore"], c["pageNumber"]))
         return candidates[:limit]
 
     def _retrieve(self, request_payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -929,32 +932,53 @@ class InsightQAWorkerService:
         mode = request_payload["mode"]
         book_id = request_payload["bookId"]
         if mode == "global":
+            artifacts = self._global_artifact_candidates(
+                book_id=book_id,
+                dependency_fingerprint=request_payload["dependencyFingerprint"],
+            )
+            if artifacts:
+                global_candidates = artifacts
+                global_reason: str | None = None
+            else:
+                # 没有全局概览资料时只能退到关键词检索；命中不了就不编造「全书开头几页」。
+                global_candidates = self._fallback_page_candidates(
+                    book_id=book_id,
+                    keywords=request_payload["keywords"],
+                    limit=20,
+                )
+                global_reason = (
+                    "该书没有可用的全局概览资料，本次回答仅基于关键词检索。"
+                    if global_candidates
+                    else "该书没有可用的全局概览资料，关键词检索也未命中，本次回答缺少可用依据。"
+                )
             return {
                 "mode": "global",
-                "candidates": self._global_context(
-                    book_id=book_id,
-                    dependency_fingerprint=request_payload[
-                        "dependencyFingerprint"
-                    ],
-                ),
+                "candidates": global_candidates,
+                "retrieval": {
+                    "degraded": global_reason is not None,
+                    "reason": global_reason,
+                    "mode": "global",
+                    "candidateCount": len(global_candidates),
+                },
             }
-        candidates = self._page_candidates(request_payload)
+        candidates, retrieval = self._page_candidates(request_payload)
         if mode == "exact":
-            return {"mode": "exact", "candidates": candidates}
+            return {"mode": "exact", "candidates": candidates, "retrieval": retrieval}
         # 通用模式：页面/事件候选之后追加全库材料，使单次问答同时具备细粒度证据与全局脉络。
         merged = self._global_artifact_candidates(
             book_id=book_id,
             dependency_fingerprint=request_payload["dependencyFingerprint"],
         )[:GENERIC_GLOBAL_CANDIDATE_LIMIT] + candidates
-        return {"mode": "generic", "candidates": merged}
+        return {"mode": "generic", "candidates": merged, "retrieval": retrieval}
 
     def _page_candidates(
         self,
         request_payload: Mapping[str, Any],
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         book_id = request_payload["bookId"]
         generation = request_payload["vectorGeneration"]
         candidates: list[dict[str, Any]] | None = None
+        vector_issue: str | None = None
         if generation > 0:
             with self.engine.connect() as connection:
                 active = connection.execute(
@@ -1014,6 +1038,10 @@ class InsightQAWorkerService:
                                 limit=request_payload["candidateLimit"],
                                 keywords=request_payload["keywords"],
                             )
+                        else:
+                            vector_issue = "查询向量无效"
+                    else:
+                        vector_issue = "查询向量数量与分析请求不一致"
                 except Exception as exc:
                     LOGGER.warning(
                         "Vector retrieval failed for book %s generation %s: %s; falling back to page analysis",
@@ -1022,15 +1050,45 @@ class InsightQAWorkerService:
                         exc,
                     )
                     candidates = None
+                    vector_issue = "语义索引读取失败"
+            else:
+                vector_issue = "语义索引代次不可用（未发布、已过期或与当前分析不一致）"
+        else:
+            vector_issue = "该书尚未建立语义索引"
 
-        if not candidates:
+        if candidates:
+            search_mode = "vector"
+        else:
             candidates = self._fallback_page_candidates(
                 book_id=book_id,
                 keywords=request_payload["keywords"],
                 limit=request_payload["candidateLimit"],
             )
+            search_mode = "lexical" if candidates else "none"
 
-        if request_payload["useParentChild"]:
+        if search_mode == "vector":
+            retrieval: dict[str, Any] = {
+                "degraded": False,
+                "reason": None,
+                "mode": "vector",
+                "candidateCount": len(candidates),
+            }
+        else:
+            completion = (
+                "关键词检索未命中，本次回答仅基于全局资料。"
+                if search_mode == "none"
+                else "本次回答仅基于关键词检索。"
+            )
+            reason = f"{vector_issue or '语义索引不可用'}，{completion}"
+            retrieval = {
+                "degraded": True,
+                "reason": reason,
+                "mode": search_mode,
+                "candidateCount": len(candidates),
+            }
+            user_log("warning", f"漫画问答检索降级：{reason}")
+
+        if request_payload["useParentChild"] and candidates:
             self._attach_parent_context(
                 candidates,
                 run_id=request_payload["sourceRunId"],
@@ -1039,7 +1097,7 @@ class InsightQAWorkerService:
             run_id=request_payload["sourceRunId"],
             candidates=candidates,
         )
-        return candidates
+        return candidates, retrieval
 
     def _monitor_character_extraction_rate(
         self,
@@ -1280,20 +1338,6 @@ class InsightQAWorkerService:
                 [],
             )
 
-    def _global_context(
-        self,
-        *,
-        book_id: str,
-        dependency_fingerprint: str,
-    ) -> list[dict[str, Any]]:
-        candidates = self._global_artifact_candidates(
-            book_id=book_id,
-            dependency_fingerprint=dependency_fingerprint,
-        )
-        if not candidates:
-            return self._fallback_page_candidates(book_id=book_id, limit=20)
-        return candidates
-
     def _global_artifact_candidates(
         self,
         *,
@@ -1398,6 +1442,7 @@ class QAApiAlgorithms(Protocol):
         config: Mapping[str, Any],
         cancelled: threading.Event,
         resolved_entities: Mapping[str, Any] | None = None,
+        locations: Mapping[int, Mapping[str, Any]] | None = None,
     ) -> Iterator[str]: ...
 
 
@@ -1535,6 +1580,7 @@ class DefaultQAApiAlgorithms:
         config: Mapping[str, Any],
         cancelled: threading.Event,
         resolved_entities: Mapping[str, Any] | None = None,
+        locations: Mapping[int, Mapping[str, Any]] | None = None,
     ) -> Iterator[str]:
         from src.shared.ai_transport import UnifiedChatRequest
         from src.shared.openai_execution import (
@@ -1544,7 +1590,11 @@ class DefaultQAApiAlgorithms:
         from src.shared.openai_options import OpenAICompatibleOptions
 
         chat_config = frozen_chat_config(config)
-        context = _answer_context(candidates, resolved_entities=resolved_entities)
+        context = _answer_context(
+            candidates,
+            resolved_entities=resolved_entities,
+            locations=locations,
+        )
         prompts = config.get("prompts")
         if not isinstance(prompts, Mapping):
             raise QAConflict("frozen Insight prompts must be an object")
@@ -1918,11 +1968,131 @@ def citations_for(
                 "chapter_title": chapter_title,
                 "sourceUrl": source_url,
                 "source_url": source_url,
+                "source": "page",
                 "excerpt": row["document"],
                 "score": row.get("rerankScore", row["hybridScore"]),
             }
         )
     return citations
+
+
+def page_locations(
+    snapshot_pages: Sequence[Mapping[str, Any]],
+    *,
+    engine: Engine | None = None,
+) -> dict[int, dict[str, Any]]:
+    """Map run-scoped page numbers to real chapter identity.
+
+    Entity knowledge records evidence as run-scoped page numbers, while citations
+    render pages with the chapter they belong to. This index is the bridge between
+    the two so answers can state「第 X 话 第 Y 页」instead of a bare global number.
+    """
+    numbered: dict[str, int] = {}
+    for item in snapshot_pages:
+        if not isinstance(item, Mapping):
+            continue
+        page_id = item.get("pageId")
+        number = item.get("pageNumber")
+        if (
+            isinstance(page_id, str)
+            and page_id
+            and isinstance(number, int)
+            and not isinstance(number, bool)
+            and number >= 1
+        ):
+            numbered.setdefault(page_id, number)
+    locations: dict[int, dict[str, Any]] = {}
+    if not numbered:
+        return locations
+
+    metadata: dict[str, Mapping[str, Any]] = {}
+    if engine is not None:
+        try:
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    select(
+                        pages.c.id,
+                        pages.c.ordinal.label("page_in_chapter"),
+                        chapters.c.ordinal.label("chapter_ordinal"),
+                        chapters.c.title.label("chapter_title"),
+                    )
+                    .join(chapters, chapters.c.id == pages.c.chapter_id)
+                    .where(pages.c.id.in_(list(numbered)))
+                ).mappings()
+                for row in rows:
+                    metadata[row["id"]] = row
+        except Exception as exc:
+            LOGGER.warning("Failed to map QA page numbers to chapters: %s", exc)
+
+    for page_id, number in numbered.items():
+        meta = metadata.get(page_id) or {}
+        locations[number] = {
+            "pageId": page_id,
+            "pageNumber": number,
+            "chapterOrdinal": meta.get("chapter_ordinal"),
+            "chapterTitle": meta.get("chapter_title"),
+            "pageInChapter": meta.get("page_in_chapter"),
+        }
+    return locations
+
+
+def entity_page_candidates(
+    resolved_entities: Mapping[str, Any] | None,
+    *,
+    snapshot_pages: Sequence[Mapping[str, Any]],
+    locations: Mapping[int, Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Build candidates for the pages an entity knowledge entry points at.
+
+    The entity knowledge base records「出现页码」but those pages were never part of
+    the retrieved material, so the model could only answer page numbers without
+    any page evidence behind them. These candidates make that evidence citable.
+    """
+    if not isinstance(resolved_entities, Mapping) or not locations:
+        return []
+    by_page_id: dict[str, Mapping[str, Any]] = {}
+    for item in snapshot_pages:
+        if not isinstance(item, Mapping):
+            continue
+        page_id = item.get("pageId")
+        if isinstance(page_id, str) and page_id:
+            by_page_id.setdefault(page_id, item)
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    matched = resolved_entities.get("matched_entities")
+    if not isinstance(matched, list):
+        return []
+    for entity in matched:
+        if not isinstance(entity, Mapping):
+            continue
+        for value in entity.get("pages") or []:
+            if isinstance(value, bool) or not isinstance(value, int):
+                continue
+            info = locations.get(value)
+            if not isinstance(info, Mapping):
+                continue
+            page_id = info.get("pageId")
+            if not isinstance(page_id, str) or page_id in seen:
+                continue
+            item = by_page_id.get(page_id)
+            if item is None:
+                continue
+            analysis = item.get("analysis")
+            if not isinstance(analysis, Mapping):
+                analysis = {}
+            seen.add(page_id)
+            candidates.append(
+                {
+                    "id": f"entity_page_{page_id}",
+                    "type": "page",
+                    "pageId": page_id,
+                    "pageNumber": value,
+                    "document": _page_document(value, analysis),
+                    "hybridScore": 1.0,
+                }
+            )
+    return candidates
 
 
 def preprocess_question(question: str) -> dict[str, Any]:
@@ -1956,6 +2126,27 @@ def _lexical_score(document: str, keywords: Sequence[str]) -> float:
     return hits / len(keywords)
 
 
+def _page_document(page_number: int, analysis: Mapping[str, Any]) -> str:
+    """Render one page analysis payload as the retrieval document for that page."""
+    summary = analysis.get("page_summary") or ""
+    events = analysis.get("key_events") or []
+    event_strs: list[str] = []
+    if isinstance(events, list):
+        for event in events:
+            if isinstance(event, Mapping) and event.get("summary"):
+                event_strs.append(str(event["summary"]))
+            elif isinstance(event, str) and event:
+                event_strs.append(event)
+
+    parts: list[str] = []
+    if summary:
+        parts.append(str(summary))
+    if event_strs:
+        parts.append("关键事件：" + "；".join(event_strs))
+    document = "\n".join(parts).strip()
+    return document or f"第 {page_number} 页"
+
+
 _CATEGORY_CN = {
     "characters": "角色",
     "abilities": "能力",
@@ -1981,9 +2172,50 @@ def _format_pages_list(pages: Sequence[Any]) -> str:
     return ", ".join(str(p) for p in sorted_pages[:25]) + f"... 等共 {len(sorted_pages)} 页"
 
 
+def _location_label(
+    number: Any,
+    locations: Mapping[int, Mapping[str, Any]] | None,
+) -> str:
+    """Render one run-scoped page number together with its chapter position."""
+    info = None
+    if locations and isinstance(number, int) and not isinstance(number, bool):
+        info = locations.get(number)
+    if isinstance(info, Mapping):
+        chapter = info.get("chapterOrdinal")
+        page_in_chapter = info.get("pageInChapter")
+        if chapter is not None and page_in_chapter is not None:
+            return f"第 {chapter} 话 第 {page_in_chapter} 页（全书第 {number} 页）"
+    return f"第 {number} 页"
+
+
+def _page_positions(
+    pages: Sequence[Any],
+    locations: Mapping[int, Mapping[str, Any]] | None,
+    *,
+    limit: int = 12,
+) -> list[str]:
+    if not locations:
+        return []
+    positions: list[str] = []
+    for value in pages:
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        info = locations.get(value)
+        if not isinstance(info, Mapping):
+            continue
+        chapter = info.get("chapterOrdinal")
+        page_in_chapter = info.get("pageInChapter")
+        if chapter is None or page_in_chapter is None:
+            continue
+        positions.append(f"第 {chapter} 话 第 {page_in_chapter} 页（全书第 {value} 页）")
+    return positions[:limit]
+
+
 def _answer_context(
     candidates: Sequence[Mapping[str, Any]],
     resolved_entities: Mapping[str, Any] | None = None,
+    *,
+    locations: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> str:
     sections = []
 
@@ -2011,13 +2243,16 @@ def _answer_context(
                 f"  出现页码：{pages_str}\n"
                 f"  出现频次：{freq}"
             )
+            positions = _page_positions(pages, locations)
+            if positions:
+                entity_lines.append("  页话对应：" + "；".join(positions))
         sections.append("\n".join(entity_lines))
 
     if candidates:
         blocks = []
         for index, row in enumerate(candidates, start=1):
             location = (
-                f"page_id={row.get('pageId')}, 页码={row.get('pageNumber')}"
+                f"page_id={row.get('pageId')}, {_location_label(row.get('pageNumber'), locations)}"
                 if row.get("pageId")
                 else str(row.get("id", "全局资料"))
             )
@@ -2034,5 +2269,12 @@ def _answer_context(
         sections.append("[页面资料]\n" + "\n\n".join(blocks))
     elif not matched:
         sections.append("无相关漫画分析资料。")
+
+    if matched or candidates:
+        sections.append(
+            "[回答要求]\n"
+            "- 引用证据时写明「第 X 话 第 Y 页」；资料只给出全书页码时，按「页话对应」换算后再回答。\n"
+            "- 资料中没有依据的内容必须回答「知识库中没有相关依据」，不得凭常识补全或猜测页码。"
+        )
 
     return "\n\n".join(sections)

@@ -118,6 +118,7 @@ export interface ChatResult {
   mode: QAMode
   citations: QACitation[]
   resolvedEntities?: QAResolvedEntities
+  warnings: string[]
 }
 
 interface ChatStreamOptions {
@@ -126,6 +127,7 @@ interface ChatStreamOptions {
     mode: QAMode
     citations: QACitation[]
     resolvedEntities?: QAResolvedEntities
+    warnings?: string[]
   }) => void
   signal?: AbortSignal
 }
@@ -160,6 +162,8 @@ function requireQaCitations(value: unknown): QACitation[] {
     const chapterTitle = typeof raw.chapterTitle === 'string' ? raw.chapterTitle : (typeof raw.chapter_title === 'string' ? raw.chapter_title : undefined)
     const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl : (typeof raw.source_url === 'string' ? raw.source_url : undefined)
     const excerpt = typeof raw.excerpt === 'string' ? raw.excerpt : undefined
+    const source: QACitation['source'] =
+      raw.source === 'entity' ? 'entity' : raw.source === 'page' ? 'page' : undefined
 
     if (pageNumber < 1) {
       throw new Error('问答引用字段无效')
@@ -171,7 +175,17 @@ function requireQaCitations(value: unknown): QACitation[] {
       chapterTitle,
       sourceUrl,
       excerpt,
+      source,
     }
+  })
+}
+
+function requireQaWarnings(value: unknown): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new Error('问答降级提示格式无效')
+  return value.map(raw => {
+    if (typeof raw !== 'string' || !raw) throw new Error('问答降级提示字段无效')
+    return raw
   })
 }
 
@@ -837,6 +851,7 @@ export async function sendChat(
   let mode: QAMode | null = null
   let citations: QACitation[] = []
   let resolvedEntities: QAResolvedEntities | undefined = undefined
+  let warnings: string[] = []
   let streamError = ''
   let statusSeen = false
   let contextSeen = false
@@ -896,7 +911,8 @@ export async function sendChat(
           }
         }
         contextSeen = true
-        options.onContext?.({ mode, citations, resolvedEntities })
+        warnings = requireQaWarnings(data.warnings)
+        options.onContext?.({ mode, citations, resolvedEntities, warnings })
       } else if (message.event === 'done') {
         requireQaEventData(message.data, [], 'done')
         if (!statusSeen || !contextSeen || !answer) {
@@ -922,7 +938,7 @@ export async function sendChat(
   })
   if (streamError) throw new Error(streamError)
   if (!doneSeen || mode === null) throw new Error('问答响应意外中断')
-  return { answer, mode, citations, resolvedEntities }
+  return { answer, mode, citations, resolvedEntities, warnings }
 }
 
 export async function rebuildEmbeddings(bookId: string): Promise<string> {

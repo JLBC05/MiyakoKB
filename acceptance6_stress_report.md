@@ -1,6 +1,6 @@
 # MiyakoKB 验收点6 压测报告
 
-> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #39。
+> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #40。
 > 目标：生产环境大体量漫画（50+ 话）端到端压力测试与跨章节实体消歧观察。
 
 ## 1. 测试范围与环境
@@ -322,6 +322,34 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 
 **回归**：新增 5 条用例（`tests_backend/v2/test_stage5_insight.py`）——环境变量解析与夹紧（2→4、999→64、0→关闭）、收窄后对数不超过「名称数 × K」、确定性别名对（`久留美` ⊂ `久留美公寓·房间`）在 K=1 下仍保留、硬拒绝对（`高木` vs `高木母亲`）不进候选、以及一条用 `RecordingJudge` 的集成用例断言「批量裁决收到的对 == 允许集合，且主循环单对裁决全部落在允许集合内」。`test_stage5_insight.py` **158 passed**（原 153 + 5）。
 
+### 5.10 问答「引用乱指 + 答不出第几话」的根因与修复（2026-10-20，用户报告）
+
+用户实测：「漫画中第一次领域展开是谁使用的？在第几话第几页」→ 回答给出「两面宿傩 / 第 190 页 / **话数：证据不足**」，而引用是**第 1 話 9、11、12、13、16 页**（铅球、田径场、爷爷遗言等无关页）。两个问题一起暴露：①话数答不出；②引用与证据完全错位。
+
+**证据链（全部只读）**：
+
+- 向量代状态正常：JJK（`29011e06-…`）`vector_generations` gen3 `degraded`/active，234 页 + 160 事件；`snapshot.fingerprint` 与 gen3 的 `dependency_fingerprint` **完全相等**，`qa_status(mode=exact|generic)` = `{available: true, generation: 3, coverage: {pages: 234, events: 160}}` → 指纹/门禁都通过，**不是**「未建索引」。
+- 嵌入本身没有退化：Chroma 集合 `…_g3_pages` count=234（234 个唯一向量、范数 1.0±1.2e-7、两两 cos 0.294/0.485/0.752）、`…_g3_events` count=160（160 唯一、覆盖 47 页）。
+- 22:50 那次的候选签名是**兜底路径**：`data-v2/logs/saber-worker.log:106711-106737` 首个候选 `page_00bc867c-…`、`pageNumber=1`、`hybridScore=0.5`、**无 `vectorScore`**，随后页号 1..30 单调递增；而 00:51（worker 重启后）同一问题拿到 `vectorScore`：page 3/0.5679、1/0.5307、79/0.4965、101/0.4952、54/0.4707…，即向量路径正常。
+- **决定性证据**：`data-v2/logs/saber-worker-diagnostic.log:21129` → `2026-10-19 22:50:58 [WARNING] [WORKER:36340] saber.worker.insight_qa - Vector retrieval failed for book 29011e06-… generation 3: Error executing plan: Internal error: Error creating hnsw segment reader: Nothing found on disk; falling back to page analysis`——Chroma 的 **HNSW 段文件在磁盘上不可读**，`_query_chroma` 抛错被 `qa.py` 捕获后静默转兜底；同日志显示 chromadb 客户端随 worker epoch 重建（20:09 PID 14784 → 22:27 PID 36340 → 00:38 PID 36460 → 00:44 PID 41624），重启后同一集合查询恢复正常。
+
+**三道代码缺陷（这才是「答错还看不出来」的根因）**：
+
+1. **兜底排序本身就是错的**：`_fallback_page_candidates` 在无词命中时给所有候选 `hybridScore = 0.5`，再按 `(-hybridScore, pageNumber)` 排序后**先截断**到 `candidateLimit = topK × 6`（本次 30）→ 只有「全书最前面的 30 页」（JJK 即第 1 話）进入重排；重排（Jina reranker）只能在无关页里挑 5 页（relevance 0.3558/0.2713/0.2451/0.2451/0.2393）→ 引用即第 1 話 9/11/12/13/16 页。**即检索彻底失败时，系统不是「答不出」，而是拿全书开头几页冒充证据。**
+2. **降级完全不可见**：该 WARNING 只落在 `saber-worker-diagnostic.log`（Python LOGGER 通道），用户日志与 UI 一无所知；`transient_requests` 的结果里没有任何降级标记，所以呈现给用户的是一次「正常」回答。
+3. **实体证据页没有话数、也永远进不了引用**：`_answer_context` 把实体知识库的「出现页码」打成裸全局页号（`领域展开（概念）· 出现页码：190 · 频次：1`），没有 page_id、没有话映射；而页面候选是**能**带 `chapterOrdinal/chapterTitle` 的（`citations_for` 联 `pages⋈chapters`）。同时 `routes.py` 的引用集合＝重排后的页面候选集合，**实体证据页不参与**——模型既拿不到 190 页的话数，引用里也不会出现 190。按库内真实映射，全书第 190 页 = 第 8 話第 13 页（前 7 話累计 177 页）。
+
+**修复（已实施）**：
+
+- **兜底不再编造**：`_fallback_page_candidates` 只保留**有关键词命中**的页（`lexical <= 0` 一律丢弃，无命中就返回空集），文档正文改用与索引一致的 `_page_document`（页摘要 + 关键事件）；`_global_context` 的兜底同样只在关键词命中时给页，否则如实返回空。
+- **降级可见**：`_page_candidates` 改为返回 `(candidates, retrieval)` 诊断（`{degraded, reason, mode, candidateCount}`，mode ∈ vector/lexical/none），随检索结果落库；`validate_retrieval_candidates` 接受可选的 `retrieval` 块（形状严格校验），新增 `retrieval_diagnostics()` 读取。SSE 的 `context` 事件新增 `degraded`/`warnings`，用户日志追加「漫画问答检索降级：…」一行，前端在回答下方显示 ⚠️ 提示条。
+- **实体证据页成为一等证据**：新增 `page_locations()`（run 页号 → `chapterOrdinal/chapterTitle/pageInChapter`，查不到归属时如实给 `None`）与 `entity_page_candidates()`（把实体记录的出现页码物化成候选页，`hybridScore=1.0`），`ask_question` 把它们并入候选并标 `source: "entity"`（前端 chip 显示「（实体依据）」）；`_answer_context` 对实体证据页打印「页话对应：第 X 话 第 Y 页（全书第 N 页）」，页面资料标签也改为「第 X 话 第 Y 页（全书第 N 页）」，并追加 `[回答要求]`：必须用「第 X 话 第 Y 页」作答、没有依据就回答「知识库中没有相关依据」、不得猜测。
+- **配置解析点顺带修掉**：`ask_question` 原先只在「有候选」时才 `materialize_api_config`，实体证据单独成路时会给模型传空配置——现改为无条件解析（重排器按需包含）。
+
+**复验**：新增 4 条后端用例（关键词兜底只留命中页、诊断形状与降级原因、`page_locations` 话数映射与缺失页给 `None`、实体证据页可被引用且上下文含页话对应）→ 定向 8 passed，`test_stage5_insight.py` + `test_public_profile.py` **190 passed**；前端新增 2 条 API 用例（降级提示透传、非法提示拒收）与 2 条组件用例（实体依据 chip + ⚠️ 提示条、无引用时不出 footer）→ 全量 vitest **87 files / 638 tests**，`vue-tsc`/eslint/stylelint/`lint:ui`/`--audit` 全 0。运行时旁证：worker 重启后同一问题走向量路径，引用已带 `chapterOrdinal/chapterTitle`。
+
+**建议（未实施）**：①HNSW 段读取失败时把该代标记为不可用并提示/自动触发重建（前端已有向量重建入口），`qa/status` 应把「索引可读」纳入 `available` 判据，避免「状态 ready 但检索静默降级」；②引用可进一步只保留「被模型实际引用到的页」，目前仍是「送入模型的候选集」。
+
 ## 6. 发现与建议汇总（滚动）
 
 | # | 级别 | 发现 | 建议 |
@@ -368,6 +396,7 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 | 37 | 中 | **批量预取的「超集枚举」把候选对放大 6.4×，吃掉了一部分批量化的收益**：`prefetch_alignment_judgements` 枚举「raw 名 ×（已有实体名/别名 ∪ 同类别全部 raw 名）」，只经 `is_judge_candidate` 粗筛；复测 387 页得到约 7,470 对（249 批 × 30），而旧实现在主循环里实际只问 1,158 对——因为主循环按频次顺序遍历、命中即 `break`，大量对根本不会被问到。于是单对成本虽降到 0.37s（14.9×），对齐墙钟只从 105.9 min 降到 46.4 min（2.28×），且对齐仍占整本构建的 **55%**（2783.9 / 5048.7s） | 按主循环真实语义收窄候选面：①每个 raw 名只保留字面相似度 Top-K（如 K=8）或同章/相邻章的实体，而不是同类全表两两组合；②或改为「两遍走」——第一遍干跑记录主循环实际会问的对（不调 LLM），第二遍批量裁决；③给对齐单配一个便宜/无思考的裁决模型（当前 `chat` 与 VLM 同模型，30 对一批要 ~33s，思考 token 占大头）。另注：compressed_context 与 timeline 两处单次调用本次分别慢了 4.1× / 1.8×，是同一网关的时延波动（同代码同参数），不是本次改动引入的回归 |
 | 38 | 中 | **语义裁决的候选面原本是「同类全表两两组合」，与主循环的真实发问量差一个数量级**：`prefetch_alignment_judgements` 为每个 raw 名枚举「已有实体名/别名 ∪ 同类所有 raw 名」，387 页即约 7,470 对；而主循环按频次遍历、命中即 `break`，实际只会问约 1,158 对。修掉 #34 后单对成本降到 0.37s，但候选面放大 6.4× 使对齐仍占整本构建 55%。回放 8,613 条真实判词可见：保留率与被丢掉的真实合并数之间存在明确曲线——K=8 丢 8 条（召回 96.3%）、**K=16 丢 3 条（98.6%）**、K=24 丢 1 条（99.5%），而候选对分别降到 56.3% / 73.8% / 83.4% | **已实施**：新增 `build_alignment_candidate_pairs`（重合度排序 Top-K + 确定性别名对全保留 + 去重），默认 `INSIGHT_JUDGE_TOP_K=16`（`0` 关闭），**批量预取与主循环共用同一份候选集**（10 处逐对裁决改为走 `judge_same` 闭包），保证被收窄的对既不进预取也不会退化成单对请求。线上库复算：8,195 个无序对 → 5,381（65.7%），首建 4,238 → 3,442（81.2%）。建议：①若要零召回损失，把 K 提到 24 或 48（来得及就看单本成本）；②真正的下一步是给对齐单独配一个便宜/无思考的裁决模型，而不是继续压缩候选面 |
 | 39 | 低 | **退役域留下的残留面比预期大，但「孤儿模块」判定必须把 CLI 与打包入口算进入口集**：后端 135 个 `.py` 中 116 个可从入口到达，780 个顶层符号里 13 个零调用；两个初判「孤儿」的模块里 `src/backend_v2/storage/consistency.py` 其实被 CLI `scripts/check_v2_consistency.py` 使用、`src/backend_v2/standard_streams.py` 被打包入口 `saber_v2.py:14` 直接 import，只有 `tests_backend/fake_provider.py` 是真孤儿。前端 203 个文件中 196 个可达、1 个孤儿，另有 67 个「导出但全仓零引用」，其中 23 个连测试都不引用、其余 44 个仅被测试引用 | **已实施 P1**（22 文件，+57/−684）：后端删 13 个零调用符号（`src/core/ocr_types.py` 的 `OcrTextlineResult`/`create_ocr_result`/`create_ocr_textline_result`/`ocr_results_to_dicts`/`extract_texts_from_ocr_results` 与仅供其用的 `_polygon`/`_rgb`、`src/backend_v2/logging_config.py` 的 `set_backend_console_level`/`configure_product_handler`、`src/backend_v2/insight/derived.py` 的 `calculate_confidence`/`is_character_name_alias`、`src/backend_v2/content/translation_constraints.py` 的 `with_glossary_delta`、`src/shared/openai_options.py` 的 `create_openai_compatible_options`）+ 整模块 `src/shared/paddleocr_vl.py`（唯一活符号 `PADDLEOCR_VL_LANGUAGE_NAMES` 上提到 `src/shared/constants.py`）+ `tests_backend/fake_provider.py`；前端删 23 个零引用导出（v1 insight 5、v2 content 2、v2 settings 3、诊断连通性 3、提示词常量 6、文本样式 1、provider 表 1、校对域 1、openaiOptions 1）。**P2 须以 P3 为前提**：`src/core/rendering.py`(1902 行)、`src/core/config_models.py`(439)、`src/core/ocr_types.py`(余 92 行)、`src/backend_v2/content/translation_constraints.py`(242 行) 剩下的活符号只被「测试」与「退役路由」（`PATCH /pages/<id>/document`、`GET /books/<id>/translation-constraints`）引用，删模块必须先下线这些路由 |
+| 40 | 高 | **检索降级被静默处理 + 兜底按页号截断 → 引用乱指；实体证据页无话数映射且不进引用 → 答不出第几话**：用户实测 JJK 问「漫画中第一次领域展开是谁使用的？在第几话第几页」，回答给「两面宿傩 / 第 190 页 / 话数：证据不足」，引用却是第 1 話 9、11、12、13、16 页（铅球场等无关页）。根因①：Chroma gen3 的 HNSW 段 `Error creating hnsw segment reader: Nothing found on disk`（`saber-worker-diagnostic.log:21129`，worker PID 36340）→ `_query_chroma` 抛错被吞 → `_fallback_page_candidates` 在无词命中时全员 `hybridScore=0.5` 并按页号**先截断**到 `topK×6=30`，只有全书最前 30 页（JJK 第 1 話）进入重排，于是重排只能从中挑 5 页当引用；降级只写 diagnostic 通道（用户日志与 UI 无感）。根因②：`_answer_context` 把实体「出现页码」打成裸全局页号（190）而无 page_id/话映射，引用集合又只取重排后的页面候选 → 实体证据页永远不是引用，模型给不出话数（第 190 页实为第 8 話第 13 页） | **已实施（§5.10）**：兜底只保留关键词命中的页（无命中返回空，不再拿全书开头几页充证据）；`_page_candidates` 返回 `retrieval` 诊断（degraded/reason/mode/candidateCount）随结果落库，SSE `context` 增加 `degraded`/`warnings`，用户日志与前端 ⚠️ 提示条可见降级；新增 `page_locations()` 与 `entity_page_candidates()`，把实体证据页并入候选并标 `source="entity"`（chip 显示「（实体依据）」），`_answer_context` 打印「页话对应：第 X 话 第 Y 页（全书第 N 页）」并追加 `[回答要求]`（必须给话数、无依据就直说、不得猜测）；顺带修掉「无候选时向模型传空配置」。复验：后端新增 4 条用例（定向 8 passed；`test_stage5_insight.py`+`test_public_profile.py` 190 passed），前端新增 4 条用例（87 files / 638 tests；tsc/eslint/stylelint/lint:ui/audit 全 0）。建议：①HNSW 读失败应把该代标记为不可用并提示/自动重建（前端已有向量重建入口），`qa/status` 的 `available` 计入「索引可读」；②引用可再收窄为「模型实际引用到的页」，当前仍是「送入模型的候选集」 |
 
 
 ## 7. 附录
@@ -378,5 +407,6 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 - 存储/数据根诊断与修复脚本（发现 #36）：tmp_stamp_diag.py（只读打印 `schema_metadata` 的 stamp/profile 与「对 3.5.0/3.5.1/3.5.2/3.5.3 各契约的 missing/unexpected/changed」）、tmp_unfinished_probe.py（只读普查 jobs/steps/items/operations/transient_requests/render_status/process_epochs 的未完成态）、tmp_repair_stamp_353.py（备份存在的前提下，用 `v3_5_3.stop_unfinished` + `v3_5_3.convert` + 真实表对象打戳，把「物理已是 3.5.3、戳仍在 3.5.2」的库校准）、tmp_set_concurrency.py（通过 `PUT /api/v2/settings/transactions` 把 `analyzeConcurrency` 写入当前 insight_vlm 供应商行）。
 - 实测脚本：tmp_measure_full.py（触发整本构建并轮询，`scope=full`）、tmp_measure_watch.py（精简监视：只打状态、items 计数、待执行步骤名，避免整份 job JSON 刷屏）、**tmp_stage_durations.py（按 `job_events` 的 `step_started` → `page_completed` 配对统计每个 `stepKind` 的耗时，用法 `python tmp_stage_durations.py <jobId>`；schema 的 DATETIME 列经 SQLAlchemy 已是 `datetime`，`parse_ts` 需同时接受 datetime/字符串/epoch）**。
 - 候选面收窄标定（发现 #38，零 token）：tmp_narrow_eval.py（从已发布页结果重建 raw 统计，统计各类别名称/池/过闸对）、tmp_narrow_bands.py（按字面重合度分档统计真实判词「判同率」，验证不是分数越高越容易并）、tmp_narrow_filter.py / tmp_narrow_rules2.py / tmp_narrow_cooccur.py / tmp_narrow_sibling.py / tmp_narrow_freq.py（五类收窄规则的对数-召回权衡：阈值、包含/同音、2gram/3gram、同页共现、兄弟项尾缀、频次门槛）、**tmp_narrow_topk.py（Top-K + 确定性别名白名单的对数/召回曲线，本节的 K 取值依据）**、tmp_narrow_rank2.py（前缀优先排序对照，实测更差故弃用）、**tmp_narrow_probe.py / tmp_narrow_recall_prod.py（直接调用生产函数在线上库复算收窄效果）**。
+- 问答检索诊断脚本（发现 #40、§5.10，均只读）：tmp_qa_probe_artifact.py（某书的 artifact 版本表与「每章已发布页结果覆盖」；注意 JJK 现用 id 是 `29011e06-…`）、tmp_vec_probe.py（`vector_generations` 各代状态/覆盖/active 与 Chroma 集合名散列前缀）、tmp_fp_probe.py（`snapshot.fingerprint` vs 活动代的 `dependency_fingerprint`、`qa_status` 的 available/generation/coverage）、tmp_chroma_embed_probe.py（直接读 Chroma 集合：count、向量范数、两两 cos 分布，用于区分「嵌入退化」与「索引读失败」）、**tmp_qa_repro.py（POST `/api/v2/insight/books/<id>/qa` 的 SSE 复现，落盘 `tmp_qa_repro_sse.txt`）**。
 - 落盘证据：tmp_alignment_jjk.txt、tmp_downstream_jjk.txt、tmp_qa_jjk.txt、tmp_judge_cache_stats.txt、tmp_candidate_rules_eval.txt、tmp_candidate_rules_eval2.txt、tmp_failed_and_artifacts.txt。
 - 基线数据：kurumi_ch1_5_accumulation_report.txt（243 实体/329 别名/90 归并/LLM 缓存命中 685 vs 调用 123）。

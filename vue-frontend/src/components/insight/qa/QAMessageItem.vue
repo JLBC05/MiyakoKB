@@ -24,6 +24,9 @@ const citationChips = computed<ProductChipItem[]>(() => {
       } else if (citation.chapterOrdinal !== undefined) {
         label = `第${citation.chapterOrdinal}话：第${citation.page}页`
       }
+      if (citation.source === 'entity') {
+        label = `${label}（实体依据）`
+      }
       return {
         id: index,
         label,
@@ -34,6 +37,8 @@ const citationChips = computed<ProductChipItem[]>(() => {
     }) ?? []
   )
 })
+
+const retrievalWarnings = computed(() => props.message.warnings ?? [])
 
 const avatarLabel = computed(() => (props.message.role === 'user' ? '用户' : '智能助手'))
 const messageLabel = computed(() => (props.message.role === 'user' ? '用户问题' : '智能回答'))
@@ -70,10 +75,20 @@ function selectCitation(id: string | number): void {
     </template>
 
     <template
-      v-if="message.role === 'assistant' && (citationChips.length > 0 || message.resolvedEntities?.matched_entities?.length) && !message.isLoading"
+      v-if="message.role === 'assistant' && (citationChips.length > 0 || message.resolvedEntities?.matched_entities?.length || retrievalWarnings.length > 0) && !message.isLoading"
       #footer
     >
       <div class="qa-message-item__footer-stack">
+        <div
+          v-if="retrievalWarnings.length > 0"
+          class="qa-retrieval-warnings"
+          role="status"
+          aria-label="检索状态提示"
+        >
+          <span class="qa-retrieval-warnings__icon">⚠️</span>
+          <span class="qa-retrieval-warnings__text">{{ retrievalWarnings.join(' ') }}</span>
+        </div>
+
         <ProductChipList
           v-if="citationChips.length > 0"
           class="qa-message-item__citations"
@@ -112,6 +127,29 @@ function selectCitation(id: string | number): void {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.qa-retrieval-warnings {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--color-status-warning-surface);
+  border: 1px solid color-mix(in srgb, var(--color-status-warning) 45%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  align-self: flex-start;
+}
+
+.qa-retrieval-warnings__icon {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.qa-retrieval-warnings__text {
+  color: var(--color-text-primary);
 }
 
 .qa-resolved-entities {

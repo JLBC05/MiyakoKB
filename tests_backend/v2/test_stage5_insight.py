@@ -55,7 +55,11 @@ from src.backend_v2.insight.qa import (
     QAConflict,
     QAFenced,
     TransientRequestRepository,
+    _answer_context,
     citations_for,
+    entity_page_candidates,
+    page_locations,
+    retrieval_diagnostics,
     validate_retrieval_candidates,
 )
 from src.backend_v2.insight.repository import (
@@ -360,6 +364,7 @@ class FakeQAApiAlgorithms:
         resolved_entities,
         config,
         cancelled,
+        locations=None,
     ):
         yield "答案"
         yield "内容"
@@ -6352,3 +6357,214 @@ def test_align_entities_only_consults_the_llm_for_narrowed_candidates(
     assert len(judge.batched) == len(allowed)
     for _cat, left, right in judge.batched + judge.synced:
         assert frozenset((left, right)) in allowed, (left, right)
+
+
+class _SnapshotPages:
+    def __init__(self, pages) -> None:
+        self.pages = pages
+
+
+class _SnapshotDerived:
+    def __init__(self, pages) -> None:
+        self._pages = pages
+
+    def snapshot(self, *, book_id: str) -> _SnapshotPages:
+        return _SnapshotPages(self._pages)
+
+
+def _qa_worker_with_pages(platform, pages) -> InsightQAWorkerService:
+    return InsightQAWorkerService(
+        data_root=platform["data_root"],
+        engine=platform["engine"],
+        worker_epoch_id=platform["epoch_id"],
+        repository=TransientRequestRepository(platform["engine"]),
+        algorithms=FakeQARetrievalAlgorithms(),
+        derived=_SnapshotDerived(pages),
+    )
+
+
+def test_qa_keyword_fallback_keeps_only_pages_with_keyword_hits(
+    insight_platform,
+) -> None:
+    platform = insight_platform
+    worker = _qa_worker_with_pages(
+        platform,
+        [
+            {
+                "pageId": "page-1",
+                "pageNumber": 1,
+                "analysis": {"page_summary": "虎杖投掷铅球"},
+            },
+            {
+                "pageId": "page-2",
+                "pageNumber": 2,
+                "analysis": {"page_summary": "宿傩展开领域"},
+            },
+            {
+                "pageId": "page-3",
+                "pageNumber": 3,
+                "analysis": {"page_summary": "铅球对决"},
+            },
+        ],
+    )
+
+    hits = worker._fallback_page_candidates(
+        book_id="book",
+        keywords=["领域", "不存在的词"],
+        limit=10,
+    )
+    assert [row["pageId"] for row in hits] == ["page-2"]
+    assert hits[0]["hybridScore"] == 0.75
+    assert hits[0]["document"] == "宿傩展开领域"
+
+    # 没有命中时不得退化成「全书最前面几页」，否则会产生看似有据的错误引用。
+    assert worker._fallback_page_candidates(
+        book_id="book",
+        keywords=["不存在"],
+        limit=10,
+    ) == []
+    assert worker._fallback_page_candidates(book_id="book", keywords=[], limit=10) == []
+
+
+def test_qa_retrieval_reports_degraded_keyword_fallback(insight_platform) -> None:
+    platform = insight_platform
+    worker = _qa_worker_with_pages(
+        platform,
+        [
+            {
+                "pageId": "page-1",
+                "pageNumber": 1,
+                "analysis": {"page_summary": "宿傩展开领域"},
+            }
+        ],
+    )
+    request_payload = {
+        "bookId": "book",
+        "sourceRunId": None,
+        "question": "第一次领域展开是谁使用的？",
+        "mode": "exact",
+        "keywords": ["领域"],
+        "queryVariants": ["第一次领域展开是谁使用的？"],
+        "candidateLimit": 6,
+        "useParentChild": False,
+        "vectorGeneration": 0,
+        "dependencyFingerprint": "fingerprint",
+        "config": {},
+    }
+
+    candidates, retrieval = worker._page_candidates(request_payload)
+    assert [row["pageId"] for row in candidates] == ["page-1"]
+    assert retrieval == {
+        "degraded": True,
+        "reason": "该书尚未建立语义索引，本次回答仅基于关键词检索。",
+        "mode": "lexical",
+        "candidateCount": 1,
+    }
+    result = {"mode": "exact", "candidates": candidates, "retrieval": retrieval}
+    assert validate_retrieval_candidates(result) == candidates
+    assert retrieval_diagnostics(result)["degraded"] is True
+    assert retrieval_diagnostics({"mode": "exact", "candidates": []}) == {
+        "degraded": False,
+        "reason": None,
+        "mode": None,
+        "candidateCount": 0,
+    }
+
+    empty, empty_retrieval = worker._page_candidates(
+        {**request_payload, "keywords": ["不存在"]}
+    )
+    assert empty == []
+    assert empty_retrieval["mode"] == "none"
+    assert "关键词检索未命中" in empty_retrieval["reason"]
+
+    with pytest.raises(QAConflict, match="diagnostics"):
+        validate_retrieval_candidates(
+            {"mode": "exact", "candidates": [], "retrieval": "degraded"}
+        )
+    with pytest.raises(QAConflict, match="diagnostics fields"):
+        validate_retrieval_candidates(
+            {"mode": "exact", "candidates": [], "retrieval": {"degraded": True}}
+        )
+
+
+def test_qa_page_locations_map_run_numbers_to_chapter_identity(
+    insight_platform,
+) -> None:
+    platform = insight_platform
+    first, second = platform["page_ids"]
+
+    locations = page_locations(
+        [
+            {"pageId": first, "pageNumber": 1},
+            {"pageId": second, "pageNumber": 2},
+            {"pageId": second, "pageNumber": 2},
+            {"pageId": "missing-page", "pageNumber": 3},
+        ],
+        engine=platform["engine"],
+    )
+
+    assert locations[1]["pageId"] == first
+    assert locations[1]["pageInChapter"] == 1
+    assert locations[2]["pageInChapter"] == 2
+    assert locations[1]["chapterOrdinal"] == locations[2]["chapterOrdinal"]
+    assert isinstance(locations[1]["chapterOrdinal"], int)
+    assert locations[1]["chapterTitle"]
+    # 页号存在但页面已不在库里时不得编造章节归属。
+    assert locations[3]["chapterOrdinal"] is None
+    assert locations[3]["pageInChapter"] is None
+
+
+def test_qa_entity_evidence_pages_become_citable_candidates(
+    insight_platform,
+) -> None:
+    platform = insight_platform
+    page_id = platform["page_ids"][0]
+    snapshot_pages = [
+        {
+            "pageId": page_id,
+            "pageNumber": 7,
+            "analysis": {
+                "page_summary": "宿傩展开领域",
+                "key_events": [{"summary": "首次领域展开"}],
+            },
+        }
+    ]
+    locations = page_locations(
+        [{"pageId": page_id, "pageNumber": 7}],
+        engine=platform["engine"],
+    )
+    resolved_entities = {
+        "matched_entities": [
+            {
+                "entity_id": "entity-1",
+                "canonical_name": "领域展开",
+                "category": "concepts",
+                "pages": [7, 99],
+            }
+        ],
+        "is_structured_query": True,
+    }
+
+    candidates = entity_page_candidates(
+        resolved_entities,
+        snapshot_pages=snapshot_pages,
+        locations=locations,
+    )
+    assert [row["pageId"] for row in candidates] == [page_id]
+    assert candidates[0]["pageNumber"] == 7
+    assert "宿傩展开领域" in candidates[0]["document"]
+    assert "首次领域展开" in candidates[0]["document"]
+    assert validate_retrieval_candidates(
+        {"mode": "exact", "candidates": candidates}
+    ) == candidates
+
+    citations = citations_for(candidates, engine=platform["engine"])
+    assert citations[0]["pageId"] == page_id
+    assert citations[0]["source"] == "page"
+    assert citations[0]["chapterOrdinal"] is not None
+
+    context = _answer_context(candidates, resolved_entities, locations=locations)
+    assert "页话对应：第 1 话" in context
+    assert "（全书第 7 页）" in context
+    assert "[回答要求]" in context
+    assert "第 X 话 第 Y 页" in context

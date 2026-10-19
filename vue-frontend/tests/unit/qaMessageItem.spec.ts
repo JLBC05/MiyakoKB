@@ -99,6 +99,50 @@ describe('QAMessageItem', () => {
     ])
   })
 
+  it('marks entity-evidence citations and shows retrieval warnings', () => {
+    const wrapper = mount(QAMessageItem, {
+      props: {
+        message: {
+          id: 'qa-msg-4',
+          role: 'assistant',
+          content: '宿傩在英集少年院展开领域。',
+          citations: [{ page: 7, chapterOrdinal: 8, chapterTitle: '第8話', source: 'entity' }],
+          warnings: ['语义索引读取失败，本次回答仅基于关键词检索。'],
+        },
+        renderMarkdown: content => `<p>${content}</p>`,
+      },
+    })
+
+    expect(wrapper.getComponent(ProductChipList).props('items')).toEqual([
+      {
+        id: 0,
+        label: '第8話：第7页（实体依据）',
+        ariaLabel: '查看 第8話：第7页（实体依据）',
+        interactive: true,
+        tone: 'primary',
+      },
+    ])
+    const warnings = wrapper.get('.qa-retrieval-warnings')
+    expect(warnings.attributes('role')).toBe('status')
+    expect(warnings.text()).toContain('语义索引读取失败，本次回答仅基于关键词检索。')
+  })
+
+  it('hides the footer when an answer has no citations, entities, or warnings', () => {
+    const wrapper = mount(QAMessageItem, {
+      props: {
+        message: {
+          id: 'qa-msg-5',
+          role: 'assistant',
+          content: '知识库中没有相关依据。',
+        },
+        renderMarkdown: content => `<p>${content}</p>`,
+      },
+    })
+
+    expect(wrapper.find('.qa-retrieval-warnings').exists()).toBe(false)
+    expect(wrapper.findComponent(ProductChipList).exists()).toBe(false)
+  })
+
   it('does not display save-note button', () => {
     const wrapper = mount(QAMessageItem, {
       props: {

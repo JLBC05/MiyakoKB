@@ -172,12 +172,14 @@ async function sendQuestion(): Promise<void> {
         mode: QAMode
         citations: QACitation[]
         resolvedEntities?: insightApi.ChatResult['resolvedEntities']
+        warnings?: string[]
       }) => {
         if (!isCurrentChatRequest(requestId, bookId)) return
         insightStore.updateQAMessage(loadingMessageId, {
           mode: contextData.mode,
           citations: contextData.citations,
           resolvedEntities: contextData.resolvedEntities,
+          warnings: contextData.warnings ?? [],
         })
       },
     }
@@ -204,6 +206,7 @@ async function sendQuestion(): Promise<void> {
       mode: response.mode,
       citations: response.citations,
       resolvedEntities: response.resolvedEntities,
+      warnings: response.warnings,
     })
   } catch (error) {
     if (!isCurrentChatRequest(requestId, bookId)) return

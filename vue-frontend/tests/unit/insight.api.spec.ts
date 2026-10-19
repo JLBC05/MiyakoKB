@@ -332,7 +332,68 @@ describe('insight v2 api', () => {
       topK: 5,
       threshold: 0,
     })
-    expect(result).toEqual({ answer: '通用回答', citations: [], mode: 'generic' })
+    expect(result).toEqual({
+      answer: '通用回答',
+      citations: [],
+      mode: 'generic',
+      warnings: [],
+    })
+  })
+
+  it('surfaces retrieval degradation warnings and entity-sourced citations', async () => {
+    const body = [
+      'event: status',
+      'data: {"requestId":"request-degraded","status":"retrieving"}',
+      '',
+      'event: context',
+      'data: {"mode":"generic","citations":[{"pageId":"page-2","pageNumber":7,"chapterOrdinal":8,"chapterTitle":"第8話","source":"entity"}],"degraded":true,"warnings":["语义索引读取失败，本次回答仅基于关键词检索。"]}',
+      '',
+      'event: chunk',
+      'data: {"text":"宿傩"}',
+      '',
+      'event: done',
+      'data: {}',
+      '',
+      '',
+    ].join('\n')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { sendChat } = await import('@/api/insight')
+    const contexts: Array<{ warnings?: string[]; citations: Array<{ source?: string }> }> = []
+
+    const result = await sendChat('book-1', '领域展开', {
+      ...genericChatOptions,
+      onContext: context => contexts.push(context),
+    })
+
+    expect(result.warnings).toEqual(['语义索引读取失败，本次回答仅基于关键词检索。'])
+    expect(result.citations[0]).toMatchObject({ page: 7, source: 'entity' })
+    expect(contexts[0]?.warnings).toEqual(result.warnings)
+  })
+
+  it('rejects malformed retrieval warnings', async () => {
+    const body = [
+      'event: status',
+      'data: {"requestId":"request-bad","status":"retrieving"}',
+      '',
+      'event: context',
+      'data: {"mode":"generic","citations":[],"warnings":"降级"}',
+      '',
+      'event: chunk',
+      'data: {"text":"回答"}',
+      '',
+      'event: done',
+      'data: {}',
+      '',
+      '',
+    ].join('\n')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { sendChat } = await import('@/api/insight')
+
+    await expect(sendChat('book-1', '问题', genericChatOptions)).rejects.toThrow(
+      '问答降级提示格式无效'
+    )
   })
 
   it('rejects answer chunks that arrive before the context event', async () => {
