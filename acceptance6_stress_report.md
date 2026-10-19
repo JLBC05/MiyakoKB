@@ -1,6 +1,6 @@
 # MiyakoKB 验收点6 压测报告
 
-> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #35。
+> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #37。
 > 目标：生产环境大体量漫画（50+ 话）端到端压力测试与跨章节实体消歧观察。
 
 ## 1. 测试范围与环境
@@ -268,6 +268,32 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 
 **验证**：`compileall` exit 0；重启栈后 `/api/v2/system/capabilities` 200（`features={localProviders,webImport}`，`scheduling.maxDeepLearningConcurrency` 为 null 表示不限）、`/api/v2/openapi.json` 124 paths / 0 个 plugin 路径、`GET /` 已引用新包；`vue-tsc` 23 个错误与基线一致（未新增）。提交 `557679b`、`8f334ae`。
 
+### 5.8 整本构建提速复测（A/B/C + E/D2 落地后，2026-10-19 晚）
+
+同一本书、同一台机器、同一个供应商（`custom` / `gemini-3.8-flash-high`）前后两次整本构建对比：基线 job `9b41346d-4a6f-4f93-9f49-0d9212804e2b`（9168.5s），复测 job `c95406a7-66a4-466d-af31-ba03442d060c` / run `c3730509-3b35-424a-9753-8398561a57ec`（`POST /api/v2/insight/analysis-jobs` 于 20:10:50 触发，21:34:58 completed）。书 `73071fca-2c64-43ae-abe0-a1db14fd0f24`（FX戰士久留美，13 章 / 387 页，`scope=full`），本次 `analyzeConcurrency=3`（供应商级设置，rev30）。
+
+**总耗时 9168.5s → 5048.7s（152.8 min → 84.1 min，1.82×，少 68.7 min）**，分段由 `job_events` 的 `step_started`→`page_completed` 配对得到（脚本 `tmp_stage_durations.py`）：
+
+| 阶段 | 基线 s | 复测 s | 变化 |
+| --- | --- | --- | --- |
+| 逐页 VLM 分析（387 批） | 1658.3 | 1065.9 | 1.6× 更快（`analyzeConcurrency=3` 生效） |
+| 第 1 层聚合 | 777.5 | 714.6 | ≈持平 |
+| 第 2 层聚合 | 225.7 | 216.3 | ≈持平 |
+| 第 3 层聚合 | 21.1 | 22.5 | ≈持平 |
+| compressed_context | 28.0 | 115.1 | **4.1× 更慢**（单次 LLM 调用，网关时延波动） |
+| overview(no_spoiler) | 13.4 | 15.4 | ≈持平 |
+| overview(story_summary) | 11.7 | 7.2 | ≈持平 |
+| 时间线 | 23.8 | 43.3 | **1.8× 更慢**（同上，单次调用波动） |
+| **实体对齐** | **6354s（未记账，藏在时间线之后）** | **2783.9s（正式步骤 ordinal 396）** | **2.28× 更快且可见** |
+| 向量索引 | 47.9 | 53.5 | ≈持平（ChromaDB 已就位，事件 238 条） |
+| 发布 / 校验 | 0.6 | 0.6 | — |
+
+对齐这一步是本次整改的核心：从「1158 次单对请求、105.9 分钟、`job_events` 里完全不可见」变成「249 批 × 30 对 = 约 7,470 对、46.4 分钟、有独立步骤与每批进度日志」。**单对成本 5.5s → 0.37s（14.9× 更快）**；墙钟只快 2.28×，因为超集枚举把候选对从 1,158 放大到约 7,470（6.4×，见发现 #37）。
+
+**产出质量（`verify_acceptance6_alignment.py`，复测 run）**：实体 810（characters 32 / items 98 / locations 148 / concepts 532）、别名 1,213、归并日志 410 条（基线 500 / 646 / 147）——归并数 2.8× 增长且全部 `confidence=high`，规则分布 `llm_semantic_judge` 275、`location_detail_overlap` 51、`character_alias_merge` 40、`concept_semantic_match` 39、`frequency_dominant_promoted` 4、`item_core_match` 1，**`None→None` 脏记录 0 条**；`total_frequency` 按页去重一致性 810/810 通过；金额/日期概念 124 个、ID 重复 0；实体 ID 格式异常 0、`pinyin_` 回退 0；主角「福贺久留美」302 页 / 18 别名 / 12-13 章覆盖。实体总量上升主要来自本次重新分析（`scope=full` 不复用已发布页，见 #9）而非对齐变松。
+
+**下游与问答（`verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`）**：图谱 810 节点 / 5,107 边 / 孤立节点 0（度分布 4279/455/155/71/28）；时间线 `mode=enhanced`、`status=ready`、5 事件；两份概览 `ready`（rev3，`run=c3730509`，len 529 / 564）；`qa/status` `available=true`、`generation=2`、`coverage={pages:387, events:238}`；问答「久留美的父亲欠了多少债？」检索 7 条片段、解析到实体「久留美的父亲」、10.7s 内流式返回并带页级引用（回答指出债务实为母亲造成，属正确区分）。
+
 ## 6. 发现与建议汇总（滚动）
 
 | # | 级别 | 发现 | 建议 |
@@ -310,10 +336,14 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 
 | 35 | 中 | **剩余两处性能杠杆都藏在「看不见 / 绑错」的位置**。①逐页分析的批内并发分片数只由**进程环境变量** `INSIGHT_ANALYZE_PARALLEL` 决定（`src/backend_v2/insight/worker.py` 原 `_batch_concurrency()`，默认 3、范围 1..8）：装在启动器进程的环境里，UI 完全看不到、用户无法按供应商能力调整（那次 387 页实测正是被压到 1 以适应供应商并发上限）；②第 1 层聚合的粒度被**绑死在「每批分析页数」**上：`derived.py` 的 `layer_units` 第 0 层分支写死 `group_size = pagesPerBatch`，第 0 层自带的自定义 `unitsPerGroup` 被完全忽略，且前端 `BatchSettingsTab.vue` 刻意把两者同步（改一个就写另一个）。于是「每批页数」（影响 VLM 请求尺寸与鲁棒性）与「聚合粒度」（影响中间层细节保留度）两个独立旋钮被迫联动 | **已实施**：(a) 并发升级为 **insight VLM 供应商级设置** `analyzeConcurrency`（1..8，默认 3，落库载荷键、设置校验整数范围、冻结映射、`provider_runtime.frozen_analyze_concurrency`、前端 VLM 页签输入框）；解析不到时才回退环境变量，env 降级为兜底；(b) 自定义架构下第 0 层 `unitsPerGroup` 表示「每组合并页数」，**内置预设行为完全不变**（仍等于 `pagesPerBatch`），前端解耦两个旋钮并给出「每 N 页汇总 / 每 N 个单元汇总」标注。实施中发现并修掉一处真实回归：把新键加入 insight_vlm 载荷**精确键白名单**后，`validation._exact_keys` 要求键集合完全相等 → 老库与测试夹具里「缺该键」的载荷全部非法（受影响的 2 个测试文件 **86 failed**，且生产读设置即抛错），改为「可选键」语义（缺省合法、越界仍拒）后恢复 **254 passed**。建议：任何「往精确键载荷里加字段」的改动都要同步可选键集合，否则会对存量数据构成破坏性契约变更 |
 
+| 36 | 中 | **数据根的「版本戳与物理结构错位」会把启动与升级路径一起卡死，且没有自愈或修复指引**：线上库 `data-v2/saber.sqlite3` 由「清理提交之后、`version.json` 仍写 3.5.2」的那段代码初始化，于是物理结构已是 3.5.3 形（75 表，仅 `prompts` 的 CHECK 仍是旧取值）而 `schema_metadata.storage_version` 停在 3.5.2。`StorageManager.prepare` 与 `saber_v2.py --role storage-migrator --action check\|upgrade` 都先按**源版本契约**校验数据（`src/storage_migrator/runner.py:60-71` → `_validate_version(self.root, source, files=…)`），于是必然报 `存储结构不匹配: missing=['browser_session_credentials', …], changed=['operations','page_assets','prompts']` 后中止，`prepare` 根本进不到转换分支；`python run.py` 启动即 `[错误] 存储准备失败`（决策 12 之后统一启动器也会准备存储，所以开发栈同样起不来）。只读诊断脚本 `tmp_stamp_diag.py` 显示：对 3.5.1/3.5.2 契约都 missing 8 张，**对 3.5.3 契约只差 `changed=['prompts']`** | **已修复（就地）**：先备份数据根（`temp/db-backup-20261019-200610/`，含 sqlite3 + `-wal` + `-shm`），再用真正的迁移原语修复——`v3_5_3.stop_unfinished(root)` + `v3_5_3.convert(root)`（`RETIRED_TABLES` 逐表容忍缺失、`_rebuild` 按契约重建 `operations`/`page_assets`/`prompts`、收窄 CHECK 前统计 before/removed/after、末尾 `PRAGMA foreign_key_check`），最后用真实 SQLAlchemy 表对象打戳 `update(schema_metadata).where(schema_metadata.c.singleton_id == 1).values(storage_version="3.5.3")`（脚本 `tmp_repair_stamp_353.py`）。复验：`tmp_stamp_diag.py` → `stamp=3.5.3`、`3.5.3: OK（结构与 3.5.3 契约一致）`、75 表；重启后 health 200 且 `storageVersion=3.5.3`。坑：`validate_data(files=True)` 还会按 `assets` 表校验数据根 `fonts/` 下每个字体文件的 sha256，而运行期启动检查传 `files=False`（只有**待应用**的 pending 转换才查文件），且随包字体实际由 `src/backend_v2/resources/fonts/` 提供、不复制进数据根——就地修复不要把 `files=True` 当作通过条件。建议：`check()` 在源契约校验失败但**目标**契约通过时，降级为「结构已超前，只需校准版本戳」的提示并给出修复命令；至少让报错区分「缺失/多余/结构不同」并指向迁移文档 |
+| 37 | 中 | **批量预取的「超集枚举」把候选对放大 6.4×，吃掉了一部分批量化的收益**：`prefetch_alignment_judgements` 枚举「raw 名 ×（已有实体名/别名 ∪ 同类别全部 raw 名）」，只经 `is_judge_candidate` 粗筛；复测 387 页得到约 7,470 对（249 批 × 30），而旧实现在主循环里实际只问 1,158 对——因为主循环按频次顺序遍历、命中即 `break`，大量对根本不会被问到。于是单对成本虽降到 0.37s（14.9×），对齐墙钟只从 105.9 min 降到 46.4 min（2.28×），且对齐仍占整本构建的 **55%**（2783.9 / 5048.7s） | 按主循环真实语义收窄候选面：①每个 raw 名只保留字面相似度 Top-K（如 K=8）或同章/相邻章的实体，而不是同类全表两两组合；②或改为「两遍走」——第一遍干跑记录主循环实际会问的对（不调 LLM），第二遍批量裁决；③给对齐单配一个便宜/无思考的裁决模型（当前 `chat` 与 VLM 同模型，30 对一批要 ~33s，思考 token 占大头）。另注：compressed_context 与 timeline 两处单次调用本次分别慢了 4.1× / 1.8×，是同一网关的时延波动（同代码同参数），不是本次改动引入的回归 |
 ## 7. 附录
 - 监控手段：job_items 状态分布查询（tmp_job_status.py）、worker 日志（data-v2/logs/saber-worker.log）、守护脚本（tmp_guard_job.py，空闲 360s 触发 reconcile+continue）。
 - 验收脚本：verify_acceptance6_alignment.py / verify_acceptance6_downstream.py / verify_acceptance6_qa.py（用法：`python verify_acceptance6_qa.py <bookId> "问题" [--mode exact|global]`）。
 - 消歧分析脚本（§4 数据来源，均可重复运行、零 token）：tmp_judge_cache_stats.py（裁决缓存 true/false 分布与分类目统计）、tmp_candidate_rules_eval.py（候选规则 R0-R6 离线回放）、tmp_candidate_rules_eval2.py（确定性拒绝规则 P1-P4、弱字面证据分布）、**tmp_replay_rules.py（§4.5 整改后的规则回放：硬拒绝命中分布、误伤清单、已发布合并/别名回归）**、tmp_failed_and_artifacts.py（失败项与产物发布状态）、tmp_timeline_probe.py / tmp_timeline_probe2.py（时间线 mode/fallback_reason/人物条目）、**tmp_retry_failed.py（只重跑失败项）**、**tmp_scan_undefined.py（未定义全局名扫描）**。
 - 运维/诊断脚本（§5.3、§5.4 数据来源）：tmp_inspect_retry_job.py（打印 job 状态 + items 逐项错误 + 冻结配置 vlm/chat/embedding + 产物行，`python tmp_inspect_retry_job.py <jobId>`）、tmp_artifact_detail.py（产物全列 + payload 键 + warnings）、tmp_wait_job.py（轮询至终态，`<jobId> <maxMinutes>`）、tmp_guard_job.py（空闲 360s 自动 reconcile + continue）、tmp_verify_vector_events.py（向量事件回退专项验证）。
+- 存储/数据根诊断与修复脚本（发现 #36）：tmp_stamp_diag.py（只读打印 `schema_metadata` 的 stamp/profile 与「对 3.5.0/3.5.1/3.5.2/3.5.3 各契约的 missing/unexpected/changed」）、tmp_unfinished_probe.py（只读普查 jobs/steps/items/operations/transient_requests/render_status/process_epochs 的未完成态）、tmp_repair_stamp_353.py（备份存在的前提下，用 `v3_5_3.stop_unfinished` + `v3_5_3.convert` + 真实表对象打戳，把「物理已是 3.5.3、戳仍在 3.5.2」的库校准）、tmp_set_concurrency.py（通过 `PUT /api/v2/settings/transactions` 把 `analyzeConcurrency` 写入当前 insight_vlm 供应商行）。
+- 实测脚本：tmp_measure_full.py（触发整本构建并轮询，`scope=full`）、tmp_measure_watch.py（精简监视：只打状态、items 计数、待执行步骤名，避免整份 job JSON 刷屏）、**tmp_stage_durations.py（按 `job_events` 的 `step_started` → `page_completed` 配对统计每个 `stepKind` 的耗时，用法 `python tmp_stage_durations.py <jobId>`；schema 的 DATETIME 列经 SQLAlchemy 已是 `datetime`，`parse_ts` 需同时接受 datetime/字符串/epoch）**。
 - 落盘证据：tmp_alignment_jjk.txt、tmp_downstream_jjk.txt、tmp_qa_jjk.txt、tmp_judge_cache_stats.txt、tmp_candidate_rules_eval.txt、tmp_candidate_rules_eval2.txt、tmp_failed_and_artifacts.txt。
 - 基线数据：kurumi_ch1_5_accumulation_report.txt（243 实体/329 别名/90 归并/LLM 缓存命中 685 vs 调用 123）。

@@ -79,13 +79,14 @@
 - [x] 验收点 3：关系图谱轻量化、丝滑无卡顿，故事梗概合并打通实体。
 - [x] 验收点 4：问答引用消除冗余括号章节号，优先显示真实话数。
 - [x] 验收点 5：统一启动器拉起双进程稳定运行。
-- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#34）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
+- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#37）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；**2026-10-19 追加：全书构建 69% 墙钟耗在逐对裁决的问题已定案并落地**（报告发现 #34 / 决策 14 / 坑 19）：超集预取 + 批量裁决（30 对/批、3 并发）、对齐拆为独立步骤 `insight_stage_entity_alignment`、每批进度写用户日志；
   2. ~~**衍生缺口补跑**~~：**已完成（2026-10-19）**。`POST /api/v2/jobs/<id>/retry-failed` 只重跑失败项（源 job `39c2c48f` → 重试 job `091d72b7` → 补跑 job `8431eb87`/run `2c9d40c2`，20/20 成功），概览 no_spoiler(293 字)/story_summary(535 字) 已发布、`entity_alignment` rev5 status=ready；发现 #18/#19 关闭；
   3. **排查 global 问答召回**：问"少年院"只返回第 1 话引用并答"证据不足"，而该场景在第 6-8 话（报告发现 #20）；
-  4. 清理收尾：`tests_backend` 失效 import 已清零（扫描脚本 `tmp_scan_tests.py`），后端全量 **937 passed / 0 failed / 0 error**（2026-10-19）；`vue-frontend` 六项门禁全部 0（vitest **88 files / 642 tests**、vue-tsc、eslint、stylelint、`lint:ui`、`lint:ui:audit`），生成类型与静态产物已与源码同步（见坑 16）；PySide6-Essentials 已从 requirements-cpu/gpu 删除；根目录临时脚本仍待归置（`tmp_*.py` 一律不入库）。
+  4. 清理收尾：`tests_backend` 失效 import 已清零（扫描脚本 `tmp_scan_tests.py`），后端全量 **942 passed / 0 failed / 0 error**（2026-10-19，含 E/D2 新增 5 条）；`vue-frontend` 六项门禁全部 0（vitest **88 files / 642 tests**、vue-tsc、eslint、stylelint、`lint:ui`、`lint:ui:audit`），生成类型与静态产物已与源码同步（见坑 16）；PySide6-Essentials 已从 requirements-cpu/gpu 删除；根目录临时脚本仍待归置（`tmp_*.py` 一律不入库）。
+  5. ~~**提速复测**~~：**已完成（2026-10-19 21:34）**。供应商级并发 `analyzeConcurrency=3` 写入 insight_vlm 供应商行（rev29→30）并确认进入作业冻结配置；久留美 387 页全书构建 job `c95406a7-66a4-466d-af31-ba03442d060c` / run `c3730509-3b35-424a-9753-8398561a57ec`（398 项，含新步骤 `insight_stage_entity_alignment`）**5048.7s（84.1 min）completed**，对照基线 9168.40s（152.8 min）＝ **1.82×**，少 68.7 min。分段：逐页分析 1658.3→1065.9s、第 1 层 777.5→714.6s、**实体对齐 6354s（未记账）→2783.9s（正式步骤）**、其余约持平（compressed_context 28→115s、timeline 23.8→43.3s 为同网关单次调用时延波动）。产出质量：实体 810（32/98/148/532）、别名 1213、归并 410（旧 500/646/147，全部 high、无 `None→None`）、频次=去重页数 810/810、金额日期概念 124 个 0 重复 ID、图谱 810 节点/5107 边/0 孤立、概览与时间线 ready、`qa/status` generation=2（events 238/pages 387）、问答 10.7s 带页引用。结论与下一杠杆见报告 §5.8 与发现 #37（超集预取把候选对放大 6.4×，对齐仍占 55%）。
 
 ---
 
@@ -249,6 +250,17 @@
   - *现状*：**已修**——后端 `_exact_keys(..., optional=...)` 与 `_OPTIONAL_INSIGHT_PROVIDER_PAYLOAD_FIELDS`，前端 `OPTIONAL_PROVIDER_PAYLOAD_FIELDS` + `hasRequiredKeys`；缺省合法、越界仍拒，受影响的 2 个测试文件 **254 passed**、前端 **642 passed**。
   - *教训*：给这类「白名单 + 精确相等」的载荷加字段，必须同时把它登记进**可选键集合**（并让前端校验同样区分必填/可选），否则就是对存量数据的破坏性变更；加字段前先搜一遍 `_exact_keys` / `hasExactKeys` 的调用面。
 
+- **坑 21：数据根的「版本戳」与「物理结构」错位后，启动与升级路径会一起卡死（报告发现 #36）**
+  - *现象*：`python run.py --no-browser` 启动即退出并打印 `[错误] 存储准备失败: 存储结构不匹配: missing=['browser_session_credentials', 'browser_session_pages', 'browser_sessions', 'bubbles', 'job_font_snapshots', 'operation_font_snapshots', 'render_requests', 'translation_constraints'], unexpected=[], changed=['operations', 'page_assets', 'prompts']`；`python saber_v2.py --role storage-migrator --action check|upgrade` 报同一条错，**连 upgrade 也进不了转换路径**，看起来像「库坏了」。
+  - *根因*：该库是在「清理提交（09f44a4 删退役表）之后、`version.json` 仍写 3.5.2」的时间窗里用当前 metadata 初始化的——物理结构已经是 3.5.3 形（75 表，只有 `prompts` 的 CHECK 还是旧取值），而 `schema_metadata.storage_version` 停在 3.5.2。`StorageManager` / `runner.check()` 会**先按源版本（3.5.2，83 表）契约校验数据**（`src/storage_migrator/runner.py:60-71` → `_validate_version(self.root, source, files=…)`），于是必然报「missing 8 张退役表」并中止。只读诊断 `tmp_stamp_diag.py` 一眼看清：对 3.5.1/3.5.2 契约都 missing 8 张，**对 3.5.3 契约只差 `changed=['prompts']`**。
+  - *现状*：**已就地修复**（先备份 `temp/db-backup-20261019-200610/`：sqlite3 + `-wal` + `-shm`）：用真迁移原语 `v3_5_3.stop_unfinished(root)` + `v3_5_3.convert(root)`（`convert` 对已退役表是容忍的：逐表 `if table in present` 才 DROP），再用真实 SQLAlchemy 表对象打戳 `update(schema_metadata).where(schema_metadata.c.singleton_id == 1).values(storage_version="3.5.3")`（脚本 `tmp_repair_stamp_353.py`）。复验 `tmp_stamp_diag.py` → `stamp=3.5.3`、`3.5.3: OK（结构与 3.5.3 契约一致）`、75 表；重启后 `GET /api/v2/health` 返回 `storageVersion=3.5.3`。
+  - *教训*：①**跑开发树建的库会带开发树的物理结构**——重构窗口内「先改 metadata、后改 `version.json`」就会造出这种混合态，改存储结构时必须同一次改动里同步 `version.json`+新契约 SQL；②`validate_data(files=True)` 会按 `assets` 表校验数据根 `fonts/` 下每个字体文件的 sha256，而随包字体其实由 `src/backend_v2/resources/fonts/` 提供、**不复制进数据根**，运行期启动检查传的是 `files=False`（只有**待应用**的 pending 转换才查文件）——就地修复别把 `files=True` 当通过门槛；③改进方向见报告 #36：`check()` 在源契约失败但**目标**契约通过时，应降级为「结构已超前，只需校准版本戳」并给出修复命令。
+
+- **坑 22：用 `job_events` 拆阶段耗时，时间列不是字符串（报告 §5.8 / 发现 #37 的数据来源）**
+  - *现象*：`tmp_stage_durations.py` 首跑 `TypeError: 'str' object cannot be interpreted as an integer`（对 `job_events.created_at` 调 `datetime.fromisoformat(value.replace(...))`）。
+  - *根因*：`src/backend_v2/storage/schema.py` 里 `job_events.created_at` / `jobs.created_at` 是 `DATETIME` 列，SQLAlchemy 已解码成 `datetime`，不需要（也不能）再 `fromisoformat`；`job_items` 也**没有** `kind` 列（`kind` 在 `job_steps` 上、`event_type` 在 `job_events` 上）。
+  - *正确姿势*：`parse_ts` 同时接受 `datetime` / 字符串（含 `Z`）/ epoch；配对用 `step_started`（payload 带 `itemId`/`stepKind`）→ `page_completed`（同一 `itemId`），每个 item 一条，派生步骤也走同一套（所以「对齐」拆成独立步骤后才第一次出现在耗时表里）。教训：**先查 schema 列类型再写解析**，别按 JSON 直觉当字符串。
+
 ---
 
 ## 6. 新会话先读
@@ -259,7 +271,7 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#35、裁决候选对离线回放数据、附录里的分析脚本清单）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#37、裁决候选对离线回放数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
 9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）、`tmp_audit_db_tables.py`（表三维对照：metadata 定义 vs 代码引用 vs 线上行数）、`tmp_audit_db_clusters.py`（按域打印 plugin / operations / studio 等簇的 metadata 覆盖与行数）。
 
