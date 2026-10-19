@@ -1013,12 +1013,114 @@ def _alignment_ability_core(name: str) -> str:
     return re.sub(r'[\(（].*?[\)）]', '', core).strip()
 
 
+# 语义裁决候选面收窄：每个词条最多保留多少个「非确定性豁免」的候选对。
+# 背景：候选面是 O(词条数 × 同类别规模)，大体量作品会膨胀到数万对（全是单次 LLM 成本）。
+# 387 页/819 词条/12433 对实测：强别名信号全量保留 + 其余取重合度前 16，
+# 仍保留 98.6% 的真实语义归并（见压测报告发现 #37）。
+JUDGE_TOP_K_DEFAULT = 16
+JUDGE_TOP_K_MIN = 4
+JUDGE_TOP_K_MAX = 64
+
+
+def resolve_judge_top_k() -> int:
+    """读取候选面收窄上限；<=0 表示关闭收窄（保留全部过闸候选对）。"""
+    raw = os.environ.get("INSIGHT_JUDGE_TOP_K", "").strip()
+    if not raw:
+        return JUDGE_TOP_K_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        return JUDGE_TOP_K_DEFAULT
+    if value <= 0:
+        return 0
+    return max(JUDGE_TOP_K_MIN, min(JUDGE_TOP_K_MAX, value))
+
+
+def _is_deterministic_alias_pair(name1: str, name2: str) -> bool:
+    """包含 / 字序子序列 / 同音异体：本身就是强别名信号，收窄时无条件保留。"""
+    c1 = _strip_generic_tokens(name1)
+    c2 = _strip_generic_tokens(name2)
+    if not c1 or not c2:
+        return False
+    if c1 in c2 or c2 in c1:
+        return True
+    return _is_subsequence(c1, c2) or _is_subsequence(c2, c1) or _is_homophone_variant(c1, c2)
+
+
+def build_alignment_candidate_pairs(
+    raw_stats: dict,
+    canonical_by_id: dict,
+    *,
+    top_k: int | None = None,
+) -> list[tuple[str, str, str]]:
+    """枚举需要送 LLM 语义裁决的候选对（收窄后），预取与归并主循环共用同一口径。
+
+    - 候选面与旧实现一致：每个词条 ×（同类别已有实体的 canonical_name/别名 ∪ 同类别全部词条）；
+    - 过滤与主循环一致：is_judge_candidate 内的硬性拒绝 + 核心字重合度 + 短名保护，
+      abilities 额外要求核心名一致；
+    - 收窄：强别名信号（包含/子序列/同音）全量保留，其余按核心字重合度降序取前 top_k。
+    """
+    limit = resolve_judge_top_k() if top_k is None else max(0, int(top_k))
+    pairs: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for cat, raw_dict in raw_stats.items():
+        names = list(dict.fromkeys(
+            str(item).strip() for item in raw_dict.keys() if str(item).strip()
+        ))
+        if not names:
+            continue
+        name_set = set(names)
+        existing: list[str] = []
+        for ent in canonical_by_id.values():
+            if ent.get("category") != cat:
+                continue
+            for candidate in [ent.get("canonical_name")] + list(ent.get("aliases", [])):
+                text = str(candidate or "").strip()
+                if text and text not in name_set:
+                    existing.append(text)
+        pool = list(dict.fromkeys(existing + names))
+        for name in names:
+            keep: list[str] = []
+            scored: list[tuple[float, str]] = []
+            for other in pool:
+                if other == name:
+                    continue
+                if cat == "abilities":
+                    core1 = _alignment_ability_core(name)
+                    core2 = _alignment_ability_core(other)
+                    if core1 and core2 and core1 != core2:
+                        continue
+                if not is_judge_candidate(cat, name, other):
+                    continue
+                if limit <= 0 or _is_deterministic_alias_pair(name, other):
+                    keep.append(other)
+                else:
+                    scored.append((
+                        calculate_char_overlap_ratio(
+                            _strip_generic_tokens(name), _strip_generic_tokens(other)
+                        ),
+                        other,
+                    ))
+            if scored:
+                scored.sort(key=lambda it: (-it[0], it[1]))
+                keep.extend(other for _, other in scored[:limit])
+            for other in keep:
+                low, high = (name, other) if name <= other else (other, name)
+                key = (cat, low, high)
+                if key in seen:
+                    continue
+                seen.add(key)
+                pairs.append(key)
+    return pairs
+
+
 def prefetch_alignment_judgements(
     llm_judge: "LLMBatchJudge",
     raw_stats: dict,
     canonical_by_id: dict,
     max_pairs: int | None = None,
     progress: Callable[[int, int], None] | None = None,
+    candidate_pairs: Sequence[tuple[str, str, str]] | None = None,
 ) -> dict:
     """在归并主循环之前，把通过粗筛闸门的候选对批量送 LLM 裁决并落缓存（原「方案5」的完整版）。
 
@@ -1031,41 +1133,12 @@ def prefetch_alignment_judgements(
       对由主循环自己处理，不进入裁决。
     - 只写缓存、不改变归并语义：主循环随后逐对命中缓存，不再发起单请求。
     - 按 batch_size 切块 + 轻度并发；进度通过 progress(done_chunks, total_chunks) 回调对外可见。
+    - candidate_pairs 由调用方一次性构建（与主循环共用同一口径，避免两处各枚举一遍）。
     """
-    pairs: list = []
-    for cat, raw_dict in raw_stats.items():
-        names = list(dict.fromkeys(
-            str(item).strip() for item in raw_dict.keys() if str(item).strip()
-        ))
-        if not names:
-            continue
-        # 已有实体名：与词条同名的不再重复枚举（make_key 与顺序无关，raw×raw 已覆盖）。
-        name_set = set(names)
-        existing: list[str] = []
-        for ent in canonical_by_id.values():
-            if ent.get("category") != cat:
-                continue
-            for candidate in [ent.get("canonical_name")] + list(ent.get("aliases", [])):
-                text = str(candidate or "").strip()
-                if text and text not in name_set:
-                    existing.append(text)
-        existing = list(dict.fromkeys(existing))
-
-        def _consider(other: str) -> None:
-            if cat == "abilities":
-                core1 = _alignment_ability_core(name)
-                core2 = _alignment_ability_core(other)
-                if core1 and core2 and core1 != core2:
-                    return
-            if is_judge_candidate(cat, name, other):
-                pairs.append((cat, name, other))
-
-        for name in names:
-            for other in existing:
-                _consider(other)
-        for index, name in enumerate(names):
-            for other in names[index + 1:]:
-                _consider(other)
+    if candidate_pairs is not None:
+        pairs: list = [(cat, n1, n2) for cat, n1, n2 in candidate_pairs]
+    else:
+        pairs = list(build_alignment_candidate_pairs(raw_stats, canonical_by_id))
 
     if max_pairs is not None and max_pairs > 0:
         pairs = pairs[:max_pairs]
@@ -3982,6 +4055,28 @@ class InsightDerivedRepository:
                     "timestamp": utcnow().isoformat(),
                 })
 
+            # 3.4 候选面收窄：一次性算出「将送语义裁决的对」集合，预取与主循环共用同一口径。
+            # 旧实现让主循环扫全部 entity × 全部词条，大体量作品会把逐对询问膨胀到数万次。
+            judge_candidates: set[str] | None = None
+            candidate_pairs: list[tuple[str, str, str]] | None = None
+            try:
+                candidate_pairs = build_alignment_candidate_pairs(raw_stats, canonical_by_id)
+                judge_candidates = {
+                    LLMBatchJudge.make_key(cat, n1, n2) for cat, n1, n2 in candidate_pairs
+                }
+                print(f"[align_entities] 收窄后语义裁决候选 {len(candidate_pairs)} 对")
+            except Exception as _narrow_err:  # noqa: BLE001
+                judge_candidates = None
+                candidate_pairs = None
+                print(f"[align_entities] 候选面收窄失败，保留全部过闸候选: {_narrow_err}")
+
+            def judge_same(judge, cat: str, name: str, other: str) -> bool:
+                """语义裁决统一入口：不在入选集合里的对直接判否（不发起 LLM 调用）。"""
+                if judge_candidates is not None and \
+                        LLMBatchJudge.make_key(cat, name, other) not in judge_candidates:
+                    return False
+                return bool(judge.judge_pair_sync(cat, name, other))
+
             # 3.5 批量预取：把主循环可能询问的同类别候选对一次性送裁决（默认 30/批 + 轻度并发）并写缓存；
             # 主循环随后只命中缓存，不再逐对发起单请求（旧实现「每对一次 LLM 调用」是主要耗时来源）。
             # 注意：这里曾经要求 canonical_by_id 非空，导致首次全量构建（无历史实体）完全跳过预取，
@@ -3996,7 +4091,11 @@ class InsightDerivedRepository:
                             progress("实体对齐语义裁决", done, total)
 
                     prefetch = prefetch_alignment_judgements(
-                        llm_judge, raw_stats, canonical_by_id, progress=_prefetch_progress
+                        llm_judge,
+                        raw_stats,
+                        canonical_by_id,
+                        progress=_prefetch_progress,
+                        candidate_pairs=candidate_pairs,
                     )
                     print(
                         f"[align_entities] 预取裁决候选 {prefetch['candidates']} 对："
@@ -4057,7 +4156,7 @@ class InsightDerivedRepository:
                                 # LLM 语义裁决（统一粗筛闸门：硬性拒绝 + 核心字重合度 + 短名保护）
                                 if is_judge_candidate(cat, name, c_name):
                                     judge = llm_judge if llm_judge is not None else get_default_llm_judge()
-                                    if judge.judge_pair_sync(cat, name, c_name):
+                                    if judge_same(judge, cat, name, c_name):
                                         target_id = existing_ent["entity_id"]
                                         merge_rule_hit = "llm_semantic_judge"
                                         merge_confidence = "high"
@@ -4065,7 +4164,7 @@ class InsightDerivedRepository:
                                 for ex_alias in c_aliases:
                                     if is_judge_candidate(cat, name, ex_alias):
                                         judge = llm_judge if llm_judge is not None else get_default_llm_judge()
-                                        if judge.judge_pair_sync(cat, name, ex_alias):
+                                        if judge_same(judge, cat, name, ex_alias):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
                                             merge_confidence = "high"
@@ -4102,7 +4201,7 @@ class InsightDerivedRepository:
                                     # LLM 语义裁决（统一粗筛闸门：硬性拒绝 + 核心字重合度 + 短名保护）
                                     if is_judge_candidate(cat, name, c_name):
                                         judge = llm_judge if llm_judge is not None else get_default_llm_judge()
-                                        if judge.judge_pair_sync(cat, name, c_name):
+                                        if judge_same(judge, cat, name, c_name):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
                                             merge_confidence = "high"
@@ -4114,7 +4213,7 @@ class InsightDerivedRepository:
                                             continue
                                         if is_judge_candidate(cat, name, ex_alias):
                                             judge = llm_judge if llm_judge is not None else get_default_llm_judge()
-                                            if judge.judge_pair_sync(cat, name, ex_alias):
+                                            if judge_same(judge, cat, name, ex_alias):
                                                 target_id = existing_ent["entity_id"]
                                                 merge_rule_hit = "llm_semantic_judge"
                                                 merge_confidence = "high"
@@ -4150,7 +4249,7 @@ class InsightDerivedRepository:
                                 if not is_loc_blocked:
                                     if is_judge_candidate(cat, name, c_name):
                                         judge = llm_judge if llm_judge is not None else get_default_llm_judge()
-                                        if judge.judge_pair_sync(cat, name, c_name):
+                                        if judge_same(judge, cat, name, c_name):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
                                             merge_confidence = "high"
@@ -4165,7 +4264,7 @@ class InsightDerivedRepository:
                                                 alias_blocked = True
                                         if not alias_blocked and is_judge_candidate(cat, name, ex_alias):
                                             judge = llm_judge if llm_judge is not None else get_default_llm_judge()
-                                            if judge.judge_pair_sync(cat, name, ex_alias):
+                                            if judge_same(judge, cat, name, ex_alias):
                                                 target_id = existing_ent["entity_id"]
                                                 merge_rule_hit = "llm_semantic_judge"
                                                 merge_confidence = "high"
@@ -4192,7 +4291,7 @@ class InsightDerivedRepository:
                                 # LLM 语义裁决（字符重合度 >= 40% 粗筛）
                                 if is_judge_candidate(cat, name, c_name):
                                     judge = llm_judge if llm_judge is not None else get_default_llm_judge()
-                                    if judge.judge_pair_sync(cat, name, c_name):
+                                    if judge_same(judge, cat, name, c_name):
                                         target_id = existing_ent["entity_id"]
                                         merge_rule_hit = "llm_semantic_judge"
                                         merge_confidence = "high"
@@ -4200,7 +4299,7 @@ class InsightDerivedRepository:
                                 for ex_alias in c_aliases:
                                     if is_judge_candidate(cat, name, ex_alias):
                                         judge = llm_judge if llm_judge is not None else get_default_llm_judge()
-                                        if judge.judge_pair_sync(cat, name, ex_alias):
+                                        if judge_same(judge, cat, name, ex_alias):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
                                             merge_confidence = "high"
@@ -4231,7 +4330,7 @@ class InsightDerivedRepository:
                                 # LLM 语义裁决（字符重合度 >= 40% 粗筛）
                                 if is_judge_candidate(cat, name, c_name):
                                     judge = llm_judge if llm_judge is not None else get_default_llm_judge()
-                                    if judge.judge_pair_sync(cat, name, c_name):
+                                    if judge_same(judge, cat, name, c_name):
                                         target_id = existing_ent["entity_id"]
                                         merge_rule_hit = "llm_semantic_judge"
                                         merge_confidence = "high"
@@ -4239,7 +4338,7 @@ class InsightDerivedRepository:
                                 for ex_alias in c_aliases:
                                     if is_judge_candidate(cat, name, ex_alias):
                                         judge = llm_judge if llm_judge is not None else get_default_llm_judge()
-                                        if judge.judge_pair_sync(cat, name, ex_alias):
+                                        if judge_same(judge, cat, name, ex_alias):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
                                             merge_confidence = "high"

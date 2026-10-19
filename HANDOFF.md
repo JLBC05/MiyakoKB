@@ -159,6 +159,13 @@
   - *理由*：并发只影响速度、不改知识语义，适合做成可见可调的供应商参数；聚合粒度会改变中间层细节保留度，因此只在用户显式选择自定义架构时才接管默认值——不替所有用户降低知识产出质量。
   - *验证*：新增 `test_vlm_page_analysis_concurrency_is_a_provider_setting`（含「老载荷缺该键仍合法」「越界/布尔拒绝」「设置优先于 env」）与 `test_custom_architecture_groups_first_layer_units_by_its_own_size`（自定义架构 units=2 → 第 1 层 2 个单元；内置架构不变）；受影响两个测试文件 **254 passed**；前端六项门禁 **0**（vitest 88 files / 642 tests，vue-tsc 0，eslint 0 errors / 20 warnings）。
 
+- **决策 16：语义裁决的候选面按字面相似度取 Top-K 收窄（确定性别名对豁免）**（2026-10-19 用户批准「做收窄候选面」，属发现 #37/#38）
+  - *背景*：决策 14 的超集预取把候选对从 1,158 放大到约 7,470（6.4×），对齐墙钟 105.9 → 46.4 min（2.28×）但仍占整本构建 55%（2783.9 / 5048.7s）。超集里绝大部分对是主循环按频次遍历时「命中即 break」永远不会问到的。
+  - *做法*：(a) 新增 `build_alignment_candidate_pairs(raw_stats, canonical_by_id, *, top_k=None)`——逐类别摊平候选池（已有实体规范名+别名 ∪ 同类 raw 名），过 `is_judge_candidate` 后按 `calculate_char_overlap_ratio` 降序（并列按名称升序保证确定性）截断到 K，`_is_deterministic_alias_pair`（包含/子序列/同音）命中的对**无条件保留**，结果去重排序；(b) 参数 `INSIGHT_JUDGE_TOP_K`（默认 16，夹紧 4..64，`0` 关闭）；(c) `prefetch_alignment_judgements` 与 `align_entities` 都接受 `candidate_pairs`，`align_entities` 内再摊成 `judge_candidates` 集合并引入 `judge_same(judge, cat, name, other)` 闭包，**主循环 10 处 `judge.judge_pair_sync` 全部改走它**——保证被收窄的对既不进批量预取、也不会退化成逐对单请求（否则等于把发现 #34 修掉的病理重新引入）。
+  - *理由*：离线回放 8,613 条真实判词（1,364 判同）与 275 条 `llm_semantic_judge` 归并，得到「保留率 ↔ 真实归并召回」曲线：K=8 → 56.3%/96.3%、K=12 → 66.2%/98.1%、**K=16 → 73.8%/98.6%**、K=24 → 83.4%/99.5%、K=48 → 96.8%/100%。线上库用生产函数复算：旧口径 8,195 个无序对（有向 12,433）→ K=16 后 5,381（65.7%）；首建 4,238 → 3,442（81.2%）。选默认 16 的理由是「候选对 −26% 换 1.4% 召回损失」，需要保守可调 24/48，需要更快可调 12。前缀优先排序（包含 > 共同前缀≥2 > 重合度）实测更差（K=16 只保留 66.6% 对、丢的真合并没有更少），故弃用。
+  - *验证*：新增 5 条用例（env 解析与夹紧、收窄后对数上限、确定性别名对在 K=1 下仍保留、硬拒绝对不进候选、`RecordingJudge` 集成断言「批量裁决收到的对 == 允许集合且主循环单对裁决全在允许集合内」），`test_stage5_insight.py` **158 passed**（原 153 + 5）。
+  - *未做*：两遍走（干跑记录真实发问对 + 真跑）需拆解巨型归并循环，风险高于收益；给对齐单配便宜/无思考裁决模型属成本优化，留待后续。
+
 ---
 
 ## 5. 踩过的坑 / 阻塞
@@ -261,6 +268,12 @@
   - *根因*：`src/backend_v2/storage/schema.py` 里 `job_events.created_at` / `jobs.created_at` 是 `DATETIME` 列，SQLAlchemy 已解码成 `datetime`，不需要（也不能）再 `fromisoformat`；`job_items` 也**没有** `kind` 列（`kind` 在 `job_steps` 上、`event_type` 在 `job_events` 上）。
   - *正确姿势*：`parse_ts` 同时接受 `datetime` / 字符串（含 `Z`）/ epoch；配对用 `step_started`（payload 带 `itemId`/`stepKind`）→ `page_completed`（同一 `itemId`），每个 item 一条，派生步骤也走同一套（所以「对齐」拆成独立步骤后才第一次出现在耗时表里）。教训：**先查 schema 列类型再写解析**，别按 JSON 直觉当字符串。
 
+- **坑 23：收窄候选面时必须让「批量预取」与「主循环」共用同一份候选集**
+  - *现象*：只改 `prefetch_alignment_judgements` 的枚举、不管主循环，被收窄掉的对在批量缓存里没有条目，主循环 `judge_pair_sync` 便会**逐对发单请求**——看似省了对数，实则把发现 #34 修掉的「1,158 次单对调用」重新引回来，且这些请求不在预取进度日志里、外部完全看不见。
+  - *解法*：把候选集算一次（`build_alignment_candidate_pairs`），预取直接用它，主循环通过 `judge_candidates` 集合 + `judge_same()` 闭包只对集合内对发问；用 `RecordingJudge` 断言「`batched` 与 `synced` 的每一对都在允许集合内」。
+  - *附带教训*：`build_alignment_candidate_pairs` 返回的是**无序对去重**结果，所以「某词条的伙伴数」可以超过 K（它被很多别的词条选中），能保证的只有「每个词条最多**选出** K 个伙伴」——写断言时要按 out-degree 而非 in-degree，否则会写成 `max(partner_counts) <= K` 这种必然失败的用例（本轮真实踩到）。
+
+
 ---
 
 ## 6. 新会话先读
@@ -271,9 +284,9 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#37、裁决候选对离线回放数据、附录里的分析脚本清单）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#38、裁决候选对离线回放与 Top-K 收窄标定数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
-9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）、`tmp_audit_db_tables.py`（表三维对照：metadata 定义 vs 代码引用 vs 线上行数）、`tmp_audit_db_clusters.py`（按域打印 plugin / operations / studio 等簇的 metadata 覆盖与行数）。
+9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）、`tmp_stage_durations.py`（按 `job_events` 配对统计各步骤耗时）、`tmp_narrow_topk.py`（Top-K 收窄的对数/召回曲线，决策 16 依据）、`tmp_narrow_probe.py` / `tmp_narrow_recall_prod.py`（直接调生产函数在线上库复算收窄效果）、`tmp_audit_db_tables.py`（表三维对照：metadata 定义 vs 代码引用 vs 线上行数）、`tmp_audit_db_clusters.py`（按域打印 plugin / operations / studio 等簇的 metadata 覆盖与行数）。
 
 ---
 

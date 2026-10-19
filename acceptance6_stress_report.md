@@ -1,6 +1,6 @@
 # MiyakoKB 验收点6 压测报告
 
-> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #37。
+> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #38。
 > 目标：生产环境大体量漫画（50+ 话）端到端压力测试与跨章节实体消歧观察。
 
 ## 1. 测试范围与环境
@@ -294,6 +294,34 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 
 **下游与问答（`verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`）**：图谱 810 节点 / 5,107 边 / 孤立节点 0（度分布 4279/455/155/71/28）；时间线 `mode=enhanced`、`status=ready`、5 事件；两份概览 `ready`（rev3，`run=c3730509`，len 529 / 564）；`qa/status` `available=true`、`generation=2`、`coverage={pages:387, events:238}`；问答「久留美的父亲欠了多少债？」检索 7 条片段、解析到实体「久留美的父亲」、10.7s 内流式返回并带页级引用（回答指出债务实为母亲造成，属正确区分）。
 
+### 5.9 裁决候选面收窄（发现 #37 的建议①落地，2026-10-19 深夜）
+
+发现 #37 的处置：给语义裁决的候选面加一道「按字面相似度取 Top-K」的收窄闸门，**确定性别名对（包含/子序列/同音变体）不受 K 限制**——这类对本来就是高置信合并，收窄它们只会丢质量。
+
+**实现（`src/backend_v2/insight/derived.py`）**：
+
+- 新增 `build_alignment_candidate_pairs(raw_stats, canonical_by_id, *, top_k=None) -> list[tuple[str, str, str]]`：逐类别把候选池摊平为「已有实体规范名+别名 ∪ 同类别 raw 名」，对每个 raw 名先过 `is_judge_candidate` 粗筛，再按 `calculate_char_overlap_ratio` 降序（并列按名称升序，保证确定性）截断到 K；`_is_deterministic_alias_pair` 命中的对无条件保留。返回值按类别与名称排序并去重（无序对只出现一次）。
+- 新增参数解析 `resolve_judge_top_k()` / 常量 `JUDGE_TOP_K_DEFAULT=16`、`JUDGE_TOP_K_MIN=4`、`JUDGE_TOP_K_MAX=64`，环境变量 `INSIGHT_JUDGE_TOP_K` 覆盖，**`0` 表示关闭收窄**（回退旧行为）。
+- `prefetch_alignment_judgements(..., candidate_pairs=None)` 与 `align_entities(..., candidate_pairs=None)` 都接受外部传入的同一份候选集；`align_entities` 内部再摊成 `judge_candidates: set[(cat, name, other)]`，并新增局部闭包 `judge_same(judge, cat, name, other)`——**主归并循环里 10 处 `judge.judge_pair_sync(...)` 全部改为 `judge_same(...)`**。这样被收窄掉的对既不会进批量预取、也不会退回逐对单请求（否则等于把发现 #34 修掉的病理重新引入）。
+
+**离线标定（只读回放，零 token）**：以复测 run `c3730509` 的 387 页原文 + 该 run 产出的 810 实体为基准，用裁决缓存里的 8,613 条真实判词（1,364 条 `same=true`）回放「哪些对被收窄掉」，并对 275 条 `llm_semantic_judge` 归并做召回检查。
+
+| K | 保留候选对 | 保留率 | 真实语义归并召回 |
+| --- | --- | --- | --- |
+| 8 | 4,845 | 56.3% | 96.3%（丢 8 条） |
+| 12 | 5,700 | 66.2% | 98.1%（丢 4 条） |
+| **16（默认）** | **6,357** | **73.8%** | **98.6%（丢 3 条）** |
+| 24 | 7,181 | 83.4% | 99.5%（丢 1 条） |
+| 48 | 8,341 | 96.8% | 100% |
+
+在线上库上直接调用生产函数复算（脚本 `tmp_narrow_probe.py` / `tmp_narrow_recall_prod.py`）：旧口径逐个 raw 名向全类别池发问共 **12,433 个有向对**、去重后 **8,195 个无序对**；`K=16` 后 **5,381 对（有向口径 43.3%、无序口径 65.7%）**；首建（无历史实体）场景去重后 4,238 对 → `K=16` 3,442 对（81.2%）。掉的真合并都是「两者都不含对方的字面碎片」这类，例如 `久留美家 ↔ 久留美公寓·房间`、`福泽家 ↔ 福贺家·久留美房间`——属于本来就要靠语义裁决才能救回的对。
+
+**端到端验证（生产代码路径）**：重启开发栈后调用 `POST /api/v2/insight/books/<bookId>/entity-alignment/rebuild`（job `8e69bb83-6cd7-4505-aa5f-1d5b5a412691`），worker 打印 `[align_entities] 收窄后语义裁决候选 5381 对`、`预取裁决候选 5381 对：缓存命中 5381，LLM 调用 0，失败 0，漏答 0`，整个对齐步骤 **9.88s**（同一本书未收窄的全量构建里是 2,783.9s，其中约 2,229 次真实裁决调用）。**产出与未收窄版本逐项一致**：产物 rev4（收窄后重建）与 rev3（收窄前全量构建）的实体 810、别名 410、归并 410 完全相同，规则分布也逐类相同（`llm_semantic_judge` 275 / `location_detail_overlap` 51 / `character_alias_merge` 40 / `concept_semantic_match` 39 / `frequency_dominant_promoted` 4 / `item_core_match` 1）——即本次收窄在这本书上**没有丢掉任何一条真实合并**，离线估计的 1.4% 召回损失落在「从未被主循环问到的对」里。
+
+**取舍**：默认 `K=16` 在「候选对 −26%、真实归并召回 98.6%」之间取平衡；需要更保守可用 `INSIGHT_JUDGE_TOP_K=24`（召回 99.5%、只减 16.6%），需要更快可用 `12`。另两个建议（两遍走、给对齐单配便宜裁决模型）未实施——前者要把巨型归并循环拆成「干跑 + 真跑」两遍，风险远高于本次收窄；后者属成本优化，不影响正确性。
+
+**回归**：新增 5 条用例（`tests_backend/v2/test_stage5_insight.py`）——环境变量解析与夹紧（2→4、999→64、0→关闭）、收窄后对数不超过「名称数 × K」、确定性别名对（`久留美` ⊂ `久留美公寓·房间`）在 K=1 下仍保留、硬拒绝对（`高木` vs `高木母亲`）不进候选、以及一条用 `RecordingJudge` 的集成用例断言「批量裁决收到的对 == 允许集合，且主循环单对裁决全部落在允许集合内」。`test_stage5_insight.py` **158 passed**（原 153 + 5）。
+
 ## 6. 发现与建议汇总（滚动）
 
 | # | 级别 | 发现 | 建议 |
@@ -338,6 +366,7 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 
 | 36 | 中 | **数据根的「版本戳与物理结构错位」会把启动与升级路径一起卡死，且没有自愈或修复指引**：线上库 `data-v2/saber.sqlite3` 由「清理提交之后、`version.json` 仍写 3.5.2」的那段代码初始化，于是物理结构已是 3.5.3 形（75 表，仅 `prompts` 的 CHECK 仍是旧取值）而 `schema_metadata.storage_version` 停在 3.5.2。`StorageManager.prepare` 与 `saber_v2.py --role storage-migrator --action check\|upgrade` 都先按**源版本契约**校验数据（`src/storage_migrator/runner.py:60-71` → `_validate_version(self.root, source, files=…)`），于是必然报 `存储结构不匹配: missing=['browser_session_credentials', …], changed=['operations','page_assets','prompts']` 后中止，`prepare` 根本进不到转换分支；`python run.py` 启动即 `[错误] 存储准备失败`（决策 12 之后统一启动器也会准备存储，所以开发栈同样起不来）。只读诊断脚本 `tmp_stamp_diag.py` 显示：对 3.5.1/3.5.2 契约都 missing 8 张，**对 3.5.3 契约只差 `changed=['prompts']`** | **已修复（就地）**：先备份数据根（`temp/db-backup-20261019-200610/`，含 sqlite3 + `-wal` + `-shm`），再用真正的迁移原语修复——`v3_5_3.stop_unfinished(root)` + `v3_5_3.convert(root)`（`RETIRED_TABLES` 逐表容忍缺失、`_rebuild` 按契约重建 `operations`/`page_assets`/`prompts`、收窄 CHECK 前统计 before/removed/after、末尾 `PRAGMA foreign_key_check`），最后用真实 SQLAlchemy 表对象打戳 `update(schema_metadata).where(schema_metadata.c.singleton_id == 1).values(storage_version="3.5.3")`（脚本 `tmp_repair_stamp_353.py`）。复验：`tmp_stamp_diag.py` → `stamp=3.5.3`、`3.5.3: OK（结构与 3.5.3 契约一致）`、75 表；重启后 health 200 且 `storageVersion=3.5.3`。坑：`validate_data(files=True)` 还会按 `assets` 表校验数据根 `fonts/` 下每个字体文件的 sha256，而运行期启动检查传 `files=False`（只有**待应用**的 pending 转换才查文件），且随包字体实际由 `src/backend_v2/resources/fonts/` 提供、不复制进数据根——就地修复不要把 `files=True` 当作通过条件。建议：`check()` 在源契约校验失败但**目标**契约通过时，降级为「结构已超前，只需校准版本戳」的提示并给出修复命令；至少让报错区分「缺失/多余/结构不同」并指向迁移文档 |
 | 37 | 中 | **批量预取的「超集枚举」把候选对放大 6.4×，吃掉了一部分批量化的收益**：`prefetch_alignment_judgements` 枚举「raw 名 ×（已有实体名/别名 ∪ 同类别全部 raw 名）」，只经 `is_judge_candidate` 粗筛；复测 387 页得到约 7,470 对（249 批 × 30），而旧实现在主循环里实际只问 1,158 对——因为主循环按频次顺序遍历、命中即 `break`，大量对根本不会被问到。于是单对成本虽降到 0.37s（14.9×），对齐墙钟只从 105.9 min 降到 46.4 min（2.28×），且对齐仍占整本构建的 **55%**（2783.9 / 5048.7s） | 按主循环真实语义收窄候选面：①每个 raw 名只保留字面相似度 Top-K（如 K=8）或同章/相邻章的实体，而不是同类全表两两组合；②或改为「两遍走」——第一遍干跑记录主循环实际会问的对（不调 LLM），第二遍批量裁决；③给对齐单配一个便宜/无思考的裁决模型（当前 `chat` 与 VLM 同模型，30 对一批要 ~33s，思考 token 占大头）。另注：compressed_context 与 timeline 两处单次调用本次分别慢了 4.1× / 1.8×，是同一网关的时延波动（同代码同参数），不是本次改动引入的回归 |
+| 38 | 中 | **语义裁决的候选面原本是「同类全表两两组合」，与主循环的真实发问量差一个数量级**：`prefetch_alignment_judgements` 为每个 raw 名枚举「已有实体名/别名 ∪ 同类所有 raw 名」，387 页即约 7,470 对；而主循环按频次遍历、命中即 `break`，实际只会问约 1,158 对。修掉 #34 后单对成本降到 0.37s，但候选面放大 6.4× 使对齐仍占整本构建 55%。回放 8,613 条真实判词可见：保留率与被丢掉的真实合并数之间存在明确曲线——K=8 丢 8 条（召回 96.3%）、**K=16 丢 3 条（98.6%）**、K=24 丢 1 条（99.5%），而候选对分别降到 56.3% / 73.8% / 83.4% | **已实施**：新增 `build_alignment_candidate_pairs`（重合度排序 Top-K + 确定性别名对全保留 + 去重），默认 `INSIGHT_JUDGE_TOP_K=16`（`0` 关闭），**批量预取与主循环共用同一份候选集**（10 处逐对裁决改为走 `judge_same` 闭包），保证被收窄的对既不进预取也不会退化成单对请求。线上库复算：8,195 个无序对 → 5,381（65.7%），首建 4,238 → 3,442（81.2%）。建议：①若要零召回损失，把 K 提到 24 或 48（来得及就看单本成本）；②真正的下一步是给对齐单独配一个便宜/无思考的裁决模型，而不是继续压缩候选面 |
 ## 7. 附录
 - 监控手段：job_items 状态分布查询（tmp_job_status.py）、worker 日志（data-v2/logs/saber-worker.log）、守护脚本（tmp_guard_job.py，空闲 360s 触发 reconcile+continue）。
 - 验收脚本：verify_acceptance6_alignment.py / verify_acceptance6_downstream.py / verify_acceptance6_qa.py（用法：`python verify_acceptance6_qa.py <bookId> "问题" [--mode exact|global]`）。
@@ -345,5 +374,6 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 - 运维/诊断脚本（§5.3、§5.4 数据来源）：tmp_inspect_retry_job.py（打印 job 状态 + items 逐项错误 + 冻结配置 vlm/chat/embedding + 产物行，`python tmp_inspect_retry_job.py <jobId>`）、tmp_artifact_detail.py（产物全列 + payload 键 + warnings）、tmp_wait_job.py（轮询至终态，`<jobId> <maxMinutes>`）、tmp_guard_job.py（空闲 360s 自动 reconcile + continue）、tmp_verify_vector_events.py（向量事件回退专项验证）。
 - 存储/数据根诊断与修复脚本（发现 #36）：tmp_stamp_diag.py（只读打印 `schema_metadata` 的 stamp/profile 与「对 3.5.0/3.5.1/3.5.2/3.5.3 各契约的 missing/unexpected/changed」）、tmp_unfinished_probe.py（只读普查 jobs/steps/items/operations/transient_requests/render_status/process_epochs 的未完成态）、tmp_repair_stamp_353.py（备份存在的前提下，用 `v3_5_3.stop_unfinished` + `v3_5_3.convert` + 真实表对象打戳，把「物理已是 3.5.3、戳仍在 3.5.2」的库校准）、tmp_set_concurrency.py（通过 `PUT /api/v2/settings/transactions` 把 `analyzeConcurrency` 写入当前 insight_vlm 供应商行）。
 - 实测脚本：tmp_measure_full.py（触发整本构建并轮询，`scope=full`）、tmp_measure_watch.py（精简监视：只打状态、items 计数、待执行步骤名，避免整份 job JSON 刷屏）、**tmp_stage_durations.py（按 `job_events` 的 `step_started` → `page_completed` 配对统计每个 `stepKind` 的耗时，用法 `python tmp_stage_durations.py <jobId>`；schema 的 DATETIME 列经 SQLAlchemy 已是 `datetime`，`parse_ts` 需同时接受 datetime/字符串/epoch）**。
+- 候选面收窄标定（发现 #38，零 token）：tmp_narrow_eval.py（从已发布页结果重建 raw 统计，统计各类别名称/池/过闸对）、tmp_narrow_bands.py（按字面重合度分档统计真实判词「判同率」，验证不是分数越高越容易并）、tmp_narrow_filter.py / tmp_narrow_rules2.py / tmp_narrow_cooccur.py / tmp_narrow_sibling.py / tmp_narrow_freq.py（五类收窄规则的对数-召回权衡：阈值、包含/同音、2gram/3gram、同页共现、兄弟项尾缀、频次门槛）、**tmp_narrow_topk.py（Top-K + 确定性别名白名单的对数/召回曲线，本节的 K 取值依据）**、tmp_narrow_rank2.py（前缀优先排序对照，实测更差故弃用）、**tmp_narrow_probe.py / tmp_narrow_recall_prod.py（直接调用生产函数在线上库复算收窄效果）**。
 - 落盘证据：tmp_alignment_jjk.txt、tmp_downstream_jjk.txt、tmp_qa_jjk.txt、tmp_judge_cache_stats.txt、tmp_candidate_rules_eval.txt、tmp_candidate_rules_eval2.txt、tmp_failed_and_artifacts.txt。
 - 基线数据：kurumi_ch1_5_accumulation_report.txt（243 实体/329 别名/90 归并/LLM 缓存命中 685 vs 调用 123）。
