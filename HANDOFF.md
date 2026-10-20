@@ -217,7 +217,7 @@
   - *验证*：实栈用呪術廻戦 虎杖悠仁跑通——`POST` 后约 85s 变 `ready`，`stats` 为 `pages=156, chapters=10, visionPages=15, visionChapters=10, entityPolicy=named, timelineEvents=150`；`references/persona.md` 有 5 条性格特征（每条带行为依据 + 页码）+ 5 条说话方式（逐字台词）+ 3 条待确认；`citations` 全部通过三元组校验。后端新增 4 条用例（列表/提取/读取/状态与幂等、缺 `entityId` → 422、缺 `Idempotency-Key` → 422、未生成 → 404），`tests_backend/v2/test_character_skill.py` **4 passed**。
   - *未做（建议）*：①批量蒸馏（一次点多个角色，串行排队）；②把 Skill 作为问答的「角色视角」上下文注入；③角色 Skill 的「台词库」单独成文件（当前台词散在 `persona.md` 的说话方式里）。
 
-- **决策 22：实体对齐改为「候选图 + 单请求多边 + 结构性输出」——把 36 小时的逐对/逐批裁决压到分钟级**（2026-10-20，用户 `m18960` 给出完整改造规格，`m18842` 先把供应商切回 gemini-3.8）
+- **决策 22：实体对齐改为「候选图 + 单请求多边 + 结构性输出」——把 36 小时的逐对/逐批裁决压到 1 小时 52 分（实测）**（2026-10-20，用户 `m18960` 给出完整改造规格，`m18842` 先把供应商切回 gemini-3.8）
   - *背景*：FX戰士久留美 1507 页（run `7fca6fc4-3e93-4185-9f58-7d84f46db8b4`，1457 页已发布）实测对齐步骤 38 分钟只完成 **12/705 批**（≈19 批/小时）→ 剩余 693 批 ETA **30–36 小时**，而同一作业的页分析只花了 76 分钟。根因是三层叠加：①候选面是「同类词条 × 同类词条」全组合（3,542 词条、**20,659 对**，其中 concepts 2,227 个词条里有 1,807 个只出现在一页、占 81%）；②裁决粒度是「对」，30 对一批；③提示词还允许模型输出 `ambiguous` 逃逸到「二次仲裁」，而该仲裁是**串行单对请求**（5–60s）——日志实测每 30 对约 3.7 对走仲裁，单批墙钟于是变成 160–190s。
   - *做法*：
     *(a) 新模块* `src/backend_v2/insight/entity_alignment.py`（约 1,040 行，纯函数 + 可注入 `candidate_filter`，**不 import `derived`** 以避免循环依赖）：`build_alignment_graph`（按类别建「词条=节点、候选对=边」的连通分量图，每节点只连 top_k 邻居；描述型/泛化实体走延迟列表不进图）、`plan_requests`（按 ≤24 节点 / ≤40 边 / ≤8000 输入 token 打包，**跨分量合批**，超大分量切分并记录跨片节点）、`build_request_prompt`（一次给出实体清单 + 每分量候选对 + 严格 JSON 输出契约）、`validate_request_decision`（分量归属、pair_id 全覆盖、SAME/DIFFERENT 互斥、实体不得重复分组，共 9 类拒收）、`run_request_batch`/`run_alignment_sync`（信号量并发、**单请求失败只把该请求的边降级为 UNCERTAIN**、请求级重试 + JSON 校验）、`apply_decisions`（冲突安全并查集：跨片矛盾裁决只记 `blocked_merges`，绝不强行合并）。
@@ -226,7 +226,8 @@
     *(d) 阈值全部可 env 覆盖*（收窄语义整体搬到新模块，环境变量前缀从 `INSIGHT_JUDGE_*` 改为 `INSIGHT_ALIGN_*`）：`TOP_K`(4)、`MAX_NODES`(24)、`MAX_EDGES`(40)、`INPUT_TOKENS`(8000)、`OUTPUT_TOKENS`(2500)、`CHAPTER_WINDOW`(1)、`ATTEMPTS`(3)、`PARALLEL`(3)、`CONCEPT_MIN_PAGES`(3)、`GENERIC_TERMS`。
   - *理由*：把「一次判一对」换成「一次判一组边」，模型在同一请求里既给分组又给逐对决定，**ambiguous 逃逸口被彻底移除**（要判就判 SAME/DIFFERENT），串行仲裁随之消失；跨分量合批让多个小组共用一次请求；冲突安全并查集保住「宁可少合并、也不误并」的既有原则。请求数从 705 降到 260（−63%），且每请求都在 token 预算内。
   - *验证*：(a) 新单测 `tests_backend/test_entity_alignment_graph.py` **16 passed**（打包预算与全边覆盖、跨分量合批、协议校验 9 类拒收、传输失败降级 UNCERTAIN、请求级重试、冲突阻止、env 覆盖）；(b) 真实规模探针（同 run 1457 页）：候选对 20,659 → 候选边 **3,259**（characters 609 / items 624 / locations 1,717 / concepts 306 / abilities 3），分量 72、孤立 276、延迟 2,350（concepts 2,022）→ 打包 **260 请求**、平均 12.5 边/请求（12–29）、多分量合批 9 个；(c) 后端全量 **794 passed**（2 warnings、42 subtests；钉住已删实现的 4 条旧用例随实现删除、新增 1 条 env 覆盖用例）。
-  - *未做（建议）*：①真实重跑一次 1507 页对齐量墙钟（本次只做了规模估算，按 3 并发、单请求 10–20s 估算 20–60 分钟量级，待实测确认）；②concepts 那 81% 的「只出现一页」噪音目前只是**不送审**，页分析提示词层仍未治理（源头少产出「戴眼镜的短发少女」这类描述型实体名）。
+  - *实测（2026-10-20，derived job `20b7798c-5406-46d6-8b0d-1314c2d90e1b`，同 run 1457 页）*：候选图 3,566 节点 / 3,366 边 / 71 分量 / 281 孤立 / 2,381 延迟 → **269 个请求**，裁决 6,587.6s（3 次 JSON 失败重试、0 请求最终失败；估算输入 96.5 万 / 输出 34.6 万 tokens）→ 端到端 **6,700s（1h51m40s）**，对照旧流程 30–36h ETA 约 **19×**。产物：3,254 实体 / 3,528 别名 / 312 归并（规则 `llm_semantic_judge` 115、`location_detail_overlap` 122、`character_alias_merge` 35、`concept_semantic_match` 33、`item_core_match` 6、`ability_core_match` 1），裁决 SAME 369 / DIFFERENT 2,361 / UNCERTAIN 636，冲突保护 26 例（「久留美」vs「久留美（康子）」、「小香蕉」vs「小香蕉（康子）」等被拒绝合并，这正是旧流程 ambiguous 逃逸最容易误并的地方），产物 status=ready、revision=1。
+  - *未做（建议）*：①剩余墙钟几乎全是网关时延（269 请求 × ≈73s ÷ 3 并发）：可提高 `INSIGHT_ALIGN_PARALLEL`、或把 `MAX_NODES`/`MAX_EDGES` 再放大以减少请求数，但要按供应商并发上限实测；②concepts 那 81% 的「只出现一页」噪音目前只是**不送审**（2,381 条延迟），页分析提示词层仍未治理（源头少产出「戴眼镜的短发少女」这类描述型实体名）。
 
 
 ---
