@@ -15,6 +15,10 @@ const taskCenter = useTaskCenterStore()
 
 const currentPath = computed(() => route.path)
 
+// 用绑定而非静态 src：静态写法会被 SFC 的 transformAssetUrls 当成模块导入，
+// 而 /pic/* 是 public 目录下的运行时资源，不该进打包图。
+const logoUrl = '/pic/miyako-logo.png'
+
 interface NavItem {
   name: string
   path: string
@@ -54,7 +58,14 @@ function handleNavClick(item: NavItem) {
       <!-- 左侧：品牌 Logo -->
       <div class="miyako-navbar__left">
         <RouterLink to="/" class="miyako-navbar__brand">
-          <span class="miyako-navbar__logo-icon">🌸</span>
+          <img
+            class="miyako-navbar__logo-icon"
+            :src="logoUrl"
+            alt=""
+            aria-hidden="true"
+            width="28"
+            height="28"
+          />
           <span class="miyako-navbar__brand-name">MiyakoKB</span>
         </RouterLink>
         <div v-if="bookTitle" class="miyako-navbar__book-badge">
@@ -156,8 +167,13 @@ function handleNavClick(item: NavItem) {
 }
 
 .miyako-navbar__logo-icon {
-  font-size: 1.4rem;
-  line-height: 1;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: block;
+  border-radius: 6px;
+  object-fit: contain;
+  box-shadow: 0 0 0 1px var(--color-border);
 }
 
 .miyako-navbar__brand-name {

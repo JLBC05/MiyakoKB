@@ -125,3 +125,10 @@ CLAUDE.md
 *.sqlite3-*
 *.db
 *.db-*
+
+# README 图片与架构图（docs/* 默认忽略，这里显式放行）
+!docs/assets/
+!docs/assets/**
+
+# Archify 生成过程目录（架构图源文件与截图，不入库）
+.archify/
