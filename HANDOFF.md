@@ -73,6 +73,12 @@
 
 ---
 
+### 2.8 角色 Skill 蒸馏（人格层 + 原画观察 + 页码引用）
+- 从书籍已有的实体对齐产物里挑出角色，采集「页级证据（页摘要/关键事件/同页实体/原图字节）」，先由 VLM 看 15 张原画（每个登场话一张独有页 + 高重要性事件页）提炼**人格层**（性格特征、说话方式、口头禅以逐字台词为证），再由 chat 模型合成结构化档案，最后经引用闸门校验后确定性渲染为 5 个文件：`SKILL.md` + `references/profile.md` / `persona.md` / `timeline.md` / `limits.md` / `citations.json`。
+- 产物写进 `analysis_artifacts`（`kind="character_skill"`、`template=<entityId>`、逐次 revision 自增），因此每个角色可多版本、可重新提取。
+- 后端三条只读/触发路由 + 一条状态路由；前端在「智能问答」右侧新增「角色 Skill」页（角色列表 + 档案四个页签 + 提取进度）。
+- 实测（呪術廻戦·虎杖悠仁）：约 85s 完成，156 页 / 10 章 / 15 张原画，人格层 5 条性格 + 5 条说话方式（逐字台词）+ 3 条待确认，全部引用可回溯到「第 X 话 第 Y 页（全书第 Z 页）」。
+
 ## 3. 当前状态（精确到下一步）
 - [x] 验收点 1：漫画导入（Venera + 本地 ZIP/目录）及进度条实时反馈。
 - [x] 验收点 2：书架卡片精准展示构建状态（已构建/部分构建/未构建）。
@@ -80,12 +86,13 @@
 - [x] 验收点 4：问答引用消除冗余括号章节号，优先显示真实话数。
 - [x] 验收点 5：统一启动器拉起双进程稳定运行。
 - [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#40）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。**2026-10-20 用户报告问答「引用乱指 + 答不出第几话」，已定案并修复**：根因是 Chroma HNSW 段读取失败被静默降级 + 兜底按页号截断 + 实体证据页无话数映射且不进引用（报告 §5.10 / 发现 #40 / 决策 19 / 坑 27）。
+- [x] 角色 Skill 蒸馏（2026-10-20，用户要求「产品化 + 入口放在智能问答右边 + 必须带人格层」）：后端 `src/backend_v2/insight/character_skill.py` + 4 条路由、前端 `/character-skills` 页面与导航项、契约 3 条路径、`tests_backend/v2/test_character_skill.py` 4 条用例，实栈用呪術廻戦 虎杖悠仁跑通（85s，156 页/10 章/15 张原画，人格层与引用全绿）。见 §2.8、决策 21、坑 29、报告发现 #42。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；**2026-10-19 追加：全书构建 69% 墙钟耗在逐对裁决的问题已定案并落地**（报告发现 #34 / 决策 14 / 坑 19）：超集预取 + 批量裁决（30 对/批、3 并发）、对齐拆为独立步骤 `insight_stage_entity_alignment`、每批进度写用户日志；
   2. ~~**衍生缺口补跑**~~：**已完成（2026-10-19）**。`POST /api/v2/jobs/<id>/retry-failed` 只重跑失败项（源 job `39c2c48f` → 重试 job `091d72b7` → 补跑 job `8431eb87`/run `2c9d40c2`，20/20 成功），概览 no_spoiler(293 字)/story_summary(535 字) 已发布、`entity_alignment` rev5 status=ready；发现 #18/#19 关闭；
   3. **排查 global 问答召回**：问"少年院"只返回第 1 话引用并答"证据不足"，而该场景在第 6-8 话（报告发现 #20）；
-  4. 清理收尾：`tests_backend` 失效 import 已清零（扫描脚本 `tmp_scan_tests.py`），后端全量 **946 passed / 0 failed / 0 error**（2026-10-19 深夜，P1 死代码清理删掉 1 条只测被删函数的用例后为 946，含 E/D2 与收窄候选面共 10 条新增）；`vue-frontend` 六项门禁全部 0（vitest **88 files / 642 tests**、vue-tsc、eslint、stylelint、`lint:ui`、`lint:ui:audit`），生成类型与静态产物已与源码同步（见坑 16；P1 删完 23 个前端导出后 `vite build` 产物字节未变，反证其早被 tree-shaking 排除）；PySide6-Essentials 已从 requirements-cpu/gpu 删除；根目录临时脚本仍待归置（`tmp_*.py` 一律不入库）。**P1 死代码清理已完成**（决策 17 / 报告发现 #39，22 文件 +57/−684）；**P2b/P3 已完成**（决策 18 / 报告发现 #30 追加）：12 条退役路由 + 4 个半死模块（`rendering.py` 1902 行、`config_models.py` 439 行、`ocr_types.py` 余 92 行、`translation_constraints.py` 242 行）已删、契约 `paths` 127→117、契约与运行时路径数零差异（146 == 146）。**当前门禁基线：后端全量 773 passed / 0 failed；前端六项门禁 0（vitest 87 files / 638 tests）**——较 P1 时期的 946 passed / 642 tests 减少的都是随退役域删掉的用例。
+  4. 清理收尾：`tests_backend` 失效 import 已清零（扫描脚本 `tmp_scan_tests.py`），后端全量 **946 passed / 0 failed / 0 error**（2026-10-19 深夜，P1 死代码清理删掉 1 条只测被删函数的用例后为 946，含 E/D2 与收窄候选面共 10 条新增）；`vue-frontend` 六项门禁全部 0（vitest **88 files / 642 tests**、vue-tsc、eslint、stylelint、`lint:ui`、`lint:ui:audit`），生成类型与静态产物已与源码同步（见坑 16；P1 删完 23 个前端导出后 `vite build` 产物字节未变，反证其早被 tree-shaking 排除）；PySide6-Essentials 已从 requirements-cpu/gpu 删除；根目录临时脚本仍待归置（`tmp_*.py` 一律不入库）。**P1 死代码清理已完成**（决策 17 / 报告发现 #39，22 文件 +57/−684）；**P2b/P3 已完成**（决策 18 / 报告发现 #30 追加）：12 条退役路由 + 4 个半死模块（`rendering.py` 1902 行、`config_models.py` 439 行、`ocr_types.py` 余 92 行、`translation_constraints.py` 242 行）已删、契约 `paths` 127→117、契约与运行时路径数零差异（146 == 146）。**当前门禁基线：后端全量 782 passed / 0 failed；前端六项门禁 0（vitest 88 files / 642 tests）**（角色 Skill 新增 4 条后端 + 4 条前端用例）——较 P1 时期的 946 passed / 642 tests 减少的都是随退役域删掉的用例。
   5. ~~**提速复测**~~：**已完成（2026-10-19 21:34）**。供应商级并发 `analyzeConcurrency=3` 写入 insight_vlm 供应商行（rev29→30）并确认进入作业冻结配置；久留美 387 页全书构建 job `c95406a7-66a4-466d-af31-ba03442d060c` / run `c3730509-3b35-424a-9753-8398561a57ec`（398 项，含新步骤 `insight_stage_entity_alignment`）**5048.7s（84.1 min）completed**，对照基线 9168.40s（152.8 min）＝ **1.82×**，少 68.7 min。分段：逐页分析 1658.3→1065.9s、第 1 层 777.5→714.6s、**实体对齐 6354s（未记账）→2783.9s（正式步骤）**、其余约持平（compressed_context 28→115s、timeline 23.8→43.3s 为同网关单次调用时延波动）。产出质量：实体 810（32/98/148/532）、别名 1213、归并 410（旧 500/646/147，全部 high、无 `None→None`）、频次=去重页数 810/810、金额日期概念 124 个 0 重复 ID、图谱 810 节点/5107 边/0 孤立、概览与时间线 ready、`qa/status` generation=2（events 238/pages 387）、问答 10.7s 带页引用。结论与下一杠杆见报告 §5.8 与发现 #37（超集预取把候选对放大 6.4×，对齐仍占 55%）。 同日深夜又按发现 #37 建议①**收窄了裁决候选面**（决策 16 / 报告 §5.9 / 发现 #38）：新增 `INSIGHT_JUDGE_TOP_K`（默认 16，`0` 关闭），线上库候选对 8,195 → 5,381，重建对齐步骤 **9.88s**（缓存全命中）且产物与未收窄版本逐项一致（810 实体 / 410 别名 / 410 归并，规则分布相同）。
 
 ---
@@ -201,6 +208,13 @@
   - *理由*：重建索引是**正常运维动作**（前端就有「重建向量」按钮），不该要求用户重建后手动重启 worker 才能恢复语义检索；而「状态 ready 但检索静默降级」正是决策 19 要消灭的可观测性缺口——修掉自愈后，降级才真正只剩「索引没建/上游挂了」这类真原因。
   - *验证*：(a) 新增 `test_qa_chroma_read_failure_reopens_segments_and_retries`（首次抛错→重试成功→清缓存恰 1 次；两次都失败→异常仍上抛且不无限重试），`-k "qa or retrieval"` 定向 **23 passed**；(b) 实栈复验：`POST /api/v2/insight/books/29011e06-5c43-41ab-905d-42891e2955de/vector-rebuild` → job `dcdedeb2-…` completed（约 40s）→ `qa/status` = `{available: true, generation: 4, coverage: {pages: 234, events: 160}}` → 同一问题 SSE `context` 为 `degraded=false, warnings=[]`，引用带 `score`（第 6 話第 8 頁 0.2465 等），回答给出「第 8 话 第 13 页（全书第 190 页）」。
   - *未做（建议）*：连续 N 次读失败可把该向量代标记为 `degraded` 并自动排队重建；`qa/status.available` 仍只看「有没有可用代 + 指纹」，未真正探测「索引可读」。
+- **决策 21：角色 Skill 蒸馏做成独立服务（不走 job 队列），人格层由 VLM 看原画提炼**（2026-10-20 用户要求「可以产品化了，前端入口放在智能问答右边，提取时要把人格层也提取出来」）
+  - *背景*：先把久留美（《FX戰士久留美》）的档案当离线脚本试做了一遍（Tier 1 事实卡 + Tier 2 视觉人格层），验证「知识库现有产物 + 原画观察」足以产出一份带页码引用的角色 Skill；随后用户要求产品化。
+  - *做法*：(a) 新建 `src/backend_v2/insight/character_skill.py`（约 1080 行）——`CharacterSkillRepository`（读活跃 `entity_alignment` 的角色、取页级证据与原图字节、读写 `analysis_artifacts(kind="character_skill", template=<entityId>)`）、`CharacterSkillBuilder`（证据采集 → VLM 看原画 → chat 合成 JSON → 引用闸门 → 确定性渲染）、`CharacterSkillService`（内存任务表 + daemon 线程 + 单飞 + `idle/running/ready/failed` 进度）；(b) 产物写成**真实 artifact 行**（`kind="character_skill"`、`template=entityId`、`revision` 自增、deactivate 旧行），不新增 derived job kind；(c) 路由 3 条：`GET /books/<id>/character-skills`（列表，带 `hasSkill`/`revision`/`chapterCount`/`updatedAt`）、`POST`（`{entityId, maxVisionPages?}` → 202，后台蒸馏）、`GET .../<entityId>`（档案 + `references/*.md` + 引用清单）、`GET .../<entityId>/status`；(d) 前端在「智能问答」右侧加导航项「角色 Skill」（`/character-skills`，`meta.publicFeature='insight'`），页面左侧角色列表（搜索 + 已生成标记 + 页数/章数/频次）、右侧档案预览（概览/人格/时间线/边界四个页签）、顶部「提取」按钮带进度轮询与重新提取。
+  - *理由*：①蒸馏只产出文本档案，不需要 `AnalysisInputSnapshot` 与冻结输入，塞进 job 队列会同时牵动 `DERIVED_KINDS`、凭证分区、dispatch、`validate_artifact_payload`、worker 注册与步骤文案六处，收益为负；②视觉观察必须在**请求线程之外**跑（VLM 批量 15 页 + 合成一次 chat 约 1-2 分钟），所以用服务内 daemon 线程 + 状态轮询，而不是复用 job 的租约/续跑机制；③产物落 artifact 表后天然获得「每角色多版本 + 活跃行」语义，与概览/时间线一致，前端与后续问答都能复用。
+  - *引用闸门*：模型返回的每条 `citation` 必须命中 `(章节标题, 章内页码, 全书页码)` 三元组，否则被丢弃并计数（`sanitize`）；页面证据与图片字节只取 `analysis_page_results.status="published"` 且 `page_assets.role="source"` 的行，避免引用未分析页。
+  - *验证*：实栈用呪術廻戦 虎杖悠仁跑通——`POST` 后约 85s 变 `ready`，`stats` 为 `pages=156, chapters=10, visionPages=15, visionChapters=10, entityPolicy=named, timelineEvents=150`；`references/persona.md` 有 5 条性格特征（每条带行为依据 + 页码）+ 5 条说话方式（逐字台词）+ 3 条待确认；`citations` 全部通过三元组校验。后端新增 4 条用例（列表/提取/读取/状态与幂等、缺 `entityId` → 422、缺 `Idempotency-Key` → 422、未生成 → 404），`tests_backend/v2/test_character_skill.py` **4 passed**。
+  - *未做（建议）*：①批量蒸馏（一次点多个角色，串行排队）；②把 Skill 作为问答的「角色视角」上下文注入；③角色 Skill 的「台词库」单独成文件（当前台词散在 `persona.md` 的说话方式里）。
 
 ---
 
@@ -335,6 +349,12 @@
   - *现象*：向量重建成功、`qa/status` 报 `generation=4, available=true`，但问答仍走关键词兜底（`hybridScore` 无 `vectorScore`），日志报 `Error creating hnsw segment reader: Nothing found on disk`。同一批集合用**全新进程**读取完全正常。
   - *根因*：`SharedSystemClient` 在进程内缓存了 system/client（含 HNSW segment reader）；重建会删掉旧段文件，缓存里的句柄随之失效，而 `qa.py` 只捕获异常转降级，不会清理缓存。重启 worker（或整个栈）才会重建客户端。
   - *解法*：查询失败时 `SharedSystemClient.clear_system_cache()` 后重试一次（决策 20）。排查同类问题的判据：候选页是否带 `vectorScore`；`grep -n "Vector retrieval failed" data-v2/logs/*.log`（含 `*-diagnostic.log`）；再用新进程直接 `list_collections()/count()` 确认磁盘侧是否健康。
+- **坑 29：新增前端视图时，「后端返回什么」与「契约写了什么」是两份独立事实，必须以真实响应为准**（2026-10-20，报告发现 #42）
+  - *症状*：角色 Skill 首版前端按 `openapi/v2.yaml` 里的 `CharacterSkillSummary` 写，列表只显示「页数 / 频次」；接通真实接口后才发现实现里另有 `hasSkill`，而用户真正想看的「这个角色跨了几个章节」「上次生成于何时」两边都没有。
+  - *根因*：契约 schema 声明了 `additionalProperties: false`，但实现与 schema 各写一份、没有任何测试把两者钉在一起；列表型端点又天然容易漏掉「覆盖广度」与「新鲜度」这类聚合字段。
+  - *解法*：先 `curl`/脚本打真实端点把 JSON 打出来，按真实响应定前端类型，再回头补契约与生成类型；`chapterCount` 由 `pages → chapters` 映射去重得出（`pages` 表没有 `book_id`，必须经 `chapters` join），`updatedAt` 取该角色活跃 Skill 行的 `updated_at`。改完重跑 `openapi-typescript` 并让 `vue-tsc` 与契约测试一起把关。
+  - *教训*：`additionalProperties: false` 只在「生成类型」这一侧生效，它不会替你发现「实现多给的键」或「业务需要的键没给」——列表端点至少自问三件事：有多少、覆盖多广、上次什么时候更新。
+
 
 ---
 

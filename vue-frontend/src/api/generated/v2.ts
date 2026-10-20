@@ -1552,6 +1552,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/insight/books/{book_id}/character-skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the characters of a book that can be distilled into a skill. */
+        get: operations["listInsightCharacterSkills"];
+        put?: never;
+        /** Distill one character into a reusable persona skill document. */
+        post: operations["buildInsightCharacterSkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insight/books/{book_id}/character-skills/{entity_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the generated skill document of one character. */
+        get: operations["getInsightCharacterSkill"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insight/books/{book_id}/character-skills/{entity_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Progress of the distillation running for one character. */
+        get: operations["getInsightCharacterSkillStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/insight/qa/status": {
         parameters: {
             query?: never;
@@ -3168,6 +3220,101 @@ export interface components {
             nextCursor: string | null;
             totalCount: number;
         };
+        InsightCharacterSkillCharacter: {
+            entityId: string;
+            name: string;
+            aliases?: string[];
+            pageCount: number;
+            chapterCount: number;
+            frequency?: number;
+            hasSkill: boolean;
+            skillRevision?: number | null;
+            skillUpdatedAt?: string | null;
+            updatedAt?: string | null;
+        };
+        InsightCharacterSkillList: {
+            characters: components["schemas"]["InsightCharacterSkillCharacter"][];
+        };
+        InsightCharacterSkillBuildCommand: {
+            entityId: string;
+            maxVisionPages?: number;
+        };
+        InsightCharacterSkillStatus: {
+            bookId: string;
+            entityId: string;
+            /** @enum {string} */
+            status: "idle" | "running" | "ready" | "failed";
+            stage?: string | null;
+            done: number;
+            total: number;
+            revision?: number | null;
+            updatedAt?: string | null;
+            startedAt?: string | null;
+            finishedAt?: string | null;
+            error?: string | null;
+        };
+        InsightCharacterSkillEntry: {
+            citation?: string;
+            /** @enum {string} */
+            confidence?: "high" | "medium" | "low";
+            trait?: string;
+            evidence?: string;
+            pattern?: string;
+            example?: string;
+            name?: string;
+            relation?: string;
+            dynamic?: string;
+            note?: string;
+            event?: string;
+            /** @enum {string} */
+            importance?: "high" | "medium" | "normal";
+        } & {
+            [key: string]: unknown;
+        };
+        InsightCharacterSkillSummary: {
+            one_liner?: string;
+            identity?: {
+                [key: string]: unknown;
+            };
+            appearance?: components["schemas"]["InsightCharacterSkillEntry"][];
+            personality?: components["schemas"]["InsightCharacterSkillEntry"][];
+            speech_style?: components["schemas"]["InsightCharacterSkillEntry"][];
+            relationships?: components["schemas"]["InsightCharacterSkillEntry"][];
+            timeline?: components["schemas"]["InsightCharacterSkillEntry"][];
+            topics?: components["schemas"]["InsightCharacterSkillEntry"][];
+            persona_prompt?: string;
+            unknowns?: string[];
+        } & {
+            [key: string]: unknown;
+        };
+        InsightCharacterSkillStats: {
+            pages: number;
+            chapters: number;
+            events: number;
+            visionPages: number;
+            droppedCitations: number;
+        };
+        InsightCharacterSkillModels: {
+            vlm: string;
+            chat: string;
+        };
+        InsightCharacterSkill: {
+            bookId: string;
+            bookTitle: string;
+            entityId: string;
+            characterName: string;
+            runId: string;
+            generatedAt: string;
+            models: components["schemas"]["InsightCharacterSkillModels"];
+            stats: components["schemas"]["InsightCharacterSkillStats"];
+            summary: components["schemas"]["InsightCharacterSkillSummary"];
+            files: {
+                [key: string]: string;
+            };
+            revision?: number | null;
+            updatedAt?: string | null;
+            status?: string | null;
+        };
         InsightQaStatus: {
             available: boolean;
             reason: string | null;
@@ -3724,6 +3871,8 @@ export interface components {
         DocumentId: components["schemas"]["Uuid"];
         MessageId: components["schemas"]["Uuid"];
         BookId: components["schemas"]["Uuid"];
+        /** @description Character entity identifier from the entity knowledge graph. */
+        EntityId: string;
         ChapterId: components["schemas"]["Uuid"];
         AssetId: components["schemas"]["Uuid"];
         DraftId: components["schemas"]["Uuid"];
@@ -6782,6 +6931,111 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    listInsightCharacterSkills: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Characters ordered by page coverage. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightCharacterSkillList"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    buildInsightCharacterSkill: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable key for this normalized command and target scope. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                book_id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InsightCharacterSkillBuildCommand"];
+            };
+        };
+        responses: {
+            /** @description Distillation accepted; poll the status route for progress. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightCharacterSkillStatus"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    getInsightCharacterSkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: components["parameters"]["BookId"];
+                /** @description Character entity identifier from the entity knowledge graph. */
+                entity_id: components["parameters"]["EntityId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Distilled skill document with citations and generated files. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightCharacterSkill"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getInsightCharacterSkillStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: components["parameters"]["BookId"];
+                /** @description Character entity identifier from the entity knowledge graph. */
+                entity_id: components["parameters"]["EntityId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current stage of the distillation task. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightCharacterSkillStatus"];
+                };
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     getInsightQaStatus: {

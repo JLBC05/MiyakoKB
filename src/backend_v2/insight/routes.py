@@ -27,6 +27,11 @@ from src.backend_v2.api.request_helpers import (
 )
 from src.backend_v2.redaction import redact_sensitive_text
 from src.backend_v2.insight.commands import InsightAnalysisCommandService
+from src.backend_v2.insight.character_skill import (
+    DEFAULT_MAX_VISION_PAGES,
+    MAX_VISION_PAGES,
+    CharacterSkillService,
+)
 from src.backend_v2.content.image_import import ImageImportService
 from src.backend_v2.content.repository import ContentRepository
 from src.backend_v2.insight.continuation import (
@@ -91,6 +96,7 @@ def create_insight_blueprint(
     commands = InsightAnalysisCommandService(engine)
     derived = InsightDerivedRepository(engine)
     derived_commands = InsightDerivedCommandService(engine)
+    character_skills = CharacterSkillService(engine, data_root)
     export_commands = InsightExportCommandService(engine)
     continuation = ContinuationRepository(engine)
     continuation_commands = ContinuationCommandService(engine)
@@ -351,6 +357,42 @@ def create_insight_blueprint(
             ),
             202,
         )
+
+    @blueprint.get("/books/<book_id>/character-skills")
+    def list_character_skills(book_id: str) -> Response:
+        return jsonify({"characters": character_skills.characters(book_id=book_id)})
+
+    @blueprint.post("/books/<book_id>/character-skills")
+    def build_character_skill(book_id: str):
+        _require_idempotency_key()
+        command = _json_body(allowed_keys={"entityId", "maxVisionPages"})
+        entity_id = str(command.get("entityId") or "").strip()
+        if not entity_id:
+            raise ValueError("entityId is required")
+        raw_limit = command.get("maxVisionPages")
+        max_vision_pages = (
+            DEFAULT_MAX_VISION_PAGES
+            if raw_limit is None
+            else _integer_value(raw_limit, "maxVisionPages", minimum=1, maximum=MAX_VISION_PAGES)
+        )
+        return (
+            jsonify(
+                character_skills.start(
+                    book_id=book_id,
+                    entity_id=entity_id,
+                    max_vision_pages=max_vision_pages,
+                )
+            ),
+            202,
+        )
+
+    @blueprint.get("/books/<book_id>/character-skills/<entity_id>")
+    def get_character_skill(book_id: str, entity_id: str) -> Response:
+        return jsonify(character_skills.get(book_id=book_id, entity_id=entity_id))
+
+    @blueprint.get("/books/<book_id>/character-skills/<entity_id>/status")
+    def character_skill_status(book_id: str, entity_id: str) -> Response:
+        return jsonify(character_skills.status(book_id=book_id, entity_id=entity_id))
 
     @blueprint.get("/qa/status")
     def qa_status() -> Response:

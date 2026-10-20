@@ -76,6 +76,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '智能问答', publicFeature: 'insight' }
   },
   {
+    path: APP_ROUTE_PATHS.characterSkills,
+    name: 'character-skills',
+    component: () => import('@/views/CharacterSkillView.vue'),
+    meta: { title: '角色 Skill', publicFeature: 'insight' }
+  },
+  {
     path: APP_ROUTE_PATHS.settings,
     name: 'settings',
     component: () => import('@/views/SettingsView.vue'),

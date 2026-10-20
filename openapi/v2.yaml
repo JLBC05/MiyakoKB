@@ -2097,6 +2097,71 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/ValidationError"}
+  /insight/books/{book_id}/character-skills:
+    get:
+      tags: [insight]
+      operationId: listInsightCharacterSkills
+      summary: List the characters of a book that can be distilled into a skill.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+      responses:
+        "200":
+          description: Characters ordered by page coverage.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightCharacterSkillList"}
+        "404": {$ref: "#/components/responses/NotFound"}
+    post:
+      tags: [insight, jobs]
+      operationId: buildInsightCharacterSkill
+      summary: Distill one character into a reusable persona skill document.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/InsightCharacterSkillBuildCommand"}
+      responses:
+        "202":
+          description: Distillation accepted; poll the status route for progress.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightCharacterSkillStatus"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+  /insight/books/{book_id}/character-skills/{entity_id}:
+    get:
+      tags: [insight]
+      operationId: getInsightCharacterSkill
+      summary: Read the generated skill document of one character.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+        - $ref: "#/components/parameters/EntityId"
+      responses:
+        "200":
+          description: Distilled skill document with citations and generated files.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightCharacterSkill"}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /insight/books/{book_id}/character-skills/{entity_id}/status:
+    get:
+      tags: [insight]
+      operationId: getInsightCharacterSkillStatus
+      summary: Progress of the distillation running for one character.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+        - $ref: "#/components/parameters/EntityId"
+      responses:
+        "200":
+          description: Current stage of the distillation task.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightCharacterSkillStatus"}
+        "404": {$ref: "#/components/responses/NotFound"}
   /insight/qa/status:
     get:
       tags: [insight]
@@ -2700,6 +2765,13 @@ components:
       required: true
       schema:
         $ref: "#/components/schemas/Uuid"
+    EntityId:
+      name: entity_id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Character entity identifier from the entity knowledge graph.
     ChapterId:
       name: chapter_id
       in: path
@@ -5325,6 +5397,135 @@ components:
       properties:
         nextCursor: {type: [string, "null"]}
         totalCount: {type: integer, minimum: 0}
+    InsightCharacterSkillCharacter:
+      type: object
+      additionalProperties: false
+      required: [entityId, name, pageCount, chapterCount, hasSkill]
+      properties:
+        entityId: {type: string}
+        name: {type: string}
+        aliases:
+          type: array
+          items: {type: string}
+        pageCount: {type: integer, minimum: 0}
+        chapterCount: {type: integer, minimum: 0}
+        frequency: {type: integer, minimum: 0}
+        hasSkill: {type: boolean}
+        skillRevision: {type: integer, minimum: 0, nullable: true}
+        skillUpdatedAt: {type: string, nullable: true}
+        updatedAt: {type: string, nullable: true}
+    InsightCharacterSkillList:
+      type: object
+      additionalProperties: false
+      required: [characters]
+      properties:
+        characters:
+          type: array
+          items: {$ref: "#/components/schemas/InsightCharacterSkillCharacter"}
+    InsightCharacterSkillBuildCommand:
+      type: object
+      additionalProperties: false
+      required: [entityId]
+      properties:
+        entityId: {type: string}
+        maxVisionPages: {type: integer, minimum: 1, maximum: 30}
+    InsightCharacterSkillStatus:
+      type: object
+      additionalProperties: false
+      required: [bookId, entityId, status, done, total]
+      properties:
+        bookId: {type: string}
+        entityId: {type: string}
+        status: {type: string, enum: [idle, running, ready, failed]}
+        stage: {type: string, nullable: true}
+        done: {type: integer, minimum: 0}
+        total: {type: integer, minimum: 0}
+        revision: {type: integer, minimum: 0, nullable: true}
+        updatedAt: {type: string, nullable: true}
+        startedAt: {type: string, nullable: true}
+        finishedAt: {type: string, nullable: true}
+        error: {type: string, nullable: true}
+    InsightCharacterSkillEntry:
+      type: object
+      additionalProperties: true
+      properties:
+        citation: {type: string}
+        confidence: {type: string, enum: [high, medium, low]}
+        trait: {type: string}
+        evidence: {type: string}
+        pattern: {type: string}
+        example: {type: string}
+        name: {type: string}
+        relation: {type: string}
+        dynamic: {type: string}
+        note: {type: string}
+        event: {type: string}
+        importance: {type: string, enum: [high, medium, normal]}
+    InsightCharacterSkillSummary:
+      type: object
+      additionalProperties: true
+      properties:
+        one_liner: {type: string}
+        identity: {type: object, additionalProperties: true}
+        appearance:
+          type: array
+          items: {$ref: "#/components/schemas/InsightCharacterSkillEntry"}
+        personality:
+          type: array
+          items: {$ref: "#/components/schemas/InsightCharacterSkillEntry"}
+        speech_style:
+          type: array
+          items: {$ref: "#/components/schemas/InsightCharacterSkillEntry"}
+        relationships:
+          type: array
+          items: {$ref: "#/components/schemas/InsightCharacterSkillEntry"}
+        timeline:
+          type: array
+          items: {$ref: "#/components/schemas/InsightCharacterSkillEntry"}
+        topics:
+          type: array
+          items: {$ref: "#/components/schemas/InsightCharacterSkillEntry"}
+        persona_prompt: {type: string}
+        unknowns:
+          type: array
+          items: {type: string}
+    InsightCharacterSkillStats:
+      type: object
+      additionalProperties: false
+      required: [pages, chapters, events, visionPages, droppedCitations]
+      properties:
+        pages: {type: integer, minimum: 0}
+        chapters: {type: integer, minimum: 0}
+        events: {type: integer, minimum: 0}
+        visionPages: {type: integer, minimum: 0}
+        droppedCitations: {type: integer, minimum: 0}
+    InsightCharacterSkillModels:
+      type: object
+      additionalProperties: false
+      required: [vlm, chat]
+      properties:
+        vlm: {type: string}
+        chat: {type: string}
+    InsightCharacterSkill:
+      type: object
+      additionalProperties: false
+      required: [bookId, bookTitle, entityId, characterName, runId, generatedAt, models, stats, summary, files]
+      properties:
+        bookId: {type: string}
+        bookTitle: {type: string}
+        entityId: {type: string}
+        characterName: {type: string}
+        runId: {type: string}
+        generatedAt: {type: string}
+        models: {$ref: "#/components/schemas/InsightCharacterSkillModels"}
+        stats: {$ref: "#/components/schemas/InsightCharacterSkillStats"}
+        summary: {$ref: "#/components/schemas/InsightCharacterSkillSummary"}
+        files:
+          type: object
+          additionalProperties: {type: string}
+        revision: {type: integer, minimum: 0, nullable: true}
+        updatedAt: {type: string, nullable: true}
+        status: {type: string, nullable: true}
     InsightQaStatus:
       type: object
       additionalProperties: false

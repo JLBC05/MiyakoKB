@@ -8,6 +8,7 @@ export const APP_ROUTE_PATHS = {
   bookDetail: '/books/:bookId',
   graph: '/graph',
   qa: '/qa',
+  characterSkills: '/characters',
   settings: '/settings',
   reader: '/reader',
 } as const

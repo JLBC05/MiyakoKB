@@ -257,4 +257,43 @@ export function getBooksKnowledgeStatus(): Promise<BooksKnowledgeStatusResponse>
   return apiClient.get(`${ROOT}/books/knowledge-status`)
 }
 
+export type V2InsightCharacterSkill = components['schemas']['InsightCharacterSkill']
+export type V2InsightCharacterSkillStatus = components['schemas']['InsightCharacterSkillStatus']
+export type V2InsightCharacterSkillCharacter = components['schemas']['InsightCharacterSkillCharacter']
+
+export function listInsightCharacterSkills(
+  bookId: string
+): Promise<{ characters: V2InsightCharacterSkillCharacter[] }> {
+  return apiClient.get(`${ROOT}/books/${encodeURIComponent(bookId)}/character-skills`)
+}
+
+export function buildInsightCharacterSkill(
+  bookId: string,
+  command: { entityId: string; maxVisionPages?: number }
+): Promise<V2InsightCharacterSkillStatus> {
+  return apiClient.post(
+    `${ROOT}/books/${encodeURIComponent(bookId)}/character-skills`,
+    command,
+    { headers: { 'Idempotency-Key': newIdempotencyKey() } }
+  )
+}
+
+export function getInsightCharacterSkill(
+  bookId: string,
+  entityId: string
+): Promise<V2InsightCharacterSkill> {
+  return apiClient.get(
+    `${ROOT}/books/${encodeURIComponent(bookId)}/character-skills/${encodeURIComponent(entityId)}`
+  )
+}
+
+export function getInsightCharacterSkillStatus(
+  bookId: string,
+  entityId: string
+): Promise<V2InsightCharacterSkillStatus> {
+  return apiClient.get(
+    `${ROOT}/books/${encodeURIComponent(bookId)}/character-skills/${encodeURIComponent(entityId)}/status`
+  )
+}
+
 
