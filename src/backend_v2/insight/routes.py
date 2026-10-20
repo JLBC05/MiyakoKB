@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import quote
 
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 from sqlalchemy import Engine
@@ -31,6 +32,7 @@ from src.backend_v2.insight.character_skill import (
     DEFAULT_MAX_VISION_PAGES,
     MAX_VISION_PAGES,
     CharacterSkillService,
+    build_skill_archive,
 )
 from src.backend_v2.content.image_import import ImageImportService
 from src.backend_v2.content.repository import ContentRepository
@@ -401,6 +403,18 @@ def create_insight_blueprint(
     @blueprint.get("/books/<book_id>/character-skills/<entity_id>/status")
     def character_skill_status(book_id: str, entity_id: str) -> Response:
         return jsonify(character_skills.status(book_id=book_id, entity_id=entity_id))
+
+    @blueprint.get("/books/<book_id>/character-skills/<entity_id>/archive")
+    def character_skill_archive(book_id: str, entity_id: str) -> Response:
+        document = character_skills.get(book_id=book_id, entity_id=entity_id)
+        filename, payload = build_skill_archive(document)
+        response = Response(payload, mimetype="application/zip")
+        response.headers["Content-Disposition"] = (
+            'attachment; filename="character-skill.zip"; '
+            f"filename*=UTF-8''{quote(filename)}"
+        )
+        response.headers["Content-Length"] = str(len(payload))
+        return response
 
     @blueprint.get("/qa/status")
     def qa_status() -> Response:

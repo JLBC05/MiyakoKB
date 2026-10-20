@@ -17,6 +17,7 @@ vi.mock('@/api/client', () => ({
 
 import {
   buildInsightCharacterSkill,
+  characterSkillArchiveUrl,
   getInsightCharacterSkill,
   getInsightCharacterSkillStatus,
   listInsightCharacterSkills,
@@ -89,6 +90,12 @@ describe('character skill API', () => {
     )
     expect(getMock.mock.calls[1][0]).toBe(
       '/api/v2/insight/books/book%2Fone%20two/character-skills/character_hu_zhang_you_ren/status'
+    )
+  })
+
+  it('points the archive download at the encoded archive route', () => {
+    expect(characterSkillArchiveUrl(bookId, entityId)).toBe(
+      '/api/v2/insight/books/book%2Fone%20two/character-skills/character_hu_zhang_you_ren/archive'
     )
   })
 })

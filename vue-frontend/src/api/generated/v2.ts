@@ -1604,6 +1604,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/insight/books/{book_id}/character-skills/{entity_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download every generated skill file of one character as a zip archive. */
+        get: operations["downloadInsightCharacterSkillArchive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/insight/qa/status": {
         parameters: {
             query?: never;
@@ -7037,6 +7054,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InsightCharacterSkillStatus"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    downloadInsightCharacterSkillArchive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: components["parameters"]["BookId"];
+                /** @description Character entity identifier from the entity knowledge graph. */
+                entity_id: components["parameters"]["EntityId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Zip archive holding SKILL.md and the reference documents. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             404: components["responses"]["NotFound"];

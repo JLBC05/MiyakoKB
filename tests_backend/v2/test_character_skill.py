@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import io
 import json
 from pathlib import Path
 import uuid
+from urllib.parse import unquote
+import zipfile
 
 import pytest
 from flask import Flask
@@ -14,6 +17,7 @@ from sqlalchemy import insert, update
 from src.backend_v2.insight.character_skill import (
     CHARACTER_SKILL_KIND,
     CharacterSkillService,
+    build_skill_archive,
 )
 from src.backend_v2.insight.repository import InsightNotFound
 from src.backend_v2.insight.routes import create_insight_blueprint
@@ -293,3 +297,96 @@ def test_character_skill_routes_expose_list_detail_and_status(skill_platform) ->
         json={"entityId": CHARACTER_ID, "unexpected": 1},
     )
     assert extra.status_code == 422
+
+
+def _insert_generated_skill(platform, *, files: dict[str, str]) -> None:
+    with platform["engine"].begin() as connection:
+        _insert_artifact(
+            connection,
+            book_id=platform["book_id"],
+            kind=CHARACTER_SKILL_KIND,
+            template=CHARACTER_ID,
+            payload=json.dumps(
+                {
+                    "bookId": platform["book_id"],
+                    "bookTitle": "测试漫画",
+                    "entityId": CHARACTER_ID,
+                    "characterName": "虎杖悠仁",
+                    "files": files,
+                },
+                ensure_ascii=False,
+            ),
+            revision=1,
+        )
+
+
+def test_character_skill_archive_zips_every_generated_file(skill_platform) -> None:
+    platform = skill_platform
+    files = {
+        "SKILL.md": "# 虎杖悠仁\n",
+        "references/persona.md": "人格层\n",
+        "references/citations.json": "{}\n",
+    }
+    _insert_generated_skill(platform, files=files)
+
+    app = Flask("character-skill-archive-test")
+    app.register_blueprint(
+        create_insight_blueprint(
+            engine=platform["engine"],
+            data_root=platform["data_root"],
+            profile=resolve_runtime_profile("local"),
+        )
+    )
+    client = app.test_client()
+
+    response = client.get(
+        f"/api/v2/insight/books/{platform['book_id']}/character-skills/{CHARACTER_ID}/archive"
+    )
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/zip"
+    disposition = response.headers["Content-Disposition"]
+    assert 'filename="character-skill.zip"' in disposition
+    assert "filename*=UTF-8''" in disposition
+    assert unquote(disposition.split("filename*=UTF-8''", 1)[1]) == "测试漫画-虎杖悠仁-skill.zip"
+
+    with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+        assert sorted(archive.namelist()) == sorted(files)
+        for path, content in files.items():
+            assert archive.read(path).decode("utf-8") == content
+
+
+def test_character_skill_archive_is_not_found_before_generation(skill_platform) -> None:
+    platform = skill_platform
+    app = Flask("character-skill-archive-missing-test")
+    app.register_blueprint(
+        create_insight_blueprint(
+            engine=platform["engine"],
+            data_root=platform["data_root"],
+            profile=resolve_runtime_profile("local"),
+        )
+    )
+    client = app.test_client()
+
+    response = client.get(
+        f"/api/v2/insight/books/{platform['book_id']}/character-skills/{CHARACTER_ID}/archive"
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "not_found"
+
+
+def test_skill_archive_filename_falls_back_and_sanitizes() -> None:
+    name, payload = build_skill_archive(
+        {
+            "entityId": "character_a/b",
+            "files": {"SKILL.md": "x"},
+        }
+    )
+
+    assert name == "character_a_b-skill.zip"
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        assert archive.namelist() == ["SKILL.md"]
+
+    with pytest.raises(InsightNotFound):
+        build_skill_archive({"entityId": CHARACTER_ID, "files": {}})

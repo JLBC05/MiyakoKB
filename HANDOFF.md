@@ -86,7 +86,7 @@
 - [x] 验收点 3：关系图谱轻量化、丝滑无卡顿，故事梗概合并打通实体。
 - [x] 验收点 4：问答引用消除冗余括号章节号，优先显示真实话数。
 - [x] 验收点 5：统一启动器拉起双进程稳定运行。
-- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#40）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。**2026-10-20 用户报告问答「引用乱指 + 答不出第几话」，已定案并修复**：根因是 Chroma HNSW 段读取失败被静默降级 + 兜底按页号截断 + 实体证据页无话数映射且不进引用（报告 §5.10 / 发现 #40 / 决策 19 / 坑 27）。
+- [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#44）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。**2026-10-20 用户报告问答「引用乱指 + 答不出第几话」，已定案并修复**：根因是 Chroma HNSW 段读取失败被静默降级 + 兜底按页号截断 + 实体证据页无话数映射且不进引用（报告 §5.10 / 发现 #40 / 决策 19 / 坑 27）。
 - [x] 角色 Skill 蒸馏（2026-10-20，用户要求「产品化 + 入口放在智能问答右边 + 必须带人格层」）：后端 `src/backend_v2/insight/character_skill.py` + 4 条路由、前端 `/character-skills` 页面与导航项、契约 3 条路径、`tests_backend/v2/test_character_skill.py` 4 条用例，实栈用呪術廻戦 虎杖悠仁跑通（85s，156 页/10 章/15 张原画，人格层与引用全绿）。见 §2.8、决策 21、坑 29、报告发现 #42。
 - [x] 实体对齐流程重写（2026-10-20，用户 `m18960` 给出规格）：候选图 + 单请求多边 + 结构性输出，请求数 705 → 260，串行 ambiguous 仲裁删除；新模块 `src/backend_v2/insight/entity_alignment.py`、新单测 16 条、后端全量 794 passed。见决策 22、坑 30、报告发现 #43。
 - **阻塞**：无代码或架构阻塞。
@@ -212,7 +212,7 @@
   - *未做（建议）*：连续 N 次读失败可把该向量代标记为 `degraded` 并自动排队重建；`qa/status.available` 仍只看「有没有可用代 + 指纹」，未真正探测「索引可读」。
 - **决策 21：角色 Skill 蒸馏做成独立服务（不走 job 队列），人格层由 VLM 看原画提炼**（2026-10-20 用户要求「可以产品化了，前端入口放在智能问答右边，提取时要把人格层也提取出来」）
   - *背景*：先把久留美（《FX戰士久留美》）的档案当离线脚本试做了一遍（Tier 1 事实卡 + Tier 2 视觉人格层），验证「知识库现有产物 + 原画观察」足以产出一份带页码引用的角色 Skill；随后用户要求产品化。
-  - *做法*：(a) 新建 `src/backend_v2/insight/character_skill.py`（约 1080 行）——`CharacterSkillRepository`（读活跃 `entity_alignment` 的角色、取页级证据与原图字节、读写 `analysis_artifacts(kind="character_skill", template=<entityId>)`）、`CharacterSkillBuilder`（证据采集 → VLM 看原画 → chat 合成 JSON → 引用闸门 → 确定性渲染）、`CharacterSkillService`（内存任务表 + daemon 线程 + 单飞 + `idle/running/ready/failed` 进度）；(b) 产物写成**真实 artifact 行**（`kind="character_skill"`、`template=entityId`、`revision` 自增、deactivate 旧行），不新增 derived job kind；(c) 路由 3 条：`GET /books/<id>/character-skills`（列表，带 `hasSkill`/`revision`/`chapterCount`/`updatedAt`）、`POST`（`{entityId, maxVisionPages?}` → 202，后台蒸馏）、`GET .../<entityId>`（档案 + `references/*.md` + 引用清单）、`GET .../<entityId>/status`；(d) 前端在「智能问答」右侧加导航项「角色 Skill」（`/character-skills`，`meta.publicFeature='insight'`），页面左侧角色列表（搜索 + 已生成标记 + 页数/章数/频次）、右侧档案预览（概览/人格/时间线/边界四个页签）、顶部「提取」按钮带进度轮询与重新提取。
+  - *做法*：(a) 新建 `src/backend_v2/insight/character_skill.py`（约 1080 行）——`CharacterSkillRepository`（读活跃 `entity_alignment` 的角色、取页级证据与原图字节、读写 `analysis_artifacts(kind="character_skill", template=<entityId>)`）、`CharacterSkillBuilder`（证据采集 → VLM 看原画 → chat 合成 JSON → 引用闸门 → 确定性渲染）、`CharacterSkillService`（内存任务表 + daemon 线程 + 单飞 + `idle/running/ready/failed` 进度）；(b) 产物写成**真实 artifact 行**（`kind="character_skill"`、`template=entityId`、`revision` 自增、deactivate 旧行），不新增 derived job kind；(c) 路由 5 条：`GET /books/<id>/character-skills`（列表，带 `hasSkill`/`revision`/`chapterCount`/`updatedAt`）、`POST`（`{entityId, maxVisionPages?}` → 202，后台蒸馏）、`GET .../<entityId>`（档案 + `references/*.md` + 引用清单）、`GET .../<entityId>/status`、`GET .../<entityId>/archive`（把 `files` 里全部文件打成 zip 返回，`Content-Disposition` 同时给 ASCII 兜底名与 `filename*=UTF-8''`，文件名过滤 `\/:*?"<>|`）；(d) 前端在「智能问答」右侧加导航项「角色 Skill」（`/character-skills`，`meta.publicFeature='insight'`），页面左侧角色列表（搜索 + 已生成标记 + 页数/章数/频次）、右侧档案预览（概览/人格/时间线/边界四个页签）、顶部「提取」按钮带进度轮询与重新提取。
   - *理由*：①蒸馏只产出文本档案，不需要 `AnalysisInputSnapshot` 与冻结输入，塞进 job 队列会同时牵动 `DERIVED_KINDS`、凭证分区、dispatch、`validate_artifact_payload`、worker 注册与步骤文案六处，收益为负；②视觉观察必须在**请求线程之外**跑（VLM 批量 15 页 + 合成一次 chat 约 1-2 分钟），所以用服务内 daemon 线程 + 状态轮询，而不是复用 job 的租约/续跑机制；③产物落 artifact 表后天然获得「每角色多版本 + 活跃行」语义，与概览/时间线一致，前端与后续问答都能复用。
   - *引用闸门*：模型返回的每条 `citation` 必须命中 `(章节标题, 章内页码, 全书页码)` 三元组，否则被丢弃并计数（`sanitize`）；页面证据与图片字节只取 `analysis_page_results.status="published"` 且 `page_assets.role="source"` 的行，避免引用未分析页。
   - *验证*：实栈用呪術廻戦 虎杖悠仁跑通——`POST` 后约 85s 变 `ready`，`stats` 为 `pages=156, chapters=10, visionPages=15, visionChapters=10, entityPolicy=named, timelineEvents=150`；`references/persona.md` 有 5 条性格特征（每条带行为依据 + 页码）+ 5 条说话方式（逐字台词）+ 3 条待确认；`citations` 全部通过三元组校验。后端新增 4 条用例（列表/提取/读取/状态与幂等、缺 `entityId` → 422、缺 `Idempotency-Key` → 422、未生成 → 404），`tests_backend/v2/test_character_skill.py` **4 passed**。
@@ -378,6 +378,12 @@
   - *解法*：替换实现的同一轮里 `grep` 旧符号的全部引用（含 `tests_backend`、`tmp_*.py`），删实现 → 删常量 → 删用例 → 用 `tmp_unused.py`（自写 AST 检查器）复扫零引用；env 名整体换前缀并在 §4 决策里写清新旧对应关系。
   - *教训*：「全量测试通过」只能证明**被断言的行为**没坏，不能证明没有死代码；重构收尾必须单独做一次「零调用方」扫描。
 
+- **坑 31：同一视图里多个独立异步域共用一个「加载序号」，会让先发起的那次在 `finally` 里永远清不掉加载态**（2026-10-20，报告发现 #44）
+  - *现象*：角色 Skill 页一直停在「正在读取角色档案」，但后端 `/character-skills`（100ms）与 `/character-skills/<id>`（6ms）都返回 200，浏览器也确实加载的是新 bundle。
+  - *根因*：`loadBook` 用 `const sequence = ++loadSequence`，`finally` 里 `if (sequence === loadSequence) isLoading.value = false`；而它在 `await loadSkill(...)` 里让 `loadSkill` 自增了**同一个** `loadSequence` → 回到 `finally` 时判等失败，`isLoading` 永远是 true。只有「首选角色已有 Skill」时才走这条路径，所以首版（角色都还没生成）看不出问题。
+  - *解法*：每个独立异步域各自持有计数器（`skillSequence`），卸载时一并自增作废；更稳的写法是 `Promise.allSettled` 之后由**一处**统一收尾。
+  - *排查要点*：先分别计时调后端端点（排除接口），再确认前端 bundle 是否最新（`index-*.js` 哈希），最后才怀疑组件自身的状态机；「接口快 + 页面卡」几乎一定是客户端竞态或状态没收尾。
+
 ## 6. 新会话先读
 
 1. `AGENTS.md`：核心数据库脚本防手写约束与行为规范。
@@ -386,7 +392,7 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#40、裁决候选对离线回放与 Top-K 收窄标定数据、附录里的分析脚本清单）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#44、裁决候选对离线回放与 Top-K 收窄标定数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
 9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）、`tmp_stage_durations.py`（按 `job_events` 配对统计各步骤耗时）、`tmp_narrow_topk.py`（Top-K 收窄的对数/召回曲线，决策 16 依据）、`tmp_narrow_probe.py` / `tmp_narrow_recall_prod.py`（直接调生产函数在线上库复算收窄效果）、`tmp_audit_db_tables.py`（表三维对照：metadata 定义 vs 代码引用 vs 线上行数）、`tmp_audit_db_clusters.py`（按域打印 plugin / operations / studio 等簇的 metadata 覆盖与行数）、`tmp_qa_probe_artifact.py`（某书 artifact 版本表 + 每章已发布页覆盖）、`tmp_vec_probe.py`（`vector_generations` 各代状态/覆盖/active 与 Chroma 集合散列前缀）、`tmp_fp_probe.py`（快照指纹 vs 活动代指纹 + `qa_status`）、`tmp_chroma_embed_probe.py`（直接读 Chroma 集合的向量范数与两两 cos，区分「嵌入退化」与「索引读失败」）、`tmp_qa_repro.py`（复现某问题的 QA SSE，落盘 `tmp_qa_repro_sse.txt`）。
 

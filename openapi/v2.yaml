@@ -2168,6 +2168,21 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/InsightCharacterSkillStatus"}
         "404": {$ref: "#/components/responses/NotFound"}
+  /insight/books/{book_id}/character-skills/{entity_id}/archive:
+    get:
+      tags: [insight]
+      operationId: downloadInsightCharacterSkillArchive
+      summary: Download every generated skill file of one character as a zip archive.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+        - $ref: "#/components/parameters/EntityId"
+      responses:
+        "200":
+          description: Zip archive holding SKILL.md and the reference documents.
+          content:
+            application/zip:
+              schema: {type: string, format: binary}
+        "404": {$ref: "#/components/responses/NotFound"}
   /insight/qa/status:
     get:
       tags: [insight]

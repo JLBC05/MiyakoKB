@@ -302,4 +302,8 @@ export function getInsightCharacterSkillStatus(
   )
 }
 
+export function characterSkillArchiveUrl(bookId: string, entityId: string): string {
+  return `${ROOT}/books/${encodeURIComponent(bookId)}/character-skills/${encodeURIComponent(entityId)}/archive`
+}
+
 

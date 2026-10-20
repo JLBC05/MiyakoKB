@@ -10,12 +10,15 @@ import UiNumberField from '@/components/ui/UiNumberField.vue'
 import { getBookDetail } from '@/api/bookshelf'
 import {
   buildInsightCharacterSkill,
+  characterSkillArchiveUrl,
   getInsightCharacterSkill,
   getInsightCharacterSkillStatus,
   listInsightCharacterSkills,
   type V2InsightCharacterSkill,
   type V2InsightCharacterSkillStatus,
 } from '@/api/v2/insight'
+import { downloadBlob } from '@/api/download'
+import { triggerBlobDownload } from '@/utils/browserDownload'
 import type { BookData } from '@/types'
 
 interface CharacterRow {
@@ -53,8 +56,10 @@ const error = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const copied = ref('')
 const minPages = ref<number | null>(3)
+const isExporting = ref(false)
 
 let loadSequence = 0
+let skillSequence = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let isMounted = false
 
@@ -135,21 +140,23 @@ async function copyText(kind: string, text: string): Promise<void> {
 
 async function loadSkill(entityId: string, options: { silent?: boolean } = {}): Promise<void> {
   if (!bookId.value || !entityId) return
-  const sequence = ++loadSequence
+  // 单独的序号：Skill 详情的加载不能推进书籍加载的序号，否则书籍加载的
+  // finally 会认定自己已被取代，isLoading 永远停在 true。
+  const sequence = ++skillSequence
   if (!options.silent) isSkillLoading.value = true
   try {
     const document = await getInsightCharacterSkill(bookId.value, entityId)
-    if (!isMounted || sequence !== loadSequence) return
+    if (!isMounted || sequence !== skillSequence) return
     skill.value = document
     actionError.value = null
   } catch (loadError) {
-    if (!isMounted || sequence !== loadSequence) return
+    if (!isMounted || sequence !== skillSequence) return
     skill.value = null
     if (!options.silent) {
       actionError.value = loadError instanceof Error ? loadError.message : '角色 Skill 读取失败'
     }
   } finally {
-    if (isMounted && sequence === loadSequence) isSkillLoading.value = false
+    if (isMounted && sequence === skillSequence) isSkillLoading.value = false
   }
 }
 
@@ -269,6 +276,26 @@ async function buildSkill(): Promise<void> {
   }
 }
 
+async function exportSkill(): Promise<void> {
+  const row = selectedCharacter.value
+  if (!row || !bookId.value || isExporting.value) return
+  const entityId = row.entityId
+  isExporting.value = true
+  actionError.value = null
+  try {
+    const result = await downloadBlob({
+      url: characterSkillArchiveUrl(bookId.value, entityId),
+      fallbackFilename: `${row.name}-skill.zip`,
+      fallbackErrorMessage: '导出压缩包失败',
+    })
+    triggerBlobDownload(result.blob, result.filename)
+  } catch (exportError) {
+    actionError.value = exportError instanceof Error ? exportError.message : '导出压缩包失败'
+  } finally {
+    if (isMounted) isExporting.value = false
+  }
+}
+
 onMounted(() => {
   isMounted = true
   const target = routeBookId(route.query.book)
@@ -278,6 +305,7 @@ onMounted(() => {
 onUnmounted(() => {
   isMounted = false
   loadSequence += 1
+  skillSequence += 1
   stopPolling()
 })
 
@@ -503,7 +531,18 @@ watch(
               </section>
 
               <section v-if="skill.files && Object.keys(skill.files).length > 0" class="character-skill-section">
-                <h2 class="character-skill-section__title">可导出的 Skill 文件</h2>
+                <div class="character-skill-section__head">
+                  <h2 class="character-skill-section__title">可导出的 Skill 文件</h2>
+                  <UiButton
+                    size="sm"
+                    variant="secondary"
+                    :loading="isExporting"
+                    :disabled="isExporting"
+                    @click="exportSkill"
+                  >
+                    导出为 .zip 压缩包
+                  </UiButton>
+                </div>
                 <ul class="character-skill-files">
                   <li v-for="(content, path) in skill.files" :key="path" class="character-skill-files__item">
                     <code class="character-skill-files__path">{{ path }}</code>

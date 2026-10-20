@@ -18,6 +18,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
+import io
 import json
 import logging
 from pathlib import Path
@@ -25,6 +26,7 @@ import re
 import threading
 from typing import Any
 import uuid
+import zipfile
 
 from sqlalchemy import Engine, func, insert, select, update
 from sqlalchemy.engine import Connection
@@ -1124,6 +1126,39 @@ def _fingerprint(*, book_id: str, entity_id: str, run_id: str, pages: Sequence[P
 
 def _task_key(book_id: str, entity_id: str) -> str:
     return f"{book_id}:{entity_id}"
+
+
+_UNSAFE_FILENAME_CHARS = frozenset('\\/:*?"<>|')
+
+
+def _archive_filename(document: Mapping[str, Any]) -> str:
+    """下载文件名：书名的角色名在 Windows 资源管理器里也能落地。"""
+    character = str(document.get("characterName") or "").strip()
+    book_title = str(document.get("bookTitle") or "").strip()
+    entity_id = str(document.get("entityId") or "").strip()
+    if character:
+        stem = f"{book_title}-{character}-skill" if book_title else f"{character}-skill"
+    else:
+        stem = f"{entity_id or 'character'}-skill"
+    cleaned = "".join(
+        "_" if char in _UNSAFE_FILENAME_CHARS else char for char in stem
+    )
+    cleaned = " ".join(cleaned.split()).strip(" .")
+    return f"{cleaned or 'character-skill'}.zip"
+
+
+def build_skill_archive(document: Mapping[str, Any]) -> tuple[str, bytes]:
+    """把角色 Skill 的全部文件打成 zip，返回（下载文件名, 压缩包字节）。"""
+    files = document.get("files")
+    if not isinstance(files, Mapping) or not files:
+        raise InsightNotFound("该角色 Skill 没有可导出的文件")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(str(key) for key in files):
+            content = files[path]
+            text = content if isinstance(content, str) else str(content)
+            archive.writestr(path, text.encode("utf-8"))
+    return _archive_filename(document), buffer.getvalue()
 
 
 def _page_number(value: Any) -> int:
