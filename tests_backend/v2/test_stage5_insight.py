@@ -6456,7 +6456,7 @@ def test_qa_retrieval_reports_degraded_keyword_fallback(insight_platform) -> Non
     assert [row["pageId"] for row in candidates] == ["page-1"]
     assert retrieval == {
         "degraded": True,
-        "reason": "该书尚未建立语义索引，本次回答仅基于关键词检索。",
+        "reason": "该书尚未建立语义索引，仅以关键词命中的页面作为页面级证据。",
         "mode": "lexical",
         "candidateCount": 1,
     }
@@ -6475,7 +6475,7 @@ def test_qa_retrieval_reports_degraded_keyword_fallback(insight_platform) -> Non
     )
     assert empty == []
     assert empty_retrieval["mode"] == "none"
-    assert "关键词检索未命中" in empty_retrieval["reason"]
+    assert "关键词检索也未命中" in empty_retrieval["reason"]
 
     with pytest.raises(QAConflict, match="diagnostics"):
         validate_retrieval_candidates(
@@ -6485,6 +6485,74 @@ def test_qa_retrieval_reports_degraded_keyword_fallback(insight_platform) -> Non
         validate_retrieval_candidates(
             {"mode": "exact", "candidates": [], "retrieval": {"degraded": True}}
         )
+
+
+def test_qa_chroma_read_failure_reopens_segments_and_retries(
+    insight_platform,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    platform = insight_platform
+    page_id = platform["page_ids"][0]
+    worker = _qa_worker_with_pages(
+        platform,
+        [{"pageId": page_id, "pageNumber": 1, "analysis": {"page_summary": "宿傩展开领域"}}],
+    )
+    calls: list[int] = []
+    cleared: list[bool] = []
+    recovered = [
+        {
+            "id": "page_1",
+            "type": "page",
+            "pageId": page_id,
+            "pageNumber": 1,
+            "document": "宿傩展开领域",
+            "hybridScore": 0.9,
+        }
+    ]
+
+    def fake_once(**_kwargs: object) -> list[dict[str, object]]:
+        calls.append(1)
+        if len(calls) == 1:
+            # 旧 worker 持有的 HNSW 段句柄指向已被重建删除的文件；
+            # 磁盘数据是好的，清掉进程级缓存后重试即可恢复。
+            raise RuntimeError("Error creating hnsw segment reader: Nothing found on disk")
+        return recovered
+
+    monkeypatch.setattr(worker, "_query_chroma_once", fake_once)
+    monkeypatch.setattr(
+        "src.backend_v2.insight.qa._clear_chroma_cache",
+        lambda: cleared.append(True),
+    )
+
+    rows = worker._query_chroma(
+        book_id="book",
+        generation=3,
+        embeddings=[[0.0] * 4],
+        limit=5,
+        keywords=[],
+    )
+    assert [row["pageId"] for row in rows] == [page_id]
+    assert len(calls) == 2
+    assert cleared == [True]
+
+    calls.clear()
+    cleared.clear()
+
+    def always_fail(**_kwargs: object) -> list[dict[str, object]]:
+        calls.append(1)
+        raise RuntimeError("Error creating hnsw segment reader: Nothing found on disk")
+
+    monkeypatch.setattr(worker, "_query_chroma_once", always_fail)
+    with pytest.raises(RuntimeError, match="Nothing found on disk"):
+        worker._query_chroma(
+            book_id="book",
+            generation=3,
+            embeddings=[[0.0] * 4],
+            limit=5,
+            keywords=[],
+        )
+    assert len(calls) == 2
+    assert cleared == [True]
 
 
 def test_qa_page_locations_map_run_numbers_to_chapter_identity(

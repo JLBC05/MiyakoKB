@@ -193,7 +193,14 @@
   - *做法*：(a) **兜底不再编造**：`_fallback_page_candidates` 只保留关键词命中的页（`lexical<=0` 丢弃，无命中返回空集），文档正文统一用 `_page_document`；`_global_context` 的兜底同理，无全局产物且关键词无命中就如实返回空；(b) **降级可见**：`_page_candidates` 返回 `(candidates, retrieval)` 诊断（`{degraded, reason, mode ∈ vector/lexical/none, candidateCount}`）并随检索结果落库，`validate_retrieval_candidates` 接受可选 `retrieval` 块（形状严格校验）、新增 `retrieval_diagnostics()` 读取；`routes.py` 在 SSE `context` 事件发 `degraded`/`warnings`，用户日志追加「漫画问答检索降级：…」，前端回答下方显示 ⚠️ 提示条；(c) **实体证据页成为一等证据**：新增 `page_locations()`（run 页号 → `chapterOrdinal/chapterTitle/pageInChapter`，查不到就 `None`）与 `entity_page_candidates()`（把实体记录的出现页码物化为候选页，`hybridScore=1.0`），`ask_question` 并入候选并标 `source: "entity"`（前端 chip 显示「（实体依据）」）；`_answer_context` 对实体证据页打印「页话对应：第 X 话 第 Y 页（全书第 N 页）」，页面资料标签改为「第 X 话 第 Y 页（全书第 N 页）」，并追加 `[回答要求]`（必须给话数、无依据就直说、不得猜测）；`stream_answer` 增 `locations` 形参；(d) 顺带修掉「无候选时向模型传空配置」——`materialize_api_config` 改为无条件解析（重排器按需包含）。
   - *理由*：检索失败时给出「全书开头几页」比明确说「没有依据」危害更大（用户会照引用去翻无关页）；降级必须走用户可见通道，否则「状态 ready 但检索静默降级」无法被发现。实体知识库本来就记录了证据页，缺的只是「页码 → 页话」映射与「让它进引用」这一步。
   - *验证*：后端新增 4 条用例（关键词兜底只留命中页且无命中返回空、诊断形状与降级原因、`page_locations` 话数映射与缺失页给 `None`、实体证据页可被引用且上下文含页话对应）→ 定向 **8 passed**，`test_stage5_insight.py` + `test_public_profile.py` **190 passed**；前端新增 4 条用例（降级提示透传、非法提示拒收、实体依据 chip、无引用不出 footer）→ 全量 vitest **87 files / 638 tests**，`vue-tsc`/eslint/stylelint/`lint:ui`/`--audit` 全 0。
-  - *未做（建议）*：①HNSW 段读取失败应把该向量代标记为不可用并提示/自动重建（前端已有向量重建入口），`qa/status` 的 `available` 应计入「索引可读」；②引用可再收窄为「模型实际引用到的页」，当前仍是「送入模型的候选集」。
+  - *未做（建议）*：①（**2026-10-20 已实施**，见决策 20）HNSW 段读失败改为清进程级缓存并重试一次，不必重启 worker；下一步可把该代标记 `degraded` 并自动排队重建，让 `qa/status` 的 `available` 计入「索引可读」；②引用可再收窄为「模型实际引用到的页」，当前仍是「送入模型的候选集」。
+
+- **决策 20：Chroma 段句柄失效改为进程内自愈（清缓存 + 重试一次），降级文案如实化**（2026-10-20 用户批准「一起做完再跑一轮全量」，属发现 #41）
+  - *背景*：决策 19 修好了「降级可见」，但没修「为什么会降级」。用户同一台机器上第二次遇到问答报 ⚠️「语义索引读取失败，关键词检索未命中」——根因是 **Chroma 的 segment reader 缓存在进程级 `SharedSystemClient` 里**，索引在 worker 存活期间被重建后，旧句柄指向已删除的段文件，此后每次查询都报 `Error creating hnsw segment reader: Nothing found on disk`，只能等 worker 重启才恢复。磁盘侧完全健康：全新进程直接读 `…_g3_pages`（234 条）与 `…_g3_events`（160 条），1024 维、范数 1.0±1.2e-7、两两 cos 0.29–0.75。
+  - *做法*：(a) `src/backend_v2/insight/qa.py` 的 `_query_chroma` 拆成「包装 + `_query_chroma_once`」，首次失败时 `LOGGER.warning` 后调用新增的模块级 `_clear_chroma_cache()`（`from chromadb.api.shared_system_client import SharedSystemClient` → `SharedSystemClient.clear_system_cache()`，chromadb 1.5.9 实测可用），随后**只重试一次**；`QAConflict`（如「ChromaDB 未安装」）不重试，两次都失败仍上抛由上层转降级；(b) 降级文案如实化：`_page_candidates` 原写「本次回答仅基于全局资料」「本次回答仅基于关键词检索」，两条都不准确（实际还用了实体知识库），改为「关键词检索也未命中，本次回答缺少页面级证据。」（none）与「仅以关键词命中的页面作为页面级证据。」（lexical），global 分支同类改写。
+  - *理由*：重建索引是**正常运维动作**（前端就有「重建向量」按钮），不该要求用户重建后手动重启 worker 才能恢复语义检索；而「状态 ready 但检索静默降级」正是决策 19 要消灭的可观测性缺口——修掉自愈后，降级才真正只剩「索引没建/上游挂了」这类真原因。
+  - *验证*：(a) 新增 `test_qa_chroma_read_failure_reopens_segments_and_retries`（首次抛错→重试成功→清缓存恰 1 次；两次都失败→异常仍上抛且不无限重试），`-k "qa or retrieval"` 定向 **23 passed**；(b) 实栈复验：`POST /api/v2/insight/books/29011e06-5c43-41ab-905d-42891e2955de/vector-rebuild` → job `dcdedeb2-…` completed（约 40s）→ `qa/status` = `{available: true, generation: 4, coverage: {pages: 234, events: 160}}` → 同一问题 SSE `context` 为 `degraded=false, warnings=[]`，引用带 `score`（第 6 話第 8 頁 0.2465 等），回答给出「第 8 话 第 13 页（全书第 190 页）」。
+  - *未做（建议）*：连续 N 次读失败可把该向量代标记为 `degraded` 并自动排队重建；`qa/status.available` 仍只看「有没有可用代 + 指纹」，未真正探测「索引可读」。
 
 ---
 
@@ -324,6 +331,11 @@
   - *正确姿势*：排查问答「答非所问/引用乱指」时，先看候选页是否带 `vectorScore`，再用 `grep -n "Vector retrieval failed" data-v2/logs/*.log`（必须包含 `*-diagnostic.log`）；跨维度定罪要分三步——`vector_generations` 的代次状态 → 指纹一致性（`tmp_fp_probe.py`）→ 直接读 Chroma 集合的向量健康度（`tmp_chroma_embed_probe.py`），三者都正常才轮到「检索逻辑/重排」。
   - *已修*：兜底不再用页号顺序凑候选（只留关键词命中页），降级诊断随结果落库并对用户可见（见决策 19）。
 
+- **坑 28：进程内的 Chroma 客户端缓存比磁盘索引活得久，重建索引后不清缓存就只有重启 worker 能恢复**
+  - *现象*：向量重建成功、`qa/status` 报 `generation=4, available=true`，但问答仍走关键词兜底（`hybridScore` 无 `vectorScore`），日志报 `Error creating hnsw segment reader: Nothing found on disk`。同一批集合用**全新进程**读取完全正常。
+  - *根因*：`SharedSystemClient` 在进程内缓存了 system/client（含 HNSW segment reader）；重建会删掉旧段文件，缓存里的句柄随之失效，而 `qa.py` 只捕获异常转降级，不会清理缓存。重启 worker（或整个栈）才会重建客户端。
+  - *解法*：查询失败时 `SharedSystemClient.clear_system_cache()` 后重试一次（决策 20）。排查同类问题的判据：候选页是否带 `vectorScore`；`grep -n "Vector retrieval failed" data-v2/logs/*.log`（含 `*-diagnostic.log`）；再用新进程直接 `list_collections()/count()` 确认磁盘侧是否健康。
+
 ---
 
 ## 6. 新会话先读
@@ -375,4 +387,4 @@
 9. **发行包形态**：`release.yml` 仍按 `cpu` / `gpu` 两个 variant 各出一个包，但 `requirements-cpu.txt` 与 `requirements-gpu.txt` 已逐字节相同（本地模型与 CUDA 栈移除后二者内容一致）——是否收敛为单一发行包，需要产品决定（收敛可省一半 CI 时间并避免用户选错）。
 10. **下一版 DB 清理（`3.5.4`，本轮明确不做）**：4 张只被 `schema.py` 引用的悬空表（`operation_asset_inputs`、`operation_credential_snapshots`、`operation_plugin_snapshots`、`studio_message_assets`）与两个按域成簇 0 行的集群（plugin 集群 5 张、durable-operations 残留 4 张）是否在下一版一并删除；同时可收紧两处**枚举残留**——`src/backend_v2/storage/schema.py:78-94` 的 `JOB_KINDS` 仍含翻译时代与半删除域的取值（`translation`/`remove_text`/`detect`/`style_apply`/`text_import`/`plugin_agent`），`schema.py:99-115` 的 `OPERATION_KINDS`/`PAGE_WRITE_OPERATION_KINDS` 仍是 `bubble_*`/`page_*` 全套（这些是带 CHECK 约束的字段，收窄必须走迁移）。删除需要：按 `docs/storage-migrations.md` 新增 `src/storage_migrator/schemas/3.5.4.sql` + `v3_5_4.py`（convert 删表/重建带 CHECK 的表、validate 委派）+ `registry.py` 登记 + 测试版本号递增，并改动仍在读这些表的活代码（`jobs/retry.py`、`jobs/repository.py`、`storage/epochs.py`、`content/repository.py`、`auth/authorization.py`）。实测数据见清理报告 §10 第 1 条。
 11. **构建流水线的第二档提速（报告发现 #34 的剩余项）**：本轮已把实体对齐（69.3%）批量化并独立成步（决策 14），并把剩下两处杠杆做成可见可调（决策 15）：①**第 1 层聚合 78 次请求 / 777.5s（8.5%）**——自定义架构下第 1 层 `unitsPerGroup` 现可表示「每组合并页数」（内置预设行为不变）；②**逐页 VLM 分析 78 批 / 1658s（18.1%）**——批内并发已升级为 insight VLM 供应商级设置 `analyzeConcurrency`（1..8，默认 3；env `INSIGHT_ANALYZE_PARALLEL` 降级为兜底）。两项都属「改吞吐不改语义」，但仍需**在真实供应商上限下**复测：建议重启开发栈后用同一本 387 页漫画跑一次全书构建，记录新的阶段耗时与限流情况（注意并发调高对免费层供应商会触发 429）。
-12. **问答检索的自愈与引用收窄（报告 §5.10 / 发现 #40 的建议）**：①Chroma 的 HNSW 段读取失败时应把该向量代标记为不可用并提示/自动重建（前端已有向量重建入口），`qa/status` 的 `available` 判据应计入「索引可读」；②引用目前是「送入模型的候选集」，可再收窄为「模型实际引用到的页」。另需在浏览器复验两处新交互：引用气泡现在会对实体证据页显示「（实体依据）」后缀，检索降级时回答下方出现 ⚠️ 提示条。
+12. **问答检索的自愈与引用收窄（报告 §5.10 / 发现 #40-#41）**：①**已落地**（决策 20）——HNSW 段读失败会清 `SharedSystemClient` 缓存并重试一次，降级文案已改为如实描述；仍待做的增强是把连续失败升级为「该向量代不可用 + 自动重建」并让 `qa/status.available` 计入「索引可读」；②引用仍是「送入模型的候选集」，可再收窄为「模型实际引用到的页」。：①Chroma 的 HNSW 段读取失败时应把该向量代标记为不可用并提示/自动重建（前端已有向量重建入口），`qa/status` 的 `available` 判据应计入「索引可读」；②引用目前是「送入模型的候选集」，可再收窄为「模型实际引用到的页」。另需在浏览器复验两处新交互：引用气泡现在会对实体证据页显示「（实体依据）」后缀，检索降级时回答下方出现 ⚠️ 提示条。

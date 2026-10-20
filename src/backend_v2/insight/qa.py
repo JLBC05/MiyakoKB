@@ -352,6 +352,21 @@ def retrieval_diagnostics(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _clear_chroma_cache() -> None:
+    """Drop the process-wide Chroma client/segment cache.
+
+    Without this a worker that outlives an index rebuild keeps querying a HNSW
+    reader whose segment files are gone, and every QA request silently degrades
+    to keyword retrieval until the process restarts.
+    """
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+
+        SharedSystemClient.clear_system_cache()
+    except Exception as exc:  # pragma: no cover - depends on the chromadb version
+        LOGGER.debug("Failed to clear the Chroma client cache: %s", exc)
+
+
 class TransientRequestRepository:
     """Small CAS state machine for non-durable connection work."""
 
@@ -947,7 +962,7 @@ class InsightQAWorkerService:
                     limit=20,
                 )
                 global_reason = (
-                    "该书没有可用的全局概览资料，本次回答仅基于关键词检索。"
+                    "该书没有可用的全局概览资料，仅以关键词命中的页面作为依据。"
                     if global_candidates
                     else "该书没有可用的全局概览资料，关键词检索也未命中，本次回答缺少可用依据。"
                 )
@@ -1075,9 +1090,9 @@ class InsightQAWorkerService:
             }
         else:
             completion = (
-                "关键词检索未命中，本次回答仅基于全局资料。"
+                "关键词检索也未命中，本次回答缺少页面级证据。"
                 if search_mode == "none"
-                else "本次回答仅基于关键词检索。"
+                else "仅以关键词命中的页面作为页面级证据。"
             )
             reason = f"{vector_issue or '语义索引不可用'}，{completion}"
             retrieval = {
@@ -1163,6 +1178,50 @@ class InsightQAWorkerService:
             LOGGER.debug("character extraction rate monitor failed: %s", exc)
 
     def _query_chroma(
+        self,
+        *,
+        book_id: str,
+        generation: int,
+        embeddings: Sequence[Sequence[float]],
+        limit: int,
+        keywords: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        """Query the vector store, self-healing a broken in-process segment handle.
+
+        Chroma keeps segment readers in a process-wide cache. When the index is
+        rebuilt underneath a running worker the cached HNSW reader points at
+        deleted files and every query fails with「Nothing found on disk」even
+        though the storage on disk is healthy. Dropping the cache and retrying
+        once re-opens the segments, so one stale handle does not degrade QA into
+        keyword-only retrieval for the rest of the process lifetime.
+        """
+        try:
+            return self._query_chroma_once(
+                book_id=book_id,
+                generation=generation,
+                embeddings=embeddings,
+                limit=limit,
+                keywords=keywords,
+            )
+        except QAConflict:
+            raise
+        except Exception as exc:
+            LOGGER.warning(
+                "Chroma query failed for book %s generation %s: %s; clearing client cache and retrying once",
+                book_id,
+                generation,
+                exc,
+            )
+            _clear_chroma_cache()
+            return self._query_chroma_once(
+                book_id=book_id,
+                generation=generation,
+                embeddings=embeddings,
+                limit=limit,
+                keywords=keywords,
+            )
+
+    def _query_chroma_once(
         self,
         *,
         book_id: str,
