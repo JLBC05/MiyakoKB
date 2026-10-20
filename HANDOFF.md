@@ -87,6 +87,7 @@
 - [x] 验收点 5：统一启动器拉起双进程稳定运行。
 - [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#40）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。**2026-10-20 用户报告问答「引用乱指 + 答不出第几话」，已定案并修复**：根因是 Chroma HNSW 段读取失败被静默降级 + 兜底按页号截断 + 实体证据页无话数映射且不进引用（报告 §5.10 / 发现 #40 / 决策 19 / 坑 27）。
 - [x] 角色 Skill 蒸馏（2026-10-20，用户要求「产品化 + 入口放在智能问答右边 + 必须带人格层」）：后端 `src/backend_v2/insight/character_skill.py` + 4 条路由、前端 `/character-skills` 页面与导航项、契约 3 条路径、`tests_backend/v2/test_character_skill.py` 4 条用例，实栈用呪術廻戦 虎杖悠仁跑通（85s，156 页/10 章/15 张原画，人格层与引用全绿）。见 §2.8、决策 21、坑 29、报告发现 #42。
+- [x] 实体对齐流程重写（2026-10-20，用户 `m18960` 给出规格）：候选图 + 单请求多边 + 结构性输出，请求数 705 → 260，串行 ambiguous 仲裁删除；新模块 `src/backend_v2/insight/entity_alignment.py`、新单测 16 条、后端全量 794 passed。见决策 22、坑 30、报告发现 #43。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；**2026-10-19 追加：全书构建 69% 墙钟耗在逐对裁决的问题已定案并落地**（报告发现 #34 / 决策 14 / 坑 19）：超集预取 + 批量裁决（30 对/批、3 并发）、对齐拆为独立步骤 `insight_stage_entity_alignment`、每批进度写用户日志；
@@ -215,6 +216,18 @@
   - *引用闸门*：模型返回的每条 `citation` 必须命中 `(章节标题, 章内页码, 全书页码)` 三元组，否则被丢弃并计数（`sanitize`）；页面证据与图片字节只取 `analysis_page_results.status="published"` 且 `page_assets.role="source"` 的行，避免引用未分析页。
   - *验证*：实栈用呪術廻戦 虎杖悠仁跑通——`POST` 后约 85s 变 `ready`，`stats` 为 `pages=156, chapters=10, visionPages=15, visionChapters=10, entityPolicy=named, timelineEvents=150`；`references/persona.md` 有 5 条性格特征（每条带行为依据 + 页码）+ 5 条说话方式（逐字台词）+ 3 条待确认；`citations` 全部通过三元组校验。后端新增 4 条用例（列表/提取/读取/状态与幂等、缺 `entityId` → 422、缺 `Idempotency-Key` → 422、未生成 → 404），`tests_backend/v2/test_character_skill.py` **4 passed**。
   - *未做（建议）*：①批量蒸馏（一次点多个角色，串行排队）；②把 Skill 作为问答的「角色视角」上下文注入；③角色 Skill 的「台词库」单独成文件（当前台词散在 `persona.md` 的说话方式里）。
+
+- **决策 22：实体对齐改为「候选图 + 单请求多边 + 结构性输出」——把 36 小时的逐对/逐批裁决压到分钟级**（2026-10-20，用户 `m18960` 给出完整改造规格，`m18842` 先把供应商切回 gemini-3.8）
+  - *背景*：FX戰士久留美 1507 页（run `7fca6fc4-3e93-4185-9f58-7d84f46db8b4`，1457 页已发布）实测对齐步骤 38 分钟只完成 **12/705 批**（≈19 批/小时）→ 剩余 693 批 ETA **30–36 小时**，而同一作业的页分析只花了 76 分钟。根因是三层叠加：①候选面是「同类词条 × 同类词条」全组合（3,542 词条、**20,659 对**，其中 concepts 2,227 个词条里有 1,807 个只出现在一页、占 81%）；②裁决粒度是「对」，30 对一批；③提示词还允许模型输出 `ambiguous` 逃逸到「二次仲裁」，而该仲裁是**串行单对请求**（5–60s）——日志实测每 30 对约 3.7 对走仲裁，单批墙钟于是变成 160–190s。
+  - *做法*：
+    *(a) 新模块* `src/backend_v2/insight/entity_alignment.py`（约 1,040 行，纯函数 + 可注入 `candidate_filter`，**不 import `derived`** 以避免循环依赖）：`build_alignment_graph`（按类别建「词条=节点、候选对=边」的连通分量图，每节点只连 top_k 邻居；描述型/泛化实体走延迟列表不进图）、`plan_requests`（按 ≤24 节点 / ≤40 边 / ≤8000 输入 token 打包，**跨分量合批**，超大分量切分并记录跨片节点）、`build_request_prompt`（一次给出实体清单 + 每分量候选对 + 严格 JSON 输出契约）、`validate_request_decision`（分量归属、pair_id 全覆盖、SAME/DIFFERENT 互斥、实体不得重复分组，共 9 类拒收）、`run_request_batch`/`run_alignment_sync`（信号量并发、**单请求失败只把该请求的边降级为 UNCERTAIN**、请求级重试 + JSON 校验）、`apply_decisions`（冲突安全并查集：跨片矛盾裁决只记 `blocked_merges`，绝不强行合并）。
+    *(b) 接线*：`derived.py` 的 `align_entities` 改为「建图 → 一次批量裁决（`llm_judge.client`）→ 依 `clusters` 判归并」；`judge_same()` 只认候选图上明确 SAME 的同一簇，**不再发任何逐对请求**；产物 payload 新增 `alignment_graph`/`alignment_metrics`/`deferred_entities`（`validate_artifact_payload` 允许额外键）。
+    *(c) 删除旧路径*（不留零调用方代码）：`prefetch_alignment_judgements`、`LLMBatchJudge.judge_batch`/`judge_pair_sync`/`_judge_chunk`/`_arbitrate_single`、`JUDGE_BATCH_SIZE`/`JUDGE_PARALLEL`/`JUDGE_MAX_ATTEMPTS`、`resolve_judge_top_k`/`JUDGE_TOP_K_*`/`build_alignment_candidate_pairs`/`_alignment_ability_core`/`_is_deterministic_alias_pair`。
+    *(d) 阈值全部可 env 覆盖*（收窄语义整体搬到新模块，环境变量前缀从 `INSIGHT_JUDGE_*` 改为 `INSIGHT_ALIGN_*`）：`TOP_K`(4)、`MAX_NODES`(24)、`MAX_EDGES`(40)、`INPUT_TOKENS`(8000)、`OUTPUT_TOKENS`(2500)、`CHAPTER_WINDOW`(1)、`ATTEMPTS`(3)、`PARALLEL`(3)、`CONCEPT_MIN_PAGES`(3)、`GENERIC_TERMS`。
+  - *理由*：把「一次判一对」换成「一次判一组边」，模型在同一请求里既给分组又给逐对决定，**ambiguous 逃逸口被彻底移除**（要判就判 SAME/DIFFERENT），串行仲裁随之消失；跨分量合批让多个小组共用一次请求；冲突安全并查集保住「宁可少合并、也不误并」的既有原则。请求数从 705 降到 260（−63%），且每请求都在 token 预算内。
+  - *验证*：(a) 新单测 `tests_backend/test_entity_alignment_graph.py` **16 passed**（打包预算与全边覆盖、跨分量合批、协议校验 9 类拒收、传输失败降级 UNCERTAIN、请求级重试、冲突阻止、env 覆盖）；(b) 真实规模探针（同 run 1457 页）：候选对 20,659 → 候选边 **3,259**（characters 609 / items 624 / locations 1,717 / concepts 306 / abilities 3），分量 72、孤立 276、延迟 2,350（concepts 2,022）→ 打包 **260 请求**、平均 12.5 边/请求（12–29）、多分量合批 9 个；(c) 后端全量 **794 passed**（2 warnings、42 subtests；钉住已删实现的 4 条旧用例随实现删除、新增 1 条 env 覆盖用例）。
+  - *未做（建议）*：①真实重跑一次 1507 页对齐量墙钟（本次只做了规模估算，按 3 并发、单请求 10–20s 估算 20–60 分钟量级，待实测确认）；②concepts 那 81% 的「只出现一页」噪音目前只是**不送审**，页分析提示词层仍未治理（源头少产出「戴眼镜的短发少女」这类描述型实体名）。
+
 
 ---
 
@@ -357,6 +370,11 @@
 
 
 ---
+
+- **坑 30：删掉一套实现后，钉住它的用例与常量必须同轮删除，环境变量名不要复用**（2026-10-20，决策 22）
+  - *现象*：对齐改造把 `build_alignment_candidate_pairs` / `resolve_judge_top_k` / `JUDGE_TOP_K_*` 从生产路径彻底替换后，`tests_backend` 里仍有 4 条用例在断言这些函数的行为——它们会**继续通过**，于是「测试全绿」掩盖了「仓库里还留着一份零调用方的实现」，而且新模块用的是 `INSIGHT_ALIGN_TOP_K=4`、旧的是 `INSIGHT_JUDGE_TOP_K=16`，两套语义并存时运维改错变量不会有任何报错。
+  - *解法*：替换实现的同一轮里 `grep` 旧符号的全部引用（含 `tests_backend`、`tmp_*.py`），删实现 → 删常量 → 删用例 → 用 `tmp_unused.py`（自写 AST 检查器）复扫零引用；env 名整体换前缀并在 §4 决策里写清新旧对应关系。
+  - *教训*：「全量测试通过」只能证明**被断言的行为**没坏，不能证明没有死代码；重构收尾必须单独做一次「零调用方」扫描。
 
 ## 6. 新会话先读
 

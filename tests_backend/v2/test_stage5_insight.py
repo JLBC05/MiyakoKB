@@ -28,16 +28,12 @@ from src.backend_v2.insight.continuation import (
     ContinuationWorkerService,
 )
 from src.backend_v2.insight.derived import (
-    JUDGE_TOP_K_DEFAULT,
-    JUDGE_TOP_K_MAX,
-    JUDGE_TOP_K_MIN,
     InsightDerivedCommandService,
     InsightDerivedRepository,
     InsightDerivedWorkerService,
     InsightVectorStore,
     ProviderDerivedAlgorithms,
-    build_alignment_candidate_pairs,
-    resolve_judge_top_k,
+    is_judge_candidate,
 )
 from src.backend_v2.insight.exports import (
     InsightExportCommandService,
@@ -6231,19 +6227,6 @@ def test_entity_alignment_rebuild_endpoint_queues_a_derived_job(insight_platform
         )
     assert kinds == ["insight_build_entity_alignment"]
 
-def test_judge_top_k_environment_resolution(monkeypatch) -> None:
-    monkeypatch.delenv("INSIGHT_JUDGE_TOP_K", raising=False)
-    assert resolve_judge_top_k() == JUDGE_TOP_K_DEFAULT
-    monkeypatch.setenv("INSIGHT_JUDGE_TOP_K", "not-a-number")
-    assert resolve_judge_top_k() == JUDGE_TOP_K_DEFAULT
-    monkeypatch.setenv("INSIGHT_JUDGE_TOP_K", "0")
-    assert resolve_judge_top_k() == 0
-    monkeypatch.setenv("INSIGHT_JUDGE_TOP_K", "1")
-    assert resolve_judge_top_k() == JUDGE_TOP_K_MIN
-    monkeypatch.setenv("INSIGHT_JUDGE_TOP_K", "999")
-    assert resolve_judge_top_k() == JUDGE_TOP_K_MAX
-
-
 def _alignment_gate_pool(count: int) -> list[str]:
     """构造一批两两都通过粗筛闸门、但互不为子串的角色名（共享两字前缀，核心字重合度 0.5）。"""
     suffixes = ("甲乙丙丁", "甲乙戊己", "甲乙庚辛", "甲乙壬癸", "甲乙子丑", "甲乙寅卯",
@@ -6251,56 +6234,17 @@ def _alignment_gate_pool(count: int) -> list[str]:
     return [f"{suffixes[index]}" for index in range(count)]
 
 
-def test_alignment_candidate_pairs_are_narrowed_to_top_k() -> None:
-    names = _alignment_gate_pool(12)
-    raw_stats = {
-        "characters": {
-            name: {"count": 1, "pages": [1], "valid_chapters": [""]} for name in names
-        }
-    }
-
-    narrowed = build_alignment_candidate_pairs(raw_stats, {}, top_k=2)
-    unlimited = build_alignment_candidate_pairs(raw_stats, {}, top_k=0)
-
-    assert len(unlimited) == len(names) * (len(names) - 1) // 2
-    # 每个词条最多「选出」top_k 个伙伴，因此无序对总数必不超过 词条数 × top_k。
-    assert len(narrowed) <= len(names) * 2
-    assert len(narrowed) > 0
-    # 每个无序对只出现一次
-    assert len({frozenset((left, right)) for _c, left, right in narrowed}) == len(narrowed)
-
-
-def test_alignment_candidate_pairs_keep_containment_aliases_beyond_top_k() -> None:
-    names = _alignment_gate_pool(12)
-    # 「甲乙丙」是一批名字的子串：属确定性别名信号，收窄时必须无条件保留。
-    names.extend(["甲乙丙", "甲乙丙丁"])  
-    raw_stats = {
-        "characters": {
-            name: {"count": 1, "pages": [1], "valid_chapters": [""]} for name in names
-        }
-    }
-
-    narrowed = build_alignment_candidate_pairs(raw_stats, {}, top_k=1)
-    kept = {(left, right) for _c, left, right in narrowed}
-    assert ("甲乙丙", "甲乙丙丁") in kept or ("甲乙丙丁", "甲乙丙") in kept
-    assert any(pair == ("甲乙丙", "甲乙庚辛") or pair == ("甲乙庚辛", "甲乙丙") for pair in kept)
-
-
-def test_alignment_candidate_pairs_skip_hard_rejected_pairs() -> None:
-    raw_stats = {
-        "characters": {
-            "高木": {"count": 5, "pages": [1], "valid_chapters": [""]},
-            "高木母亲": {"count": 5, "pages": [1], "valid_chapters": [""]},
-        }
-    }
-    pairs = build_alignment_candidate_pairs(raw_stats, {}, top_k=16)
-    assert all(frozenset(("高木", "高木母亲")) != frozenset((left, right)) for _c, left, right in pairs)
+def _alignment_request_payload(prompt: str) -> dict:
+    begin = prompt.index("## 输入")
+    opening = prompt.index("{", begin)
+    closing = prompt.index("\n\n## 裁决规则", opening)
+    return json.loads(prompt[opening:closing])
 
 
 def test_align_entities_only_consults_the_llm_for_narrowed_candidates(
     insight_platform, monkeypatch,
 ) -> None:
-    monkeypatch.setenv("INSIGHT_JUDGE_TOP_K", "4")
+    monkeypatch.setenv("INSIGHT_ALIGN_TOP_K", "4")
     names = _alignment_gate_pool(12)
     pages_analysis = [
         {
@@ -6310,53 +6254,47 @@ def test_align_entities_only_consults_the_llm_for_narrowed_candidates(
         }
     ]
 
-    class RecordingJudge:
-        def __init__(self) -> None:
-            self.batched: list[tuple[str, str, str]] = []
-            self.synced: list[tuple[str, str, str]] = []
-            self.cache_hits = 0
-            self.llm_calls = 0
-            self.failures = 0
-            self.unanswered = 0
-            self.batch_size = 30
+    sent_pairs: list[tuple[str, str]] = []
+    request_count: list[int] = []
 
-        async def judge_batch(self, pairs, progress=None):  # noqa: ANN001
-            self.batched.extend(tuple(pair) for pair in pairs)
-            return {self.make_key(cat, n1, n2): False for cat, n1, n2 in pairs}
+    class GraphJudgeClient:
+        async def generate_json(self, *, prompt: str, system: str):  # noqa: ANN001
+            payload = _alignment_request_payload(prompt)
+            request_count.append(len(payload["components"]))
+            response: dict = {"components": []}
+            for component in payload["components"]:
+                for pair in component["candidate_pairs"]:
+                    sent_pairs.append((pair["a"], pair["b"]))
+                response["components"].append({
+                    "component_id": component["component_id"],
+                    "groups": [],
+                    "different_pair_ids": [
+                        pair["pair_id"] for pair in component["candidate_pairs"]
+                    ],
+                    "uncertain_pair_ids": [],
+                    "independent_entity_ids": list(component["entity_ids"]),
+                    "evidence": [],
+                })
+            return response
 
-        def judge_pair_sync(self, category: str, name1: str, name2: str) -> bool:
-            self.synced.append((category, name1, name2))
-            return False
+    class NarrowedJudge:
+        client = GraphJudgeClient()
 
-        @staticmethod
-        def make_key(category: str, name1: str, name2: str) -> str:
-            first, second = sorted([name1, name2])
-            return f"{category}::{first}::{second}"
-
-    judge = RecordingJudge()
     repository = InsightDerivedRepository(insight_platform["engine"])
     repository.align_entities(
         book_id=insight_platform["book"]["id"],
         chapter_id=insight_platform["chapter"]["id"],
         pages_analysis=pages_analysis,
-        llm_judge=judge,
+        llm_judge=NarrowedJudge(),
     )
 
-    raw_stats = {
-        "characters": {
-            name: {"count": 1, "pages": [1], "valid_chapters": [""]} for name in names
-        }
-    }
-    allowed = {
-        frozenset((left, right))
-        for _cat, left, right in build_alignment_candidate_pairs(raw_stats, {}, top_k=4)
-    }
     total_pairs = len(names) * (len(names) - 1) // 2
-    assert len(allowed) < total_pairs
-    assert judge.batched, "预取应当把入选候选对批量送裁决"
-    assert len(judge.batched) == len(allowed)
-    for _cat, left, right in judge.batched + judge.synced:
-        assert frozenset((left, right)) in allowed, (left, right)
+    assert request_count, "候选图应当合并成批量裁决请求"
+    assert sent_pairs, "批量裁决必须覆盖候选边"
+    assert len(sent_pairs) < total_pairs, "只应送裁决收窄后的候选对"
+    assert len(request_count) < len(sent_pairs), "候选对应批量送裁决，而不是逐对请求"
+    for left, right in sent_pairs:
+        assert is_judge_candidate("characters", left, right), (left, right)
 
 
 class _SnapshotPages:

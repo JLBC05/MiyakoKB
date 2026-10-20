@@ -12,7 +12,6 @@ import json
 import logging
 import math
 from numbers import Real
-import os
 from pathlib import Path
 import re
 from typing import Any, Callable, Protocol
@@ -40,6 +39,18 @@ from src.backend_v2.insight.repository import (
 from src.backend_v2.insight.provider_runtime import (
     frozen_chat_config,
     frozen_embedding_config,
+)
+from src.backend_v2.insight.entity_alignment import (
+    AlignmentConfig,
+    CandidateEdge,
+    EntityNode,
+    GraphBuildResult,
+    apply_decisions,
+    build_alignment_graph,
+    plan_requests,
+    resolve_alignment_config,
+    run_alignment_sync,
+    summarize_graph,
 )
 from src.backend_v2.timestamps import utcnow
 from src.backend_v2.jobs.repository import (
@@ -606,114 +617,12 @@ def can_merge_concept_names(name1: str, name2: str, type1: str = '', type2: str 
     return False
 
 
-def _resolve_llm_judge_cache_dir() -> str:
-    """解析 LLM 裁决缓存目录：优先父级工作区（历史缓存所在地），否则使用仓库根目录。"""
-    # derived.py 位于 src/backend_v2/insight/derived.py -> parents[3] 即为 Saber-Translator-main 根目录
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    parent_workspace = os.path.dirname(repo_root)
-    legacy_parent = os.path.join(parent_workspace, "llm_entity_judge_cache.json")
-    legacy_repo = os.path.join(repo_root, "llm_entity_judge_cache.json")
-    if os.path.exists(legacy_parent) or os.path.isdir(parent_workspace):
-        return parent_workspace
-    if os.path.exists(legacy_repo):
-        return repo_root
-    return parent_workspace
-
-
-LLM_JUDGE_CACHE_DIR = _resolve_llm_judge_cache_dir()
-
-
-def resolve_llm_judge_cache_file(book_id: str | None = None) -> str:
-    """按书隔离裁决缓存文件：llm_entity_judge_cache.<book_id>.json。
-
-    不同作品的语境不同（同名通用词能否合并的标准也不同），因此严禁跨书共享缓存。
-    未提供 book_id 时退回旧的无命名空间文件（仅供离线回放/兼容读取）。
-    """
-    if book_id:
-        safe = re.sub(r"[^0-9A-Za-z_.-]", "_", str(book_id))
-        return os.path.join(LLM_JUDGE_CACHE_DIR, f"llm_entity_judge_cache.{safe}.json")
-    return os.path.join(LLM_JUDGE_CACHE_DIR, "llm_entity_judge_cache.json")
-
-
-# 兼容旧引用（无 book_id 的全局缓存路径）
-LLM_JUDGE_CACHE_FILE = resolve_llm_judge_cache_file(None)
-
-# 裁决批大小与并发度（方案5：扩大 batch 并轻度并发，避免长列表尾部注意力衰减）
-JUDGE_BATCH_SIZE = max(1, min(35, int(os.environ.get("INSIGHT_JUDGE_BATCH_SIZE", "30") or 30)))
-JUDGE_PARALLEL = max(1, min(8, int(os.environ.get("INSIGHT_JUDGE_PARALLEL", "3") or 3)))
-JUDGE_MAX_ATTEMPTS = max(1, int(os.environ.get("INSIGHT_JUDGE_MAX_ATTEMPTS", "3") or 3))
-
-
-def _judge_backoff_seconds(attempt: int) -> float:
-    """指数退避：1s / 2s / 4s（上限 8s）。"""
-    return min(8.0, 2.0 ** (attempt - 1))
-
-
-def _parse_judge_response(resp: Any, chunk: list) -> dict:
-    """按 id 解析裁决响应并校验索引对齐。
-
-    只接受 1..len(chunk) 范围内的整数 id；越界、非整数、重复 id 一律丢弃，
-    避免模型漏项/错位时把判定错配到别的候选对上。
-    """
-    answered: dict = {}
-    if not isinstance(resp, dict):
-        return answered
-    raw_results = resp.get("results", [])
-    if not isinstance(raw_results, list):
-        return answered
-    for r in raw_results:
-        if not isinstance(r, dict):
-            continue
-        try:
-            rid = int(r.get("id"))
-        except (TypeError, ValueError):
-            continue
-        if not (1 <= rid <= len(chunk)) or rid in answered:
-            continue
-        answered[rid] = r
-    return answered
-
-
-def _build_judge_prompt(chunk_pairs: list) -> str:
-    return f"""你是一个漫画知识库实体对齐裁决专家。
-请逐一判断以下同一类别下的两个实体名称在漫画设定中是否指代同一个核心实体（即名称2是否为名称1的别名、简称、同义修饰变体、繁简异构，或不同汉化译名音译/意译）。
-
-判定规则：
-1. 同一实体的不同译名/简称/OCR变体 → 必须合并 (true)。
-   - 例如角色不同汉化译名（同一外文名的不同音译/意译写法，如 'A·B' 与 'A·C'，或同一角色名的不同简称）；
-   - 例如物品不同译名或规格（电脑 与 笔记本电脑，某品牌乐器 与 该乐器通称）；
-   - 例如繁简异构（简体字形 与 繁體字形，如「咒术」与「咒術」）。
-2. 同类不同物（不同分支招式、不同具体地点、不同数量数值、不同日期） → 绝对不能合并 (false)。
-   - 同一体系下的不同分支（'<体系>·<分支A>' 与 '<体系>·<分支B>'）绝不是同一实体；
-   - 机构内不同子地点（'<机构>·<地点A>' 与 '<机构>·<地点B>'）绝不是同一实体；
-   - 数量或数值不同（100 与 200，或正负相反）绝不是同一实体；同一数值的不同表述（100 与 数量100）是同一实体；
-   - 日期时间不同（2008年 与 2009年）绝不是同一实体。
-3. 从属关系/亲属关系/角色关系（XX的母亲、XX的室友、XX的朋友、XX的同学） → 绝对不能合并 (false)。
-   - 例如：'X' 与 'X母亲'，'X' 与 'X的室友'，共享同一姓氏但名字不同的两个角色，绝不是同一实体。
-4. 物品核心概念不同（如 书包 与 某专业入门书籍）绝不是同一实体。
-
-待判定对列表：
-{json.dumps(chunk_pairs, ensure_ascii=False, indent=2)}
-
-请严格返回如下 JSON:
-{{
-  "results": [
-    {{"id": 1, "same": true, "reason": "..."}}
-  ]
-}}
-要求：必须为列表中的**每一个 id 恰好返回一条结果**，id 必须原样回填（禁止遗漏、重复或重新编号）。
-如果某个实体对难以确切断定，"same" 可填 "ambiguous"（我们将对其进行单独二次仲裁）。"""
-
-
 class LLMBatchJudge:
-    """LLM 实体对齐语义裁决器：三层架构（粗筛规则 + 批量LLM + 单项仲裁）与本地缓存持久化。
+    """实体对齐语义裁决器的调用入口：按 Insight chat 配置构造 ChatClient。
 
-    失败语义（方案4）：
-    - 异常**绝不写入缓存**（避免把网关故障固化成 same=false 的脏判定）；
-    - 不引入 inconclusive 第三态，保持布尔二态：失败只计数，下次重跑自然重判；
-    - 失败/漏答的候选对本次调用返回 False，但不落盘；
-    - **不内置任何网关地址与默认密钥**：未配置时直接判 False（`skipped_unconfigured` 计数），
-      既不发起请求也不写缓存，语义等同「网关不可达」。
+    逐对/逐批裁决已由 `entity_alignment` 的「候选图 + 批量三态裁决」取代；
+    这里只保留客户端构造与候选键工具，避免长期并存两套实现。
+    **不内置任何网关地址与默认密钥**：未配置时 `client` 为 None，本轮不做语义合并。
     """
 
     def __init__(
@@ -723,9 +632,6 @@ class LLMBatchJudge:
         model: str | None = None,
         provider: str = "gemini",
         book_id: str | None = None,
-        cache_file: str | None = None,
-        batch_size: int | None = None,
-        parallel: int | None = None,
     ):
         resolved_base_url = (base_url or "").strip()
         resolved_api_key = (api_key or "").strip()
@@ -742,411 +648,17 @@ class LLMBatchJudge:
             )
             self.client: Any = ChatClient(cfg)
         else:
-            # 未配置：语义与「网关不可达」一致——本轮全部判 False、不写缓存，下次重跑自然重判。
+            # 未配置：本轮不做语义合并（未进图的实体仍各自保留），不发起任何请求。
             self.client = None
             LOGGER.warning(
                 "实体对齐语义裁决器未配置（缺少 base_url/api_key/model），本轮跳过 LLM 语义裁决"
             )
         self.book_id = book_id
-        self.cache_file = cache_file or resolve_llm_judge_cache_file(book_id)
-        self.batch_size = max(1, min(35, int(batch_size or JUDGE_BATCH_SIZE)))
-        self.parallel = max(1, min(8, int(parallel or JUDGE_PARALLEL)))
-        self.cache: dict[str, dict[str, Any]] = {}
-        self.cache_hits: int = 0
-        self.llm_calls: int = 0
-        self.failures: int = 0
-        self.unanswered: int = 0
-        self.dropped_entries: int = 0
-        self.skipped_unconfigured: int = 0
-        self.load_cache()
 
     @staticmethod
     def make_key(category: str, name1: str, name2: str) -> str:
         s1, s2 = sorted([name1, name2])
         return f"{category}::{s1}::{s2}"
-
-    def stats(self) -> dict:
-        """裁决统计（用于日志与离线回放汇报）。"""
-        return {
-            "book_id": self.book_id,
-            "cache_file": self.cache_file,
-            "cache_entries": len(self.cache),
-            "cache_hits": self.cache_hits,
-            "llm_calls": self.llm_calls,
-            "failures": self.failures,
-            "unanswered": self.unanswered,
-            "dropped_entries": self.dropped_entries,
-            "batch_size": self.batch_size,
-            "parallel": self.parallel,
-            "enabled": self.enabled,
-            "skipped_unconfigured": self.skipped_unconfigured,
-        }
-
-    def load_cache(self) -> None:
-        if os.path.exists(self.cache_file):
-            try:
-                with open(self.cache_file, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    self.cache = loaded
-            except Exception:
-                self.cache = {}
-
-    def save_cache(self) -> None:
-        try:
-            tmp_path = self.cache_file + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(self.cache, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, self.cache_file)
-        except Exception:
-            pass
-
-    async def judge_batch(
-        self,
-        candidate_pairs: list[tuple[str, str, str]],
-        progress: Callable[[int, int], None] | None = None,
-    ) -> dict[str, bool]:
-        """批量裁决入口：缓存优先，未命中者按 batch_size 切块并轻度并发送 LLM。
-
-        progress(done_chunks, total_chunks) 在每个批次结束后回调，用于把长耗时阶段
-        的进度暴露给任务日志（旧实现只在最后打印一行，用户侧看不到任何进展）。
-        """
-        results: dict[str, bool] = {}
-        to_query: list[dict[str, Any]] = []
-        seen_keys: set[str] = set()
-
-        for cat, n1, n2 in candidate_pairs:
-            key = self.make_key(cat, n1, n2)
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-            if key in self.cache:
-                self.cache_hits += 1
-                results[key] = bool(self.cache[key].get("same", False))
-            else:
-                to_query.append({
-                    "key": key,
-                    "category": cat,
-                    "name1": n1,
-                    "name2": n2,
-                })
-
-        if not to_query:
-            return results
-
-        if not self.enabled:
-            # 未配置裁决器：不发任何网络请求，全部判 False 且不写缓存。
-            self.skipped_unconfigured += len(to_query)
-            for item in to_query:
-                results[item["key"]] = False
-            return results
-
-        chunks = [to_query[i:i + self.batch_size] for i in range(0, len(to_query), self.batch_size)]
-        semaphore = asyncio.Semaphore(self.parallel)
-        total_chunks = len(chunks)
-        done_chunks = 0
-
-        async def _run_chunk(chunk: list[dict[str, Any]]) -> dict[str, bool]:
-            nonlocal done_chunks
-            async with semaphore:
-                outcome = await self._judge_chunk(chunk)
-            done_chunks += 1
-            if progress is not None:
-                try:
-                    progress(done_chunks, total_chunks)
-                except Exception:  # noqa: BLE001
-                    pass
-            return outcome
-
-        outcomes = await asyncio.gather(
-            *[_run_chunk(chunk) for chunk in chunks], return_exceptions=True
-        )
-        for outcome in outcomes:
-            if isinstance(outcome, Exception):
-                self.failures += 1
-                print(f"[LLMBatchJudge Error] batch failed: {outcome}")
-                continue
-            results.update(outcome)
-
-        self.save_cache()
-        return results
-
-    async def _judge_chunk(self, chunk: list[dict[str, Any]]) -> dict[str, bool]:
-        """判定单个批次：带指数退避重试；任何异常都不写缓存。"""
-        chunk_pairs = [{
-            "id": idx,
-            "category": item["category"],
-            "name1": item["name1"],
-            "name2": item["name2"],
-        } for idx, item in enumerate(chunk, 1)]
-        prompt = _build_judge_prompt(chunk_pairs)
-
-        answered: dict = {}
-        last_error: Exception | None = None
-        for attempt in range(1, JUDGE_MAX_ATTEMPTS + 1):
-            try:
-                self.llm_calls += 1
-                resp = await self.client.generate_json(prompt=prompt, system="输出合法的JSON格式。")
-                parsed = _parse_judge_response(resp, chunk)
-                if parsed:
-                    answered = parsed
-                    last_error = None
-                    break
-                last_error = ValueError("裁决响应未包含任何有效 id（索引对齐校验失败）")
-            except Exception as e:  # noqa: BLE001
-                last_error = e
-            if attempt < JUDGE_MAX_ATTEMPTS:
-                delay = _judge_backoff_seconds(attempt)
-                print(f"[LLMBatchJudge] 第 {attempt}/{JUDGE_MAX_ATTEMPTS} 次裁决失败（{last_error}），{delay:.0f}s 后重试")
-                await asyncio.sleep(delay)
-
-        results: dict[str, bool] = {}
-        if last_error is not None:
-            # 失败：不写缓存（避免脏判定落盘），本轮统一返回 False 交由下次重跑重判
-            self.failures += 1
-            print(f"[LLMBatchJudge Error] {last_error}")
-            for item in chunk:
-                results[item["key"]] = False
-            return results
-
-        if len(answered) < len(chunk):
-            self.dropped_entries += len(chunk) - len(answered)
-
-        for rid, payload in answered.items():
-            item = chunk[rid - 1]
-            same_val = payload.get("same")
-            if str(same_val).lower() == "ambiguous":
-                arb = await self._arbitrate_single(item["category"], item["name1"], item["name2"])
-                if arb is None:
-                    # 仲裁失败：不写缓存
-                    results[item["key"]] = False
-                    continue
-                arb_same, arb_reason = arb
-                self.cache[item["key"]] = {"same": arb_same, "reason": arb_reason}
-                results[item["key"]] = arb_same
-            else:
-                is_same = bool(same_val is True or str(same_val).lower() == "true")
-                self.cache[item["key"]] = {"same": is_same, "reason": payload.get("reason", "")}
-                results[item["key"]] = is_same
-
-        # 模型漏答的候选对：不写缓存，下次重跑重判
-        for item in chunk:
-            if item["key"] not in results:
-                self.unanswered += 1
-                results[item["key"]] = False
-        return results
-
-    async def _arbitrate_single(self, category: str, name1: str, name2: str):
-        """单项二次仲裁。返回 None 表示裁决失败（调用方不得写入缓存）。"""
-        prompt = f"""请深入裁决以下漫画实体对在剧情中是否指代同一个核心实体。
-类别: {category}
-名称1: {name1}
-名称2: {name2}
-
-请权衡漫画连载中的别名、设定和剧情一致性。
-最终只能二选一：true 代表应合并，false 代表应作为两个独立实体。
-返回 JSON: {{"same": true/false, "reason": "..."}}"""
-        last_error: Exception | None = None
-        for attempt in range(1, JUDGE_MAX_ATTEMPTS + 1):
-            try:
-                self.llm_calls += 1
-                resp = await self.client.generate_json(prompt=prompt, system="输出合法的JSON格式。")
-                same = bool(resp.get("same") is True or str(resp.get("same")).lower() == "true")
-                return same, f"[Arbitrated] {resp.get('reason', '')}"
-            except Exception as e:  # noqa: BLE001
-                last_error = e
-            if attempt < JUDGE_MAX_ATTEMPTS:
-                await asyncio.sleep(_judge_backoff_seconds(attempt))
-        self.failures += 1
-        print(f"[LLMBatchJudge Error] 仲裁失败（不写缓存）: {last_error}")
-        return None
-
-    def judge_pair_sync(self, category: str, name1: str, name2: str) -> bool:
-        """同步查询或调用 LLM 进行单对判定。"""
-        key = self.make_key(category, name1, name2)
-        if key in self.cache:
-            self.cache_hits += 1
-            return bool(self.cache[key].get("same", False))
-
-        async def _run():
-            await self.judge_batch([(category, name1, name2)])
-            return bool(self.cache.get(key, {}).get("same", False))
-
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    return pool.submit(lambda: asyncio.run(_run())).result()
-            else:
-                return loop.run_until_complete(_run())
-        except Exception:
-            return asyncio.run(_run())
-
-
-_GLOBAL_LLM_JUDGE: LLMBatchJudge | None = None
-
-
-def get_default_llm_judge() -> LLMBatchJudge:
-    global _GLOBAL_LLM_JUDGE
-    if _GLOBAL_LLM_JUDGE is None:
-        _GLOBAL_LLM_JUDGE = LLMBatchJudge()
-    return _GLOBAL_LLM_JUDGE
-
-
-def _alignment_ability_core(name: str) -> str:
-    """取能力名的核心名（末级分支 + 去括号），用于「核心名不同禁止进入 LLM」的一致性判断。"""
-    core = name.split("·")[-1] if "·" in name else name
-    return re.sub(r'[\(（].*?[\)）]', '', core).strip()
-
-
-# 语义裁决候选面收窄：每个词条最多保留多少个「非确定性豁免」的候选对。
-# 背景：候选面是 O(词条数 × 同类别规模)，大体量作品会膨胀到数万对（全是单次 LLM 成本）。
-# 387 页/819 词条/12433 对实测：强别名信号全量保留 + 其余取重合度前 16，
-# 仍保留 98.6% 的真实语义归并（见压测报告发现 #37）。
-JUDGE_TOP_K_DEFAULT = 16
-JUDGE_TOP_K_MIN = 4
-JUDGE_TOP_K_MAX = 64
-
-
-def resolve_judge_top_k() -> int:
-    """读取候选面收窄上限；<=0 表示关闭收窄（保留全部过闸候选对）。"""
-    raw = os.environ.get("INSIGHT_JUDGE_TOP_K", "").strip()
-    if not raw:
-        return JUDGE_TOP_K_DEFAULT
-    try:
-        value = int(raw)
-    except ValueError:
-        return JUDGE_TOP_K_DEFAULT
-    if value <= 0:
-        return 0
-    return max(JUDGE_TOP_K_MIN, min(JUDGE_TOP_K_MAX, value))
-
-
-def _is_deterministic_alias_pair(name1: str, name2: str) -> bool:
-    """包含 / 字序子序列 / 同音异体：本身就是强别名信号，收窄时无条件保留。"""
-    c1 = _strip_generic_tokens(name1)
-    c2 = _strip_generic_tokens(name2)
-    if not c1 or not c2:
-        return False
-    if c1 in c2 or c2 in c1:
-        return True
-    return _is_subsequence(c1, c2) or _is_subsequence(c2, c1) or _is_homophone_variant(c1, c2)
-
-
-def build_alignment_candidate_pairs(
-    raw_stats: dict,
-    canonical_by_id: dict,
-    *,
-    top_k: int | None = None,
-) -> list[tuple[str, str, str]]:
-    """枚举需要送 LLM 语义裁决的候选对（收窄后），预取与归并主循环共用同一口径。
-
-    - 候选面与旧实现一致：每个词条 ×（同类别已有实体的 canonical_name/别名 ∪ 同类别全部词条）；
-    - 过滤与主循环一致：is_judge_candidate 内的硬性拒绝 + 核心字重合度 + 短名保护，
-      abilities 额外要求核心名一致；
-    - 收窄：强别名信号（包含/子序列/同音）全量保留，其余按核心字重合度降序取前 top_k。
-    """
-    limit = resolve_judge_top_k() if top_k is None else max(0, int(top_k))
-    pairs: list[tuple[str, str, str]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for cat, raw_dict in raw_stats.items():
-        names = list(dict.fromkeys(
-            str(item).strip() for item in raw_dict.keys() if str(item).strip()
-        ))
-        if not names:
-            continue
-        name_set = set(names)
-        existing: list[str] = []
-        for ent in canonical_by_id.values():
-            if ent.get("category") != cat:
-                continue
-            for candidate in [ent.get("canonical_name")] + list(ent.get("aliases", [])):
-                text = str(candidate or "").strip()
-                if text and text not in name_set:
-                    existing.append(text)
-        pool = list(dict.fromkeys(existing + names))
-        for name in names:
-            keep: list[str] = []
-            scored: list[tuple[float, str]] = []
-            for other in pool:
-                if other == name:
-                    continue
-                if cat == "abilities":
-                    core1 = _alignment_ability_core(name)
-                    core2 = _alignment_ability_core(other)
-                    if core1 and core2 and core1 != core2:
-                        continue
-                if not is_judge_candidate(cat, name, other):
-                    continue
-                if limit <= 0 or _is_deterministic_alias_pair(name, other):
-                    keep.append(other)
-                else:
-                    scored.append((
-                        calculate_char_overlap_ratio(
-                            _strip_generic_tokens(name), _strip_generic_tokens(other)
-                        ),
-                        other,
-                    ))
-            if scored:
-                scored.sort(key=lambda it: (-it[0], it[1]))
-                keep.extend(other for _, other in scored[:limit])
-            for other in keep:
-                low, high = (name, other) if name <= other else (other, name)
-                key = (cat, low, high)
-                if key in seen:
-                    continue
-                seen.add(key)
-                pairs.append(key)
-    return pairs
-
-
-def prefetch_alignment_judgements(
-    llm_judge: "LLMBatchJudge",
-    raw_stats: dict,
-    canonical_by_id: dict,
-    max_pairs: int | None = None,
-    progress: Callable[[int, int], None] | None = None,
-    candidate_pairs: Sequence[tuple[str, str, str]] | None = None,
-) -> dict:
-    """在归并主循环之前，把通过粗筛闸门的候选对批量送 LLM 裁决并落缓存（原「方案5」的完整版）。
-
-    - 候选面覆盖主循环可能询问的全部同类别组合：raw_stats 的每个词条 ×（已有实体的
-      canonical_name/别名 ∪ 本类别全部词条）。首次全量构建时 canonical_by_id 为空，
-      候选面完全来自词条两两组合——这正是旧实现被 `if ... and canonical_by_id`
-      跳过、导致 387 页全书构建退化成逐对单请求（1165 次）的场景。
-    - 过滤与主循环一致：硬性拒绝规则 + 短名保护 + 核心字重合度（都在
-      is_judge_candidate 内），abilities 额外要求核心名一致；命中确定性归并规则的
-      对由主循环自己处理，不进入裁决。
-    - 只写缓存、不改变归并语义：主循环随后逐对命中缓存，不再发起单请求。
-    - 按 batch_size 切块 + 轻度并发；进度通过 progress(done_chunks, total_chunks) 回调对外可见。
-    - candidate_pairs 由调用方一次性构建（与主循环共用同一口径，避免两处各枚举一遍）。
-    """
-    if candidate_pairs is not None:
-        pairs: list = [(cat, n1, n2) for cat, n1, n2 in candidate_pairs]
-    else:
-        pairs = list(build_alignment_candidate_pairs(raw_stats, canonical_by_id))
-
-    if max_pairs is not None and max_pairs > 0:
-        pairs = pairs[:max_pairs]
-    if not pairs:
-        return {"candidates": 0, "judged": 0}
-
-    results: dict[str, bool] = {}
-    try:
-        results = asyncio.run(llm_judge.judge_batch(pairs, progress=progress))
-    except RuntimeError:
-        # 已处于事件循环中（同步归并路径通常不会发生）：回退逐对判定，判词以真实结果为准
-        total = len(pairs)
-        for done, (cat, n1, n2) in enumerate(pairs, 1):
-            verdict = llm_judge.judge_pair_sync(cat, n1, n2)
-            results[LLMBatchJudge.make_key(cat, n1, n2)] = bool(verdict)
-            if progress is not None and (done % llm_judge.batch_size == 0 or done == total):
-                try:
-                    progress(done, total)
-                except Exception:  # noqa: BLE001
-                    pass
-    return {"candidates": len(pairs), "judged": len(results)}
 
 
 def _alignment_progress(message: str, done: int | None, total: int | None) -> None:
@@ -1154,8 +666,7 @@ def _alignment_progress(message: str, done: int | None, total: int | None) -> No
     if done is None or total is None:
         log_result(message, ("正在准备候选对…",))
     else:
-        log_result(message, (f"已裁决批次 {done}/{total}",))
-
+        log_result(message, (f"已完成裁决请求 {done}/{total}",))
 
 def check_model_entity_similarity(
     name1: str,
@@ -4042,55 +3553,148 @@ class InsightDerivedRepository:
                     "timestamp": utcnow().isoformat(),
                 })
 
-            # 3.4 候选面收窄：一次性算出「将送语义裁决的对」集合，预取与主循环共用同一口径。
-            # 旧实现让主循环扫全部 entity × 全部词条，大体量作品会把逐对询问膨胀到数万次。
-            judge_candidates: set[str] | None = None
-            candidate_pairs: list[tuple[str, str, str]] | None = None
-            try:
-                candidate_pairs = build_alignment_candidate_pairs(raw_stats, canonical_by_id)
-                judge_candidates = {
-                    LLMBatchJudge.make_key(cat, n1, n2) for cat, n1, n2 in candidate_pairs
-                }
-                print(f"[align_entities] 收窄后语义裁决候选 {len(candidate_pairs)} 对")
-            except Exception as _narrow_err:  # noqa: BLE001
-                judge_candidates = None
-                candidate_pairs = None
-                print(f"[align_entities] 候选面收窄失败，保留全部过闸候选: {_narrow_err}")
+            # 3.4 候选图组织 + 批量三态裁决（替代「逐对询问」）。
+            # 旧实现：先按字符重合度收窄，再把候选对按 30 对/批送模型逐对判是/否；大体量作品
+            # 仍会产生数万次仲裁请求（久留美 1507 页实测约 2.1 万候选对，估算 30+ 小时）。
+            # 新实现：候选边组织成连通分量 → 按预算打包成少量请求 → 分量内一次性输出
+            # SAME / DIFFERENT / UNCERTAIN。只有 SAME 触发合并；DIFFERENT 阻止传递合并；
+            # UNCERTAIN、未进入图（低频概念、无修饰通用词）的实体一律保留为独立实体。
+            alignment_config: AlignmentConfig = resolve_alignment_config()
+            alignment_clusters = None
+            alignment_candidates: set[str] | None = None
+            alignment_summary: dict[str, Any] = {}
+            alignment_deferred: list[dict[str, Any]] = []
+            alignment_blocked: list[dict[str, Any]] = []
+            alignment_stats: dict[str, Any] = {}
+
+            combined_nodes: dict[str, EntityNode] = {}
+            combined_edges: dict[str, CandidateEdge] = {}
+            combined_components: list = []
+            combined_orphans: list[str] = []
+            combined_deferred: list[dict[str, Any]] = []
+
+            def _page_numbers(info: Mapping[str, Any]) -> tuple[int, ...]:
+                values: list[int] = []
+                for raw in info.get("pages") or []:
+                    try:
+                        values.append(int(raw))
+                    except (TypeError, ValueError):
+                        continue
+                return tuple(sorted(set(values)))
+
+            for cat, raw_dict in raw_stats.items():
+                category_nodes: list[EntityNode] = []
+                for name, info in raw_dict.items():
+                    category_nodes.append(EntityNode(
+                        node_id=f"{cat}:{name}",
+                        category=cat,
+                        name=name,
+                        distinct_pages=int(info.get("count") or 0),
+                        pages=_page_numbers(info),
+                    ))
+                for ent in existing_canonical_entities:
+                    if ent.get("category") != cat:
+                        continue
+                    canon_name = str(ent.get("canonical_name") or "").strip()
+                    entity_id = str(ent.get("entity_id") or "").strip()
+                    if not canon_name or not entity_id:
+                        continue
+                    category_nodes.append(EntityNode(
+                        node_id=f"{cat}:{canon_name}",
+                        category=cat,
+                        name=canon_name,
+                        distinct_pages=len(ent.get("pages") or []),
+                        pages=tuple(sorted({
+                            int(number) for number in (ent.get("pages") or [])
+                            if isinstance(number, int) or str(number).strip().isdigit()
+                        })),
+                        existing_entity_id=entity_id,
+                    ))
+                deduped: dict[str, EntityNode] = {}
+                for node in category_nodes:
+                    deduped.setdefault(node.node_id, node)
+                if not deduped:
+                    continue
+                try:
+                    category_graph = build_alignment_graph(
+                        category=cat,
+                        nodes=list(deduped.values()),
+                        candidate_filter=is_judge_candidate,
+                        config=alignment_config,
+                    )
+                except Exception as _graph_err:  # noqa: BLE001
+                    print(f"[align_entities] 候选图构建失败（{cat}）: {_graph_err}")
+                    continue
+                combined_nodes.update(category_graph.nodes)
+                combined_edges.update(category_graph.edges)
+                combined_components.extend(category_graph.components)
+                combined_orphans.extend(category_graph.orphans)
+                combined_deferred.extend(category_graph.deferred)
+
+            alignment_graph = GraphBuildResult(
+                nodes=combined_nodes,
+                edges=combined_edges,
+                components=combined_components,
+                orphans=combined_orphans,
+                deferred=combined_deferred,
+            )
+            alignment_candidates = {
+                LLMBatchJudge.make_key(edge.category, edge.name_a, edge.name_b)
+                for edge in combined_edges.values()
+            }
+            alignment_summary = summarize_graph(alignment_graph)
+            print(f"[align_entities] 候选图：{json.dumps(alignment_summary, ensure_ascii=False)}")
+
+            if llm_judge is not None and combined_edges:
+                shards = plan_requests(graph=alignment_graph, config=alignment_config)
+                print(
+                    f"[align_entities] 批量裁决请求 {len(shards)} 个，"
+                    f"覆盖候选边 {len(combined_edges)} 条"
+                )
+                _judge_progress = None
+                if progress is not None:
+                    progress("实体对齐：批量语义裁决", 0, len(shards))
+
+                    def _judge_progress(done: int, total: int) -> None:  # noqa: E306
+                        progress("实体对齐：批量语义裁决", done, total)
+
+                decisions: dict[str, str] = {}
+                judge_stats = None
+                try:
+                    decisions, _component_decisions, judge_stats = run_alignment_sync(
+                        client=llm_judge.client,
+                        graph=alignment_graph,
+                        shards=shards,
+                        config=alignment_config,
+                        progress=_judge_progress,
+                    )
+                except Exception as _judge_err:  # noqa: BLE001 - 裁决失败不得中断对齐
+                    print(f"[align_entities] 批量裁决失败，本轮不做语义合并: {_judge_err}")
+                outcome = apply_decisions(graph=alignment_graph, decisions=decisions)
+                alignment_clusters = outcome.clusters
+                alignment_blocked = outcome.blocked
+                alignment_stats = dict(outcome.metrics)
+                if judge_stats is not None:
+                    alignment_stats["judge"] = judge_stats.as_dict()
+                print(f"[align_entities] 裁决结果：{json.dumps(alignment_stats, ensure_ascii=False)}")
+            elif llm_judge is None:
+                print("[align_entities] 语义裁决器未启用，本轮仅按规则归并")
+
+            alignment_deferred = list(combined_deferred)
 
             def judge_same(judge, cat: str, name: str, other: str) -> bool:
-                """语义裁决统一入口：不在入选集合里的对直接判否（不发起 LLM 调用）。"""
-                if judge_candidates is not None and \
-                        LLMBatchJudge.make_key(cat, name, other) not in judge_candidates:
+                """语义裁决统一入口：只把候选图上明确裁为 SAME 的对判为同义。
+
+                不再发起任何逐对 LLM 调用；未进入候选图、处于 UNCERTAIN、或本轮裁决
+                失败的对一律判否——宁可少合并，也不误并。
+                """
+                if alignment_clusters is None:
                     return False
-                return bool(judge.judge_pair_sync(cat, name, other))
-
-            # 3.5 批量预取：把主循环可能询问的同类别候选对一次性送裁决（默认 30/批 + 轻度并发）并写缓存；
-            # 主循环随后只命中缓存，不再逐对发起单请求（旧实现「每对一次 LLM 调用」是主要耗时来源）。
-            # 注意：这里曾经要求 canonical_by_id 非空，导致首次全量构建（无历史实体）完全跳过预取，
-            # 退化成 1165 次单对请求、占掉整轮 69% 的墙钟时间。
-            if llm_judge is not None:
-                try:
-                    _prefetch_progress = None
-                    if progress is not None:
-                        progress("实体对齐：归集语义裁决候选对", None, None)
-
-                        def _prefetch_progress(done: int, total: int) -> None:  # noqa: E731
-                            progress("实体对齐语义裁决", done, total)
-
-                    prefetch = prefetch_alignment_judgements(
-                        llm_judge,
-                        raw_stats,
-                        canonical_by_id,
-                        progress=_prefetch_progress,
-                        candidate_pairs=candidate_pairs,
-                    )
-                    print(
-                        f"[align_entities] 预取裁决候选 {prefetch['candidates']} 对："
-                        f"缓存命中 {llm_judge.cache_hits}，LLM 调用 {llm_judge.llm_calls}，"
-                        f"失败 {llm_judge.failures}，漏答 {llm_judge.unanswered}"
-                    )
-                except Exception as _prefetch_err:  # noqa: BLE001
-                    print(f"[align_entities] 预取裁决失败，回退逐对判定: {_prefetch_err}")
+                if alignment_candidates is not None and \
+                        LLMBatchJudge.make_key(cat, name, other) not in alignment_candidates:
+                    return False
+                return alignment_clusters.cluster_of(f"{cat}::{name}") == \
+                    alignment_clusters.cluster_of(f"{cat}::{other}")
 
             # 4. 执行增量对齐与自动归并
             # 说明：历史上这里内嵌了一份作品专属的“已知聚类簇”（宿傩之指 / 高木 /
@@ -4142,7 +3746,7 @@ class InsightDerivedRepository:
 
                                 # LLM 语义裁决（统一粗筛闸门：硬性拒绝 + 核心字重合度 + 短名保护）
                                 if is_judge_candidate(cat, name, c_name):
-                                    judge = llm_judge if llm_judge is not None else get_default_llm_judge()
+                                    judge = llm_judge
                                     if judge_same(judge, cat, name, c_name):
                                         target_id = existing_ent["entity_id"]
                                         merge_rule_hit = "llm_semantic_judge"
@@ -4150,7 +3754,7 @@ class InsightDerivedRepository:
                                         break
                                 for ex_alias in c_aliases:
                                     if is_judge_candidate(cat, name, ex_alias):
-                                        judge = llm_judge if llm_judge is not None else get_default_llm_judge()
+                                        judge = llm_judge
                                         if judge_same(judge, cat, name, ex_alias):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
@@ -4187,7 +3791,7 @@ class InsightDerivedRepository:
                                 else:
                                     # LLM 语义裁决（统一粗筛闸门：硬性拒绝 + 核心字重合度 + 短名保护）
                                     if is_judge_candidate(cat, name, c_name):
-                                        judge = llm_judge if llm_judge is not None else get_default_llm_judge()
+                                        judge = llm_judge
                                         if judge_same(judge, cat, name, c_name):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
@@ -4199,7 +3803,7 @@ class InsightDerivedRepository:
                                         if clean_core1 and clean_alias_core and clean_core1 != clean_alias_core:
                                             continue
                                         if is_judge_candidate(cat, name, ex_alias):
-                                            judge = llm_judge if llm_judge is not None else get_default_llm_judge()
+                                            judge = llm_judge
                                             if judge_same(judge, cat, name, ex_alias):
                                                 target_id = existing_ent["entity_id"]
                                                 merge_rule_hit = "llm_semantic_judge"
@@ -4235,7 +3839,7 @@ class InsightDerivedRepository:
                                 # 若层级路径校验未通过（不同末级设施如操场与天台），绝对禁止合并，不走 LLM
                                 if not is_loc_blocked:
                                     if is_judge_candidate(cat, name, c_name):
-                                        judge = llm_judge if llm_judge is not None else get_default_llm_judge()
+                                        judge = llm_judge
                                         if judge_same(judge, cat, name, c_name):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
@@ -4250,7 +3854,7 @@ class InsightDerivedRepository:
                                             if o1 != o2 or calculate_char_overlap_ratio(d1, d2) < 0.40:
                                                 alias_blocked = True
                                         if not alias_blocked and is_judge_candidate(cat, name, ex_alias):
-                                            judge = llm_judge if llm_judge is not None else get_default_llm_judge()
+                                            judge = llm_judge
                                             if judge_same(judge, cat, name, ex_alias):
                                                 target_id = existing_ent["entity_id"]
                                                 merge_rule_hit = "llm_semantic_judge"
@@ -4277,7 +3881,7 @@ class InsightDerivedRepository:
 
                                 # LLM 语义裁决（字符重合度 >= 40% 粗筛）
                                 if is_judge_candidate(cat, name, c_name):
-                                    judge = llm_judge if llm_judge is not None else get_default_llm_judge()
+                                    judge = llm_judge
                                     if judge_same(judge, cat, name, c_name):
                                         target_id = existing_ent["entity_id"]
                                         merge_rule_hit = "llm_semantic_judge"
@@ -4285,7 +3889,7 @@ class InsightDerivedRepository:
                                         break
                                 for ex_alias in c_aliases:
                                     if is_judge_candidate(cat, name, ex_alias):
-                                        judge = llm_judge if llm_judge is not None else get_default_llm_judge()
+                                        judge = llm_judge
                                         if judge_same(judge, cat, name, ex_alias):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
@@ -4316,7 +3920,7 @@ class InsightDerivedRepository:
 
                                 # LLM 语义裁决（字符重合度 >= 40% 粗筛）
                                 if is_judge_candidate(cat, name, c_name):
-                                    judge = llm_judge if llm_judge is not None else get_default_llm_judge()
+                                    judge = llm_judge
                                     if judge_same(judge, cat, name, c_name):
                                         target_id = existing_ent["entity_id"]
                                         merge_rule_hit = "llm_semantic_judge"
@@ -4324,7 +3928,7 @@ class InsightDerivedRepository:
                                         break
                                 for ex_alias in c_aliases:
                                     if is_judge_candidate(cat, name, ex_alias):
-                                        judge = llm_judge if llm_judge is not None else get_default_llm_judge()
+                                        judge = llm_judge
                                         if judge_same(judge, cat, name, ex_alias):
                                             target_id = existing_ent["entity_id"]
                                             merge_rule_hit = "llm_semantic_judge"
@@ -4515,6 +4119,12 @@ class InsightDerivedRepository:
                 "slug_mode": effective_slug_mode,
                 "version": current_revision + 1,
                 "updated_at": utcnow().isoformat(),
+                # 图组织与批量裁决的留痕：解释「本次为什么只合并了这些」，
+                # 并保留低频/通用词被延迟的事实，供人工复核与后续重跑。
+                "alignment_graph": alignment_summary,
+                "alignment_metrics": alignment_stats,
+                "alignment_blocked_merges": alignment_blocked[:50],
+                "deferred_entities": alignment_deferred[:2000],
             }
 
             # 6. 写入数据库 analysis_artifacts
