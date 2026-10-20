@@ -80,6 +80,12 @@
 - 角色列表默认只显示**出场 ≥ 3 页**的角色（`GET …/character-skills?minPages=N`，默认参数 0 表示不过滤；界面上是可改的数字输入）。原因：《FX戰士久留美》1457 页里有 205 个 characters 实体，其中大半只在 1 页被顺带提到，不过滤时列表无法使用（实测 `minPages=3` → 45 个、`10` → 18 个、`50` → 7 个）。
 - 实测（呪術廻戦·虎杖悠仁）：约 85s 完成，156 页 / 10 章 / 15 张原画，人格层 5 条性格 + 5 条说话方式（逐字台词）+ 3 条待确认，全部引用可回溯到「第 X 话 第 Y 页（全书第 Z 页）」。
 
+### 2.9 文档与发布素材（README 重写 + 品牌 logo + 架构图）
+- README 按发布标准重写（201 行）：定位 / 功能 / 架构图 / 快速上手（源码与打包两条路）/ 数据根目录布局 / 开发与门禁 / 常见问题 / 许可与致谢；顶部使用 `pic/miyako-logo.png`，界面小节沿用本代 5 张知识库截图。
+- 导航栏品牌区在 MiyakoKB 字样左侧渲染 `pic/miyako-logo.png`（28×28，`logoUrl` 绑定而非静态 `src`，见坑 32）。
+- `docs/assets/architecture.svg`（246,894 B，内联 SVG + 明暗主题）与 `docs/assets/architecture.png`（2199×1613，170,567 B）由 Archify 技能生成：覆盖启动器 → API/Worker 双进程 → SQLite 与 `objects/`/`chroma/` 存储 → 六阶段知识流水线 → 前端页面；`validate` 与 `visual-check` 均通过（3 处连线路由冲突已改为共用走廊）。
+- `.gitignore` 放行 `docs/assets/*.svg|*.png`（原本 `docs/*` 与图片规则会吞掉），`.archify/` 工作目录不入库。
+- 验证：`vitest` **89 files / 647 tests** 全绿、`vue-tsc -b` 0、eslint 0 errors / 20 warnings、stylelint 0、`check-ui-architecture.mjs` 与 `--audit` 0、`vite build` 成功（`index.DM_Ackj5.js`）；实栈 `http://127.0.0.1:5000/` 已服务新 bundle，`/pic/miyako-logo.png` 200（36,823 B）。提交 `bc9af19` 已 push。
 ## 3. 当前状态（精确到下一步）
 - [x] 验收点 1：漫画导入（Venera + 本地 ZIP/目录）及进度条实时反馈。
 - [x] 验收点 2：书架卡片精准展示构建状态（已构建/部分构建/未构建）。
@@ -89,6 +95,7 @@
 - [x] 验收点 6：生产环境大体量漫画（呪術廻戦 148 话/2998 页）的端到端压力测试与跨章节实体消歧观察 —— 已完成，结论与全部证据见 `Saber-Translator-main/acceptance6_stress_report.md`（§4 消歧观察与整改复验、§5 下游验证与三脚本全绿、§6 发现 #1-#44）。2026-10-19 已用恢复的网关补跑失败衍生项（job `8431eb87`，20/20 成功）：概览/剧情总结不再 404、时间线从 simple 升级为 enhanced、向量事件数 0 → 160（发现 #18/#19/#24 关闭）；同日另完成问答双模式合并为单一「通用」模式（报告 §5.5、决策 9）与「产物永远 degraded」根因定案（发现 #28、坑 10）；并按「状态只按本次 run 的目标页判定」拍板落地，重建后三个产物均 rev3 `ready`（报告 §5.6、决策 10）。**2026-10-20 用户报告问答「引用乱指 + 答不出第几话」，已定案并修复**：根因是 Chroma HNSW 段读取失败被静默降级 + 兜底按页号截断 + 实体证据页无话数映射且不进引用（报告 §5.10 / 发现 #40 / 决策 19 / 坑 27）。
 - [x] 角色 Skill 蒸馏（2026-10-20，用户要求「产品化 + 入口放在智能问答右边 + 必须带人格层」）：后端 `src/backend_v2/insight/character_skill.py` + 4 条路由、前端 `/character-skills` 页面与导航项、契约 3 条路径、`tests_backend/v2/test_character_skill.py` 4 条用例，实栈用呪術廻戦 虎杖悠仁跑通（85s，156 页/10 章/15 张原画，人格层与引用全绿）。见 §2.8、决策 21、坑 29、报告发现 #42。
 - [x] 实体对齐流程重写（2026-10-20，用户 `m18960` 给出规格）：候选图 + 单请求多边 + 结构性输出，请求数 705 → 260，串行 ambiguous 仲裁删除；新模块 `src/backend_v2/insight/entity_alignment.py`、新单测 16 条、后端全量 794 passed。见决策 22、坑 30、报告发现 #43。
+- [x] 发布文档与素材（2026-10-21）：README 重写、导航栏换品牌 logo、Archify 架构图入库（`docs/assets/architecture.svg|.png`）。见 §2.9、坑 32；提交 `bc9af19`。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；**2026-10-19 追加：全书构建 69% 墙钟耗在逐对裁决的问题已定案并落地**（报告发现 #34 / 决策 14 / 坑 19）：超集预取 + 批量裁决（30 对/批、3 并发）、对齐拆为独立步骤 `insight_stage_entity_alignment`、每批进度写用户日志；
@@ -384,6 +391,11 @@
   - *解法*：每个独立异步域各自持有计数器（`skillSequence`），卸载时一并自增作废；更稳的写法是 `Promise.allSettled` 之后由**一处**统一收尾。
   - *排查要点*：先分别计时调后端端点（排除接口），再确认前端 bundle 是否最新（`index-*.js` 哈希），最后才怀疑组件自身的状态机；「接口快 + 页面卡」几乎一定是客户端竞态或状态没收尾。
 
+- **坑 32：SFC 模板里的静态 `src="/pic/x.png"` 会被 `transformAssetUrls` 当成模块导入，测试环境直接崩**（2026-10-21，§2.9）
+  - *现象*：导航栏改成静态 `<img src="/pic/miyako-logo.png">` 后，`vitest` 有 3 个套件失败、7 条用例报 `TypeError: The argument 'filename' must be a file URL object, file URL string, or absolute path string. Received 'file:///pic/miyako-logo.png'`；应用本身正常。
+  - *根因*：`public/` 下的资源只在运行期按 URL 提供，而静态 `src` 会被 Vue SFC 编译器的 `transformAssetUrls` 改写成 `import _imports_0 from '/pic/miyako-logo.png'`；jsdom 里该路径被解析成 `file:///pic/...`，Vite 再去当文件读就抛错。
+  - *解法*：与 `AuthView.vue` 一致，写成 `const logoUrl = '/pic/miyako-logo.png'` + `:src="logoUrl"`（动态绑定不参与资源改写）。
+  - *教训*：`public/` 资源永远走绑定；只有 `src/assets/` 里的图才适合静态 `src`（那种情况才是真需要打包哈希）。
 ## 6. 新会话先读
 
 1. `AGENTS.md`：核心数据库脚本防手写约束与行为规范。
