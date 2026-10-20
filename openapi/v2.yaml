@@ -2104,6 +2104,11 @@ paths:
       summary: List the characters of a book that can be distilled into a skill.
       parameters:
         - $ref: "#/components/parameters/BookId"
+        - name: minPages
+          in: query
+          required: false
+          description: Hide characters whose page coverage is below this threshold (0 keeps every character).
+          schema: {type: integer, minimum: 0, maximum: 100000, default: 0}
       responses:
         "200":
           description: Characters ordered by page coverage.
@@ -2111,6 +2116,7 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/InsightCharacterSkillList"}
         "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/ValidationError"}
     post:
       tags: [insight, jobs]
       operationId: buildInsightCharacterSkill

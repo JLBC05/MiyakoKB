@@ -38,6 +38,26 @@ describe('character skill API', () => {
     expect(getMock).toHaveBeenCalledWith('/api/v2/insight/books/book%2Fone%20two/character-skills')
   })
 
+  it('passes the minimum appearance filter as a query parameter', async () => {
+    getMock.mockResolvedValue({ characters: [] })
+
+    await listInsightCharacterSkills(bookId, { minPages: 5 })
+
+    expect(getMock).toHaveBeenCalledWith(
+      '/api/v2/insight/books/book%2Fone%20two/character-skills?minPages=5'
+    )
+  })
+
+  it('keeps zero as an explicit filter value instead of dropping it', async () => {
+    getMock.mockResolvedValue({ characters: [] })
+
+    await listInsightCharacterSkills(bookId, { minPages: 0 })
+
+    expect(getMock).toHaveBeenCalledWith(
+      '/api/v2/insight/books/book%2Fone%20two/character-skills?minPages=0'
+    )
+  })
+
   it('starts a build with an idempotency key and the requested entity', async () => {
     postMock.mockResolvedValue({ state: 'running', stage: 'evidence', done: 0, total: 0 })
 

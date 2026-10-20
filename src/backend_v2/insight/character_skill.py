@@ -183,8 +183,12 @@ class CharacterSkillRepository:
             raise InsightConflict("该书还没有实体知识网络，请先完成一次知识库构建")
         return json.loads(row[0])
 
-    def characters(self, *, book_id: str) -> list[dict[str, Any]]:
-        """角色列表（带是否已生成 Skill 的标记）。"""
+    def characters(self, *, book_id: str, min_pages: int = 0) -> list[dict[str, Any]]:
+        """角色列表（带是否已生成 Skill 的标记）。
+
+        `min_pages` 用来隐藏出场页数不足的角色：实体知识网络里大量角色只在一两页
+        被顺带提到，全部列出来会让可选列表不可用。
+        """
         with self.engine.connect() as connection:
             payload = self.alignment(connection, book_id)
             generated = {
@@ -213,6 +217,8 @@ class CharacterSkillRepository:
             if not entity_id:
                 continue
             chapter_pages = entity.get("pages") or []
+            if len(chapter_pages) < min_pages:
+                continue
             skill = generated.get(entity_id)
             chapter_ordinals: set[int] = set()
             for number in chapter_pages:
@@ -1139,8 +1145,8 @@ class CharacterSkillService:
 
     # ---- 查询 ----------------------------------------------------------
 
-    def characters(self, *, book_id: str) -> list[dict[str, Any]]:
-        return self.repository.characters(book_id=book_id)
+    def characters(self, *, book_id: str, min_pages: int = 0) -> list[dict[str, Any]]:
+        return self.repository.characters(book_id=book_id, min_pages=min_pages)
 
     def get(self, *, book_id: str, entity_id: str) -> dict[str, Any]:
         return self.repository.get_skill(book_id=book_id, entity_id=entity_id)

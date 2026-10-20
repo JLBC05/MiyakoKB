@@ -262,9 +262,15 @@ export type V2InsightCharacterSkillStatus = components['schemas']['InsightCharac
 export type V2InsightCharacterSkillCharacter = components['schemas']['InsightCharacterSkillCharacter']
 
 export function listInsightCharacterSkills(
-  bookId: string
+  bookId: string,
+  options: { minPages?: number } = {}
 ): Promise<{ characters: V2InsightCharacterSkillCharacter[] }> {
-  return apiClient.get(`${ROOT}/books/${encodeURIComponent(bookId)}/character-skills`)
+  const query = new URLSearchParams()
+  if (options.minPages !== undefined) query.set('minPages', String(options.minPages))
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return apiClient.get(
+    `${ROOT}/books/${encodeURIComponent(bookId)}/character-skills${suffix}`
+  )
 }
 
 export function buildInsightCharacterSkill(

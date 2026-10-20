@@ -6,6 +6,7 @@ import MiyakoNavbar from '@/components/common/MiyakoNavbar.vue'
 import BookSelector from '@/components/insight/BookSelector.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import UiButton from '@/components/ui/UiButton.vue'
+import UiNumberField from '@/components/ui/UiNumberField.vue'
 import { getBookDetail } from '@/api/bookshelf'
 import {
   buildInsightCharacterSkill,
@@ -51,6 +52,7 @@ const isSkillLoading = ref(false)
 const error = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const copied = ref('')
+const minPages = ref<number | null>(3)
 
 let loadSequence = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -153,8 +155,18 @@ async function loadSkill(entityId: string, options: { silent?: boolean } = {}): 
 
 async function refreshCharacters(): Promise<void> {
   if (!bookId.value) return
-  const rows = await listInsightCharacterSkills(bookId.value)
+  const rows = await listInsightCharacterSkills(bookId.value, { minPages: minPages.value ?? 0 })
   characters.value = rows.characters ?? []
+  const stillListed = characters.value.some(item => item.entityId === selectedEntityId.value)
+  if (!stillListed) {
+    const fallback =
+      characters.value.find(item => item.hasSkill) ?? characters.value[0] ?? null
+    if (fallback) {
+      selectedEntityId.value = fallback.entityId
+      skill.value = null
+      if (fallback.hasSkill) await loadSkill(fallback.entityId)
+    }
+  }
 }
 
 async function loadBook(targetBookId: string): Promise<void> {
@@ -168,7 +180,7 @@ async function loadBook(targetBookId: string): Promise<void> {
   try {
     const [book, rows] = await Promise.all([
       getBookDetail(targetBookId),
-      listInsightCharacterSkills(targetBookId),
+      listInsightCharacterSkills(targetBookId, { minPages: minPages.value ?? 0 }),
     ])
     if (!isMounted || sequence !== loadSequence) return
     bookId.value = targetBookId
@@ -269,6 +281,13 @@ onUnmounted(() => {
   stopPolling()
 })
 
+watch(minPages, () => {
+  if (!isMounted || !bookId.value) return
+  void refreshCharacters().catch(() => {
+    /* 过滤失败时保留上一次列表，错误由页面级 banner 呈现 */
+  })
+})
+
 watch(
   () => routeBookId(route.query.book),
   target => {
@@ -297,9 +316,21 @@ watch(
         <div class="character-skill-header__left">
           <BookSelector :model-value="bookId" @select="handleBookSelect" />
           <span v-if="bookTitle" class="character-skill-header__meta">
-            {{ bookMeta }} · 可蒸馏角色 {{ characters.length }} 个
+            {{ bookMeta }} · 可蒸馏角色 {{ characters.length }} 个（出场 ≥
+            {{ minPages ?? 0 }} 页）
           </span>
         </div>
+        <label class="character-skill-filter">
+          <span class="character-skill-filter__label">最少出场页数</span>
+          <UiNumberField
+            v-model="minPages"
+            class="character-skill-filter__input"
+            :min="0"
+            :max="2000"
+            size="sm"
+            aria-label="最少出场页数"
+          />
+        </label>
       </section>
 
       <ProductStatusBanner
@@ -533,6 +564,23 @@ watch(
 .character-skill-header__meta {
   font-size: 0.88rem;
   color: var(--color-text-secondary);
+}
+
+.character-skill-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.character-skill-filter__label {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.character-skill-filter__input {
+  width: 96px;
 }
 
 .character-skill-banner {

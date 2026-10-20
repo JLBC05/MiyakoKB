@@ -360,7 +360,15 @@ def create_insight_blueprint(
 
     @blueprint.get("/books/<book_id>/character-skills")
     def list_character_skills(book_id: str) -> Response:
-        return jsonify({"characters": character_skills.characters(book_id=book_id)})
+        min_pages = _integer_value(
+            request.args.get("minPages", "0"),
+            "minPages",
+            minimum=0,
+            maximum=100000,
+        )
+        return jsonify(
+            {"characters": character_skills.characters(book_id=book_id, min_pages=min_pages)}
+        )
 
     @blueprint.post("/books/<book_id>/character-skills")
     def build_character_skill(book_id: str):

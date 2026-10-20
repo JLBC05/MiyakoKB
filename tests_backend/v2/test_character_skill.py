@@ -212,6 +212,39 @@ def test_character_skill_detail_is_not_found_before_generation(skill_platform) -
         service.get(book_id=platform["book_id"], entity_id=CHARACTER_ID)
 
 
+def test_character_skill_list_hides_characters_below_the_page_threshold(skill_platform) -> None:
+    platform = skill_platform
+    service = CharacterSkillService(platform["engine"], platform["data_root"])
+
+    assert [item["entityId"] for item in service.characters(
+        book_id=platform["book_id"], min_pages=3
+    )] == [CHARACTER_ID]
+    assert service.characters(book_id=platform["book_id"], min_pages=4) == []
+
+    app = Flask("character-skill-threshold-test")
+    app.register_blueprint(
+        create_insight_blueprint(
+            engine=platform["engine"],
+            data_root=platform["data_root"],
+            profile=resolve_runtime_profile("local"),
+        )
+    )
+    client = app.test_client()
+    base = f"/api/v2/insight/books/{platform['book_id']}/character-skills"
+
+    assert [item["entityId"] for item in client.get(base).get_json()["characters"]] == [CHARACTER_ID]
+    filtered = client.get(f"{base}?minPages=4")
+    assert filtered.status_code == 200
+    assert filtered.get_json()["characters"] == []
+    kept = client.get(f"{base}?minPages=3")
+    assert [item["entityId"] for item in kept.get_json()["characters"]] == [CHARACTER_ID]
+
+    invalid = client.get(f"{base}?minPages=-1")
+    assert invalid.status_code == 422
+    non_numeric = client.get(f"{base}?minPages=abc")
+    assert non_numeric.status_code == 422
+
+
 def test_character_skill_routes_expose_list_detail_and_status(skill_platform) -> None:
     platform = skill_platform
     app = Flask("character-skill-route-test")

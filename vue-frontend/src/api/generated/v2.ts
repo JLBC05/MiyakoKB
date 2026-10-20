@@ -6935,7 +6935,10 @@ export interface operations {
     };
     listInsightCharacterSkills: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Hide characters whose page coverage is below this threshold (0 keeps every character). */
+                minPages?: number;
+            };
             header?: never;
             path: {
                 book_id: components["parameters"]["BookId"];
@@ -6954,6 +6957,7 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
         };
     };
     buildInsightCharacterSkill: {
