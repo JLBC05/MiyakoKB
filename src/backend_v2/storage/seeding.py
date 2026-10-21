@@ -14,6 +14,7 @@ from src.backend_v2.storage.defaults import (
     DEFAULT_EXPORT_PREFERENCES,
     DEFAULT_INSIGHT_SETTINGS,
     DEFAULT_TEXT_STYLE,
+    DEFAULT_MANGA_IMPORT_SETTINGS,
     DEFAULT_WEB_IMPORT_SETTINGS,
     DEFAULT_WORKFLOW_PREFERENCES,
     FACTORY_PROMPTS,
@@ -136,6 +137,7 @@ def seed_user_records_in_connection(connection: object, user_id: str) -> None:
             "text_style_defaults": DEFAULT_TEXT_STYLE,
             "insight": DEFAULT_INSIGHT_SETTINGS,
             "web_import": DEFAULT_WEB_IMPORT_SETTINGS,
+            "manga_import": DEFAULT_MANGA_IMPORT_SETTINGS,
         }
         existing_domains = set(
             connection.execute(

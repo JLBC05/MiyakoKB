@@ -34,6 +34,7 @@ from src.shared.constants import PADDLEOCR_VL_LANGUAGE_NAMES
 APP_SETTING_DOMAINS = frozenset({
     "browser_dom_agent", "translation", "text_style_defaults",
     "workflow_preferences", "export_preferences", "custom_ai_profiles",
+    "manga_import",
     "web_import", "insight",
 })
 PROVIDER_CAPABILITIES = {
@@ -641,6 +642,16 @@ def _validate_insight(payload: dict[str, Any]) -> None:
             raise ValueError("insight.chat.useSameAsVlm must be boolean")
 
 
+def _validate_manga_import(payload: dict[str, Any]) -> None:
+    _exact_keys(payload, {"veneraBaseDir"}, "manga_import")
+    value = payload["veneraBaseDir"]
+    if not isinstance(value, str):
+        raise ValueError("manga_import.veneraBaseDir must be a string")
+    if "\x00" in value:
+        raise ValueError("manga_import.veneraBaseDir must not contain NUL")
+    if len(value) > 4096:
+        raise ValueError("manga_import.veneraBaseDir is too long")
+
 def validate_setting_payload(
     domain: str,
     payload: object,
@@ -667,6 +678,8 @@ def validate_setting_payload(
         _validate_web_import(result)
     elif domain == "insight":
         _validate_insight(result)
+    elif domain == "manga_import":
+        _validate_manga_import(result)
     elif domain == "text_style_defaults":
         font_id, style = validate_text_style_payload(result)
         result = {**style, "fontFamily": font_id}

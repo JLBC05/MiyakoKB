@@ -8,6 +8,7 @@ export interface VeneraComic {
   directory: string
   cover: string
   coverPath: string
+  hasCover?: boolean
   comicType: number
   chapterCount: number
   downloadedChapters: string[]
@@ -19,6 +20,11 @@ export interface VeneraLibraryResponse {
   total: number
   veneraFound: boolean
   error?: string
+  /** Venera 数据目录（用户设置优先，缺省为系统默认位置）。 */
+  baseDir?: string
+  /** baseDir 的来源：setting 表示用户在界面里设置过。 */
+  baseDirSource?: 'setting' | 'default'
+  dbPath?: string
 }
 
 export interface VeneraImportDetail {
@@ -38,6 +44,10 @@ export interface VeneraImportResponse {
 
 export async function getVeneraLibrary(): Promise<VeneraLibraryResponse> {
   return apiClient.get<VeneraLibraryResponse>('/api/v2/import/venera/library')
+}
+
+export function getVeneraCoverUrl(comicId: string): string {
+  return `/api/v2/import/venera/cover?comicId=${encodeURIComponent(comicId)}`
 }
 
 export async function importVeneraComics(comicIds: string[]): Promise<VeneraImportResponse> {

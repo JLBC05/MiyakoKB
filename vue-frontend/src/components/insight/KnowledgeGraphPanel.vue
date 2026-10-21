@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { Graph } from '@antv/g6'
 import { useInsightStore } from '@/stores/insightStore'
 import { getInsightGraph, type V2InsightGraphNode, type V2InsightGraphEdge } from '@/api/v2/insight'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiInput from '@/components/ui/UiInput.vue'
+import UiNumberField from '@/components/ui/UiNumberField.vue'
 
 const route = useRoute()
 const insightStore = useInsightStore()
@@ -14,48 +16,20 @@ const errorMessage = ref('')
 const rawNodes = ref<V2InsightGraphNode[]>([])
 const rawEdges = ref<V2InsightGraphEdge[]>([])
 
-// 筛选控制
 const selectedCategory = ref<string>('all')
-const minWeight = ref<number>(2) // 默认过滤掉偶然1次同现的微弱边，大幅提速且界面清爽
+const minWeight = ref<number | null>(2)
 const searchQuery = ref<string>('')
 const showLabels = ref<boolean>(true)
-const isSimplifiedMode = ref<boolean>(true) // 默认开启简洁核心视图（Top 核心节点）
+const isSimplifiedMode = ref<boolean>(true)
 const maxSimplifiedNodes = 60
 
-// 画布视图状态 (缩放与平移)
-const transform = ref({ x: 0, y: 0, scale: 1 })
-const isPanning = ref(false)
-const panStart = ref({ x: 0, y: 0 })
-const svgContainerRef = ref<HTMLDivElement | null>(null)
-const viewportSize = ref({ width: 800, height: 600 })
-
-// 交互选中状态
-const hoveredNodeId = ref<string | null>(null)
 const selectedNodeId = ref<string | null>(null)
 const selectedEdgeId = ref<string | null>(null)
-const isDraggingNode = ref(false)
-const draggedNodeId = ref<string | null>(null)
 
-// 力导向模拟节点结构
-interface SimNode extends V2InsightGraphNode {
-  x: number
-  y: number
-  vx: number
-  vy: number
-  radius: number
-  fx?: number | null // 拖拽固定坐标
-  fy?: number | null
-}
-
-interface SimEdge extends V2InsightGraphEdge {
-  sourceNode: SimNode
-  targetNode: SimNode
-}
-
-const simNodes = ref<SimNode[]>([])
-const simEdges = ref<SimEdge[]>([])
-let animFrameId: number | null = null
-let simulationAlpha = 1.0
+const graphContainerRef = ref<HTMLDivElement | null>(null)
+let graph: Graph | null = null
+let isMounted = false
+let renderSequence = 0
 
 const categories = [
   { key: 'all', label: '全部', icon: '🌐', color: '#8b5cf6' },
@@ -67,1451 +41,527 @@ const categories = [
 ]
 
 function getCategoryColor(category: string): string {
-  const match = categories.find(c => c.key === category)
+  const match = categories.find(item => item.key === category)
   return match ? match.color : '#94a3b8'
 }
 
 function getCategoryLabel(category: string): string {
-  const match = categories.find(c => c.key === category)
+  const match = categories.find(item => item.key === category)
   return match ? match.label : category
 }
 
-// 统计各分类实体数量
 const categoryCounts = computed(() => {
   const map: Record<string, number> = { all: rawNodes.value.length }
-  for (const c of categories) {
-    if (c.key !== 'all') map[c.key] = 0
+  for (const item of categories) {
+    if (item.key !== 'all') map[item.key] = 0
   }
-  for (const n of rawNodes.value) {
-    if (map[n.category] !== undefined) map[n.category]++
+  for (const node of rawNodes.value) {
+    if (map[node.category] !== undefined) map[node.category]++
   }
   return map
 })
 
-// 筛选后活跃的节点与边
+const nodeIndex = computed(() => {
+  const map = new Map<string, V2InsightGraphNode>()
+  for (const node of rawNodes.value) map.set(node.id, node)
+  return map
+})
+
 const activeNodes = computed(() => {
-  let list = simNodes.value.filter(n => {
-    if (selectedCategory.value !== 'all' && n.category !== selectedCategory.value) {
-      return false
-    }
-    if (searchQuery.value.trim()) {
-      const q = searchQuery.value.trim().toLowerCase()
-      const matchName = n.name.toLowerCase().includes(q)
-      const matchAlias = n.aliases?.some(a => a.toLowerCase().includes(q))
-      if (!matchName && !matchAlias) return false
-    }
-    return true
+  const query = searchQuery.value.trim().toLowerCase()
+  let list = rawNodes.value.filter(node => {
+    if (selectedCategory.value !== 'all' && node.category !== selectedCategory.value) return false
+    if (!query) return true
+    const name = String(node.name ?? '').toLowerCase()
+    const aliases = (node.aliases ?? []).map(alias => String(alias).toLowerCase())
+    return name.includes(query) || aliases.some(alias => alias.includes(query))
   })
-
-  // 简约模式：如果节点较多，优先保留频次最高的核心实体，防止视口杂乱与掉帧
   if (isSimplifiedMode.value && list.length > maxSimplifiedNodes) {
-    list = [...list].sort((a, b) => b.frequency - a.frequency).slice(0, maxSimplifiedNodes)
+    list = [...list].sort((a, b) => (b.frequency ?? 0) - (a.frequency ?? 0)).slice(0, maxSimplifiedNodes)
   }
-
   return list
 })
 
-function toggleSimplifiedMode() {
-  isSimplifiedMode.value = !isSimplifiedMode.value
-  reheatSimulation(0.6)
-}
-
-const activeNodeIdSet = computed(() => new Set(activeNodes.value.map(n => n.id)))
+const activeNodeIds = computed(() => new Set(activeNodes.value.map(node => node.id)))
 
 const activeEdges = computed(() => {
-  return simEdges.value.filter(e => {
-    if (!activeNodeIdSet.value.has(e.sourceNode.id) || !activeNodeIdSet.value.has(e.targetNode.id)) {
-      return false
-    }
-    return e.weight >= minWeight.value
+  const threshold = minWeight.value ?? 0
+  return rawEdges.value.filter(edge => {
+    if (!activeNodeIds.value.has(edge.source) || !activeNodeIds.value.has(edge.target)) return false
+    return (edge.weight ?? 0) >= threshold
   })
 })
 
-// 当前聚焦的高亮集合 (hover 或 click 产生的一度邻居)
-const focusTargetId = computed(() => hoveredNodeId.value || selectedNodeId.value)
-
-const connectedNodeIdSet = computed(() => {
-  const id = focusTargetId.value
-  if (!id) return null
-  const set = new Set<string>([id])
-  for (const edge of activeEdges.value) {
-    if (edge.sourceNode.id === id) set.add(edge.targetNode.id)
-    if (edge.targetNode.id === id) set.add(edge.sourceNode.id)
-  }
-  return set
+const averageDegree = computed(() => {
+  if (!activeNodes.value.length) return '0.0'
+  const degree = (activeEdges.value.length * 2) / activeNodes.value.length
+  return degree.toFixed(1)
 })
 
-const connectedEdgeIdSet = computed(() => {
-  const id = focusTargetId.value
-  if (!id) return null
-  const set = new Set<string>()
-  for (const edge of activeEdges.value) {
-    if (edge.sourceNode.id === id || edge.targetNode.id === id) {
-      set.add(edge.id)
-    }
-  }
-  return set
-})
-
-// 当前选中的实体详情
 const selectedNodeDetail = computed(() => {
-  if (!selectedNodeId.value) return null
-  const node = simNodes.value.find(n => n.id === selectedNodeId.value)
+  const id = selectedNodeId.value
+  if (!id) return null
+  const node = nodeIndex.value.get(id)
   if (!node) return null
-
-  // 找出与其共现权重最高的前 8 个关联实体
-  const neighbors: { node: SimNode; weight: number; commonPages: number[] }[] = []
-  for (const edge of simEdges.value) {
-    if (edge.sourceNode.id === node.id) {
-      neighbors.push({ node: edge.targetNode, weight: edge.weight, commonPages: edge.common_pages })
-    } else if (edge.targetNode.id === node.id) {
-      neighbors.push({ node: edge.sourceNode, weight: edge.weight, commonPages: edge.common_pages })
+  const neighbors: Array<{ node: V2InsightGraphNode; weight: number }> = []
+  for (const edge of rawEdges.value) {
+    if (edge.source === id) {
+      const other = nodeIndex.value.get(edge.target)
+      if (other) neighbors.push({ node: other, weight: edge.weight ?? 0 })
+    } else if (edge.target === id) {
+      const other = nodeIndex.value.get(edge.source)
+      if (other) neighbors.push({ node: other, weight: edge.weight ?? 0 })
     }
   }
   neighbors.sort((a, b) => b.weight - a.weight)
+  return { node, topNeighbors: neighbors.slice(0, 10), degree: neighbors.length }
+})
 
+const selectedEdgeDetail = computed(() => {
+  const id = selectedEdgeId.value
+  if (!id) return null
+  const edge = rawEdges.value.find(item => item.id === id)
+  if (!edge) return null
   return {
-    ...node,
-    topNeighbors: neighbors.slice(0, 10),
+    edge,
+    source: nodeIndex.value.get(edge.source) ?? null,
+    target: nodeIndex.value.get(edge.target) ?? null,
   }
 })
 
-// 当前选中的连线详情
-const selectedEdgeDetail = computed(() => {
-  if (!selectedEdgeId.value) return null
-  return simEdges.value.find(e => e.id === selectedEdgeId.value) || null
-})
+const hasGraph = computed(() => rawNodes.value.length > 0)
 
-// 初始化与构建力导向图数据
-async function loadGraphData() {
+function buildGraphData(): { nodes: unknown[]; edges: unknown[] } {
+  const maxFrequency = Math.max(...rawNodes.value.map(node => node.frequency ?? 1), 1)
+  const nodes = activeNodes.value.map(node => {
+    const normalized = Math.min(
+      1,
+      Math.max(0, Math.log2((node.frequency ?? 1) + 1) / Math.log2(maxFrequency + 1)),
+    )
+    return {
+      id: node.id,
+      data: node,
+      style: {
+        size: Math.round(18 + normalized * 34),
+        fill: getCategoryColor(node.category),
+        labelText: showLabels.value ? node.name : '',
+      },
+    }
+  })
+  const edges = activeEdges.value.map(edge => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    data: edge,
+    style: { lineWidth: Math.min(3, 0.5 + (edge.weight ?? 0) * 0.25) },
+  }))
+  return { nodes, edges }
+}
+
+async function renderGraph(): Promise<void> {
+  const container = graphContainerRef.value
+  if (!container) return
+  const sequence = ++renderSequence
+  if (!graph) {
+    graph = new Graph({
+      container,
+      autoResize: true,
+      background: 'transparent',
+      padding: 24,
+      data: buildGraphData() as never,
+      node: {
+        style: {
+          labelPlacement: 'bottom',
+          labelFontSize: 11,
+          labelFill: '#334155',
+          labelBackground: true,
+          labelBackgroundFill: 'rgba(255, 255, 255, 0.86)',
+          labelBackgroundRadius: 3,
+          stroke: '#ffffff',
+          lineWidth: 1.5,
+          cursor: 'pointer',
+        },
+      },
+      edge: {
+        style: {
+          stroke: '#cbd5e1',
+          opacity: 0.55,
+          cursor: 'pointer',
+        },
+      },
+      layout: {
+        type: 'force',
+        preventOverlap: true,
+        nodeSize: 40,
+        linkDistance: 110,
+        nodeStrength: -260,
+        edgeStrength: 0.4,
+        collideStrength: 0.9,
+        alphaDecay: 0.06,
+        animation: true,
+      },
+      behaviors: ['zoom-canvas', 'drag-canvas', 'drag-element', 'hover-activate'],
+    })
+    graph.on('node:click', event => {
+      const id = String((event as { target?: { id?: string } }).target?.id ?? '')
+      if (!id) return
+      selectedEdgeId.value = null
+      selectedNodeId.value = id
+    })
+    graph.on('edge:click', event => {
+      const id = String((event as { target?: { id?: string } }).target?.id ?? '')
+      if (!id) return
+      selectedNodeId.value = null
+      selectedEdgeId.value = id
+    })
+    graph.on('canvas:click', () => {
+      selectedNodeId.value = null
+      selectedEdgeId.value = null
+    })
+  }
+  graph.setData(buildGraphData() as never)
+  await graph.render()
+  if (sequence !== renderSequence) return
+  await graph.fitView()
+}
+
+function resetView(): void {
+  if (!graph) return
+  void graph.fitView()
+}
+
+async function loadGraphData(): Promise<void> {
   const queryBook = typeof route?.query?.book === 'string' ? route.query.book.trim() : ''
   const bookId = insightStore.currentBookId || queryBook
   if (!bookId) {
     rawNodes.value = []
     rawEdges.value = []
-    simNodes.value = []
-    simEdges.value = []
+    selectedNodeId.value = null
+    selectedEdgeId.value = null
     return
   }
-
   isLoading.value = true
   errorMessage.value = ''
   try {
     const data = await getInsightGraph(bookId, { minWeight: 1 })
-    rawNodes.value = data.nodes || []
-    rawEdges.value = data.edges || []
+    if (!isMounted) return
+    rawNodes.value = data.nodes ?? []
+    rawEdges.value = data.edges ?? []
+    selectedNodeId.value = null
+    selectedEdgeId.value = null
     await nextTick()
-    updateContainerSize()
-    initSimulation()
-  } catch (err: any) {
-    console.error('加载关系图谱失败:', err)
-    errorMessage.value = err?.message || '加载关系图谱数据失败'
+    await renderGraph()
+  } catch (error) {
+    if (!isMounted) return
+    errorMessage.value = error instanceof Error ? error.message : '加载关系图谱数据失败'
   } finally {
-    isLoading.value = false
-  }
-}
-
-function initSimulation() {
-  const width = viewportSize.value.width || 800
-  const height = viewportSize.value.height || 600
-  const centerX = width / 2
-  const centerY = height / 2
-
-  // 1. 建立模拟节点
-  const maxFreq = Math.max(...rawNodes.value.map(n => n.frequency || 1), 1)
-  const nodeMap = new Map<string, SimNode>()
-
-  simNodes.value = rawNodes.value.map((n, i) => {
-    // 节点半径根据词频对数缩放：14px ~ 38px
-    const normalized = Math.min(1, Math.max(0, Math.log2((n.frequency || 1) + 1) / Math.log2(maxFreq + 1)))
-    const radius = Math.round(14 + normalized * 24)
-
-    // 初始环形分布 + 随机抖动
-    const angle = (i / (rawNodes.value.length || 1)) * 2 * Math.PI
-    const dist = 100 + Math.random() * (Math.min(width, height) * 0.35)
-    const node: SimNode = {
-      ...n,
-      x: centerX + Math.cos(angle) * dist,
-      y: centerY + Math.sin(angle) * dist,
-      vx: (Math.random() - 0.5) * 2,
-      vy: (Math.random() - 0.5) * 2,
-      radius,
-    }
-    nodeMap.set(n.id, node)
-    return node
-  })
-
-  // 2. 建立模拟连线
-  simEdges.value = rawEdges.value
-    .map(e => {
-      const sourceNode = nodeMap.get(e.source)
-      const targetNode = nodeMap.get(e.target)
-      if (!sourceNode || !targetNode) return null
-      return {
-        ...e,
-        sourceNode,
-        targetNode,
-      } as SimEdge
-    })
-    .filter((e): e is SimEdge => e !== null)
-
-  reheatSimulation()
-}
-
-// 模拟步进计算 (Force Layout Step)
-function stepSimulation() {
-  if (simulationAlpha < 0.003) {
-    if (animFrameId) {
-      cancelAnimationFrame(animFrameId)
-      animFrameId = null
-    }
-    simulationAlpha = 0
-    return
-  }
-
-  const nodes = activeNodes.value
-  const edges = activeEdges.value
-  const width = viewportSize.value.width || 800
-  const height = viewportSize.value.height || 600
-  const centerX = width / 2
-  const centerY = height / 2
-
-  const kRepulsion = 1000 * simulationAlpha
-  const kCenter = 0.04 * simulationAlpha
-
-  // 1. 中心重力
-  for (const n of nodes) {
-    if (n.fx != null && n.fy != null) {
-      n.x = n.fx
-      n.y = n.fy
-      continue
-    }
-    n.vx += (centerX - n.x) * kCenter
-    n.vy += (centerY - n.y) * kCenter
-  }
-
-  // 2. 节点两两排斥力 (带有距离上限截断，远距离直接跳过计算，大幅降低开销)
-  const nLen = nodes.length
-  const maxDistSq = 320 * 320 // 超过 320px 斥力极其微弱，直接忽略
-  for (let i = 0; i < nLen; i++) {
-    const na = nodes[i]
-    for (let j = i + 1; j < nLen; j++) {
-      const nb = nodes[j]
-      const dx = nb.x - na.x
-      const dy = nb.y - na.y
-      const distSq = dx * dx + dy * dy + 1
-      if (distSq > maxDistSq) continue
-
-      const dist = Math.sqrt(distSq)
-      const minDist = na.radius + nb.radius + 14
-
-      // 碰撞与排斥
-      let force = kRepulsion / distSq
-      if (dist < minDist) {
-        force += (minDist - dist) * 0.45 * simulationAlpha
-      }
-
-      const fx = (dx / dist) * force
-      const fy = (dy / dist) * force
-
-      if (na.fx == null) {
-        na.vx -= fx
-        na.vy -= fy
-      }
-      if (nb.fx == null) {
-        nb.vx += fx
-        nb.vy += fy
-      }
-    }
-  }
-
-  // 3. 弹簧引力 (Hooke)
-  for (const e of edges) {
-    const na = e.sourceNode
-    const nb = e.targetNode
-    const dx = nb.x - na.x
-    const dy = nb.y - na.y
-    const dist = Math.sqrt(dx * dx + dy * dy) || 1
-
-    // 理想边长根据共现权重调整：权重越高，拉得越近
-    const idealDist = Math.max(55, 150 - Math.min(e.weight, 15) * 4)
-    const springForce = (dist - idealDist) * 0.06 * simulationAlpha
-
-    const fx = (dx / dist) * springForce
-    const fy = (dy / dist) * springForce
-
-    if (na.fx == null) {
-      na.vx += fx
-      na.vy += fy
-    }
-    if (nb.fx == null) {
-      nb.vx -= fx
-      nb.vy -= fy
-    }
-  }
-
-  // 4. 应用速度与衰减
-  const damping = 0.78
-  for (const n of nodes) {
-    if (n.fx != null && n.fy != null) {
-      n.vx = 0
-      n.vy = 0
-      continue
-    }
-    n.vx *= damping
-    n.vy *= damping
-    n.x += n.vx
-    n.y += n.vy
-  }
-
-  simulationAlpha *= 0.96 // 加快稳定收敛速度，百余帧内完成布局并静止
-  animFrameId = requestAnimationFrame(stepSimulation)
-}
-
-function reheatSimulation(alpha = 0.7) {
-  simulationAlpha = Math.max(simulationAlpha, alpha)
-  if (!animFrameId) {
-    animFrameId = requestAnimationFrame(stepSimulation)
-  }
-}
-
-// 画布视图控制：缩放与平移
-function handleWheel(e: WheelEvent) {
-  e.preventDefault()
-  const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89
-  const newScale = Math.min(3.5, Math.max(0.2, transform.value.scale * zoomFactor))
-
-  if (!svgContainerRef.value) return
-  const rect = svgContainerRef.value.getBoundingClientRect()
-  const mouseX = e.clientX - rect.left
-  const mouseY = e.clientY - rect.top
-
-  // 围绕鼠标位置进行无级缩放
-  transform.value.x = mouseX - (mouseX - transform.value.x) * (newScale / transform.value.scale)
-  transform.value.y = mouseY - (mouseY - transform.value.y) * (newScale / transform.value.scale)
-  transform.value.scale = newScale
-}
-
-function handleMouseDownBackground(e: MouseEvent) {
-  if (e.target !== e.currentTarget && (e.target as HTMLElement).tagName !== 'svg') return
-  isPanning.value = true
-  panStart.value = { x: e.clientX - transform.value.x, y: e.clientY - transform.value.y }
-  selectedNodeId.value = null
-  selectedEdgeId.value = null
-}
-
-function handleMouseMove(e: MouseEvent) {
-  if (isPanning.value) {
-    transform.value.x = e.clientX - panStart.value.x
-    transform.value.y = e.clientY - panStart.value.y
-  } else if (isDraggingNode.value && draggedNodeId.value) {
-    const node = simNodes.value.find(n => n.id === draggedNodeId.value)
-    if (node) {
-      // 鼠标屏幕坐标转 SVG 画布坐标
-      const canvasX = (e.clientX - transform.value.x) / transform.value.scale
-      const canvasY = (e.clientY - transform.value.y) / transform.value.scale
-      node.fx = canvasX
-      node.fy = canvasY
-      node.x = canvasX
-      node.y = canvasY
-      reheatSimulation(0.3)
-    }
-  }
-}
-
-function handleMouseUp() {
-  isPanning.value = false
-  if (isDraggingNode.value && draggedNodeId.value) {
-    const node = simNodes.value.find(n => n.id === draggedNodeId.value)
-    if (node) {
-      node.fx = null
-      node.fy = null
-    }
-  }
-  isDraggingNode.value = false
-  draggedNodeId.value = null
-}
-
-function handleNodeMouseDown(node: SimNode, e: MouseEvent) {
-  e.stopPropagation()
-  isDraggingNode.value = true
-  draggedNodeId.value = node.id
-  selectedNodeId.value = node.id
-  selectedEdgeId.value = null
-}
-
-function handleNodeClick(node: SimNode, e: MouseEvent) {
-  e.stopPropagation()
-  selectedNodeId.value = node.id
-  selectedEdgeId.value = null
-}
-
-function handleEdgeClick(edge: SimEdge, e: MouseEvent) {
-  e.stopPropagation()
-  selectedEdgeId.value = edge.id
-  selectedNodeId.value = null
-}
-
-function resetView() {
-  transform.value = { x: 0, y: 0, scale: 1 }
-  reheatSimulation(0.6)
-}
-
-function updateContainerSize() {
-  if (svgContainerRef.value) {
-    viewportSize.value = {
-      width: svgContainerRef.value.clientWidth || 800,
-      height: svgContainerRef.value.clientHeight || 600,
-    }
+    if (isMounted) isLoading.value = false
   }
 }
 
 watch(
-  () => [insightStore.currentBookId, route?.query?.book],
-  ([newStoreBook, newRouteBook]) => {
-    if (newStoreBook || newRouteBook) {
-      loadGraphData()
-    } else {
-      rawNodes.value = []
-      rawEdges.value = []
-      simNodes.value = []
-      simEdges.value = []
-    }
+  () => [selectedCategory.value, minWeight.value, searchQuery.value, isSimplifiedMode.value, showLabels.value],
+  () => {
+    if (!isMounted || !graph) return
+    void renderGraph()
   },
-  { immediate: true },
 )
 
-watch([selectedCategory, minWeight], () => {
-  reheatSimulation(0.5)
-})
-
-let resizeObserver: ResizeObserver | null = null
-
 onMounted(() => {
-  updateContainerSize()
-  if (svgContainerRef.value && typeof ResizeObserver !== 'undefined') {
-    resizeObserver = new ResizeObserver(() => {
-      updateContainerSize()
-    })
-    resizeObserver.observe(svgContainerRef.value)
-  }
-  window.addEventListener('resize', updateContainerSize)
-  window.addEventListener('mouseup', handleMouseUp)
-  window.addEventListener('mousemove', handleMouseMove)
-  loadGraphData()
+  isMounted = true
+  void loadGraphData()
 })
 
 onUnmounted(() => {
-  if (resizeObserver) {
-    resizeObserver.disconnect()
-    resizeObserver = null
-  }
-  window.removeEventListener('resize', updateContainerSize)
-  window.removeEventListener('mouseup', handleMouseUp)
-  window.removeEventListener('mousemove', handleMouseMove)
-  if (animFrameId) {
-    cancelAnimationFrame(animFrameId)
-    animFrameId = null
+  isMounted = false
+  renderSequence += 1
+  selectedNodeId.value = null
+  selectedEdgeId.value = null
+  if (graph) {
+    graph.destroy()
+    graph = null
   }
 })
 </script>
 
 <template>
   <div class="knowledge-graph-panel">
-    <!-- 顶部控制工具栏 -->
-    <div class="graph-toolbar">
-      <!-- 类别过滤器 -->
-      <div class="category-chips">
+    <div class="knowledge-graph-panel__toolbar">
+      <div class="knowledge-graph-panel__categories">
         <UiButton
-          v-for="cat in categories"
-          :key="cat.key"
-          class="category-chip"
-          :class="{ active: selectedCategory === cat.key }"
-          variant="ghost"
-          size="xs"
-          @click="selectedCategory = cat.key"
-        >
-          <span class="chip-icon">{{ cat.icon }}</span>
-          <span class="chip-label">{{ cat.label }}</span>
-          <span class="chip-count">{{ categoryCounts[cat.key] || 0 }}</span>
-        </UiButton>
-      </div>
-
-      <!-- 右侧控制区 -->
-      <div class="toolbar-actions">
-        <!-- 最小共现页数滑块 -->
-        <div class="weight-filter" title="过滤低于此共现页数的连线">
-          <span class="weight-label">共现频次 ≥ {{ minWeight }}</span>
-          <UiInput
-            :model-value="minWeight"
-            type="range"
-            min="1"
-            max="15"
-            step="1"
-            class="weight-slider"
-            @update:model-value="value => { minWeight = Number(value) }"
-          />
-        </div>
-
-        <!-- 搜索定位 -->
-        <div class="graph-search">
-          <UiInput
-            v-model="searchQuery"
-            type="text"
-            placeholder="搜索实体..."
-            class="search-input"
-          />
-          <UiButton
-            v-if="searchQuery"
-            class="clear-btn"
-            variant="ghost"
-            size="xs"
-            aria-label="清空搜索"
-            @click="searchQuery = ''"
-          >
-            ✕
-          </UiButton>
-        </div>
-
-        <!-- 简洁模式切换 -->
-        <UiButton
-          variant="secondary"
+          v-for="category in categories"
+          :key="category.key"
           size="sm"
-          :class="{ 'btn-active': isSimplifiedMode }"
-          :title="isSimplifiedMode ? '当前为简洁核心视图（Top 60 核心实体），点击切换全量' : '当前为全景完整视图，点击切换核心'"
-          @click="toggleSimplifiedMode"
+          :variant="selectedCategory === category.key ? 'primary' : 'secondary'"
+          @click="selectedCategory = category.key"
         >
-          {{ isSimplifiedMode ? '⚡ 简洁核心' : '🌐 全景全量' }}
+          {{ category.icon }} {{ category.label }}
+          <span class="knowledge-graph-panel__count">{{ categoryCounts[category.key] ?? 0 }}</span>
         </UiButton>
+      </div>
 
-        <!-- 开关标签 -->
-        <UiButton
-          variant="secondary"
-          size="sm"
-          :class="{ 'btn-active': showLabels }"
-          @click="showLabels = !showLabels"
-        >
-          🏷️ 标签
+      <div class="knowledge-graph-panel__controls">
+        <UiInput
+          v-model="searchQuery"
+          class="knowledge-graph-panel__search"
+          type="search"
+          placeholder="搜索实体或别名"
+          aria-label="搜索实体或别名"
+          clearable
+        />
+        <label class="knowledge-graph-panel__field">
+          <span>最小共现</span>
+          <UiNumberField
+            v-model="minWeight"
+            class="knowledge-graph-panel__number"
+            :min="0"
+            :max="100"
+            size="sm"
+            aria-label="最小共现次数"
+          />
+        </label>
+        <UiButton size="sm" variant="secondary" @click="isSimplifiedMode = !isSimplifiedMode">
+          {{ isSimplifiedMode ? '简洁视图' : '完整视图' }}
         </UiButton>
-
-        <!-- 重置与重排 -->
-        <UiButton variant="secondary" size="sm" @click="resetView">
-          🎯 居中
+        <UiButton size="sm" variant="secondary" @click="showLabels = !showLabels">
+          {{ showLabels ? '隐藏标签' : '显示标签' }}
         </UiButton>
-        <UiButton variant="secondary" size="sm" @click="reheatSimulation(1.0)">
-          ⚡ 刷新布局
-        </UiButton>
+        <UiButton size="sm" variant="secondary" @click="resetView">重置视图</UiButton>
       </div>
     </div>
 
-    <!-- 加载中与错误 -->
-    <div v-if="isLoading" class="graph-state-overlay">
-      <div class="spinner"></div>
-      <p>正在解析实体共现拓扑并构建知识图谱...</p>
+    <div class="knowledge-graph-panel__stats">
+      <span>节点 {{ activeNodes.length }}</span>
+      <span>关系 {{ activeEdges.length }}</span>
+      <span>平均度 {{ averageDegree }}</span>
+      <span class="knowledge-graph-panel__hint">滚轮缩放 · 拖拽画布平移 · 拖拽节点 · 点击查看详情</span>
     </div>
 
-    <div v-else-if="errorMessage" class="graph-state-overlay error">
-      <p class="error-msg">⚠️ {{ errorMessage }}</p>
-      <UiButton variant="secondary" size="sm" @click="loadGraphData">重试</UiButton>
-    </div>
+    <div class="knowledge-graph-panel__body">
+      <div class="knowledge-graph-panel__canvas-wrap">
+        <div ref="graphContainerRef" class="knowledge-graph-panel__canvas" />
 
-    <div v-else-if="!activeNodes.length" class="graph-state-overlay empty">
-      <div class="empty-icon">🕸️</div>
-      <h3>暂无关系图谱数据</h3>
-      <p>请先在漫画库中对当前漫画构建知识库，系统将自动对齐实体并提取关系网络。</p>
-    </div>
-
-    <!-- 主画布与右侧抽屉容器 -->
-    <div v-show="activeNodes.length && !isLoading" class="graph-content-area">
-      <!-- SVG 交互力导向画布 -->
-      <div
-        ref="svgContainerRef"
-        class="graph-viewport"
-        :class="{ grabbing: isPanning || isDraggingNode }"
-        @wheel="handleWheel"
-        @mousedown="handleMouseDownBackground"
-      >
-        <svg
-          class="graph-svg"
-          :width="viewportSize.width"
-          :height="viewportSize.height"
-        >
-          <!-- 缩放与平移变换组 (已彻底移除昂贵的 SVG Filter 滤镜，保证 60FPS 极速渲染) -->
-          <g :transform="`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`">
-            <!-- 关系连线层 -->
-            <g class="edges-layer">
-              <line
-                v-for="edge in activeEdges"
-                :key="edge.id"
-                :x1="edge.sourceNode.x"
-                :y1="edge.sourceNode.y"
-                :x2="edge.targetNode.x"
-                :y2="edge.targetNode.y"
-                class="graph-edge"
-                :class="{
-                  highlighted: connectedEdgeIdSet?.has(edge.id) || selectedEdgeId === edge.id,
-                  dimmed: focusTargetId && !connectedEdgeIdSet?.has(edge.id),
-                  selected: selectedEdgeId === edge.id,
-                }"
-                :stroke-width="Math.min(8, Math.max(1.5, Math.log2(edge.weight + 1) * 1.8))"
-                @click="handleEdgeClick(edge, $event)"
-              />
-            </g>
-
-            <!-- 实体节点层 -->
-            <g class="nodes-layer">
-              <g
-                v-for="node in activeNodes"
-                :key="node.id"
-                class="graph-node-group"
-                :class="{
-                  highlighted: connectedNodeIdSet?.has(node.id) || selectedNodeId === node.id,
-                  dimmed: focusTargetId && !connectedNodeIdSet?.has(node.id),
-                  selected: selectedNodeId === node.id,
-                }"
-                :transform="`translate(${node.x}, ${node.y})`"
-                @mouseenter="hoveredNodeId = node.id"
-                @mouseleave="hoveredNodeId = null"
-                @mousedown="handleNodeMouseDown(node, $event)"
-                @click="handleNodeClick(node, $event)"
-              >
-                <!-- 节点外层光晕光圈 (选中或高亮时) -->
-                <circle
-                  v-if="selectedNodeId === node.id || hoveredNodeId === node.id"
-                  class="node-glow-ring"
-                  :r="node.radius + 6"
-                  :stroke="getCategoryColor(node.category)"
-                />
-
-                <!-- 主实体圆点 -->
-                <circle
-                  class="node-circle"
-                  :r="node.radius"
-                  :fill="getCategoryColor(node.category)"
-                />
-
-                <!-- 节点中心图标或缩写 -->
-                <text
-                  class="node-icon-text"
-                  text-anchor="middle"
-                  dominant-baseline="central"
-                  :font-size="Math.max(10, node.radius * 0.75)"
-                >
-                  {{ node.name.charAt(0) }}
-                </text>
-
-                <!-- 节点文本标签 -->
-                <text
-                  v-if="showLabels || selectedNodeId === node.id || hoveredNodeId === node.id"
-                  class="node-label"
-                  text-anchor="middle"
-                  :y="node.radius + 15"
-                >
-                  {{ node.name }}
-                </text>
-              </g>
-            </g>
-          </g>
-        </svg>
-
-        <!-- 画布浮动状态脚标 -->
-        <div class="viewport-badge">
-          <span>节点: {{ activeNodes.length }}</span>
-          <span class="dot">·</span>
-          <span>连线: {{ activeEdges.length }}</span>
-          <span class="dot">·</span>
-          <span>缩放: {{ Math.round(transform.scale * 100) }}%</span>
+        <div v-if="isLoading" class="knowledge-graph-panel__overlay">正在加载关系图谱…</div>
+        <div v-else-if="errorMessage" class="knowledge-graph-panel__overlay knowledge-graph-panel__overlay--error">
+          {{ errorMessage }}
+          <UiButton size="sm" variant="secondary" @click="loadGraphData">重试</UiButton>
+        </div>
+        <div v-else-if="!hasGraph" class="knowledge-graph-panel__overlay">
+          这本书还没有共现关系图谱，请先完成知识库构建。
+        </div>
+        <div v-else-if="activeNodes.length === 0" class="knowledge-graph-panel__overlay">
+          没有匹配当前筛选条件的实体。
         </div>
       </div>
 
-      <!-- 右侧实体/关系详情面板 -->
-      <div class="graph-detail-drawer" :class="{ open: !!selectedNodeDetail || !!selectedEdgeDetail }">
-        <!-- 实体详情展示 -->
-        <div v-if="selectedNodeDetail" class="detail-card">
-          <div class="detail-header">
-            <div class="title-wrap">
-              <span class="category-badge" :style="{ backgroundColor: getCategoryColor(selectedNodeDetail.category) + '22', color: getCategoryColor(selectedNodeDetail.category) }">
-                {{ getCategoryLabel(selectedNodeDetail.category) }}
-              </span>
-              <h3 class="entity-title">{{ selectedNodeDetail.name }}</h3>
-            </div>
-            <UiButton
-              class="close-btn"
-              variant="ghost"
-              size="xs"
-              aria-label="关闭实体详情"
-              @click="selectedNodeId = null"
+      <aside class="knowledge-graph-panel__detail" aria-live="polite">
+        <template v-if="selectedNodeDetail">
+          <h3 class="knowledge-graph-panel__detail-title">
+            {{ selectedNodeDetail.node.name }}
+          </h3>
+          <p class="knowledge-graph-panel__detail-meta">
+            {{ getCategoryLabel(selectedNodeDetail.node.category) }} · 出现
+            {{ selectedNodeDetail.node.frequency ?? 0 }} 页 · 关联 {{ selectedNodeDetail.degree }} 个实体
+          </p>
+          <p v-if="selectedNodeDetail.node.aliases?.length" class="knowledge-graph-panel__detail-text">
+            别名：{{ selectedNodeDetail.node.aliases.join('、') }}
+          </p>
+          <h4 class="knowledge-graph-panel__detail-subtitle">最强关联</h4>
+          <ul class="knowledge-graph-panel__neighbors">
+            <li
+              v-for="item in selectedNodeDetail.topNeighbors"
+              :key="item.node.id"
+              class="knowledge-graph-panel__neighbor"
             >
-              ✕
-            </UiButton>
-          </div>
-
-          <div class="detail-stats">
-            <div class="stat-item">
-              <span class="stat-num">{{ selectedNodeDetail.frequency }}</span>
-              <span class="stat-label">总登场频次</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-num">{{ selectedNodeDetail.pages.length }}</span>
-              <span class="stat-label">覆盖漫画页</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-num">{{ selectedNodeDetail.topNeighbors.length }}</span>
-              <span class="stat-label">关联羁绊数</span>
-            </div>
-          </div>
-
-          <!-- 别名列表 -->
-          <div v-if="selectedNodeDetail.aliases?.length" class="detail-section">
-            <div class="section-title">已知别名 / 称号</div>
-            <div class="tags-list">
-              <span v-for="alias in selectedNodeDetail.aliases" :key="alias" class="entity-tag">
-                {{ alias }}
-              </span>
-            </div>
-          </div>
-
-          <!-- 亲密共现伙伴 -->
-          <div v-if="selectedNodeDetail.topNeighbors.length" class="detail-section">
-            <div class="section-title">核心关联伙伴 (共现频次最高)</div>
-            <div class="neighbors-list">
-              <div
-                v-for="neighbor in selectedNodeDetail.topNeighbors"
-                :key="neighbor.node.id"
-                class="neighbor-row"
-                @click="selectedNodeId = neighbor.node.id"
-              >
-                <div class="neighbor-avatar" :style="{ backgroundColor: getCategoryColor(neighbor.node.category) }">
-                  {{ neighbor.node.name.charAt(0) }}
-                </div>
-                <div class="neighbor-info">
-                  <span class="neighbor-name">{{ neighbor.node.name }}</span>
-                  <span class="neighbor-cat">{{ getCategoryLabel(neighbor.node.category) }}</span>
-                </div>
-                <div class="neighbor-weight">
-                  同登场 <strong>{{ neighbor.weight }}</strong> 次
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 登场页码汇总 -->
-          <div v-if="selectedNodeDetail.pages.length" class="detail-section">
-            <div class="section-title">出场页码 (前 30 页)</div>
-            <div class="pages-chips">
-              <span v-for="page in selectedNodeDetail.pages.slice(0, 30)" :key="page" class="page-chip">
-                第 {{ page }} 页
-              </span>
-              <span v-if="selectedNodeDetail.pages.length > 30" class="page-more">
-                +{{ selectedNodeDetail.pages.length - 30 }} 页
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 连线详情展示 -->
-        <div v-else-if="selectedEdgeDetail" class="detail-card">
-          <div class="detail-header">
-            <div class="title-wrap">
-              <span class="category-badge link-badge">🕸️ 羁绊关系</span>
-              <h3 class="entity-title">
-                {{ selectedEdgeDetail.sourceNode.name }} ⟷ {{ selectedEdgeDetail.targetNode.name }}
-              </h3>
-            </div>
-            <UiButton
-              class="close-btn"
-              variant="ghost"
-              size="xs"
-              aria-label="关闭关系详情"
-              @click="selectedEdgeId = null"
-            >
-              ✕
-            </UiButton>
-          </div>
-
-          <div class="relation-summary-box">
-            <div class="co-occur-stat">
-              共同在漫画中登场 <strong class="highlight-count">{{ selectedEdgeDetail.weight }}</strong> 页
-            </div>
-            <div class="relation-partners">
-              <div class="partner-card" @click="selectedNodeId = selectedEdgeDetail.sourceNode.id">
-                <span class="partner-role" :style="{ color: getCategoryColor(selectedEdgeDetail.sourceNode.category) }">
-                  {{ getCategoryLabel(selectedEdgeDetail.sourceNode.category) }}
-                </span>
-                <span class="partner-name">{{ selectedEdgeDetail.sourceNode.name }}</span>
-              </div>
-              <span class="partner-vs">🤝</span>
-              <div class="partner-card" @click="selectedNodeId = selectedEdgeDetail.targetNode.id">
-                <span class="partner-role" :style="{ color: getCategoryColor(selectedEdgeDetail.targetNode.category) }">
-                  {{ getCategoryLabel(selectedEdgeDetail.targetNode.category) }}
-                </span>
-                <span class="partner-name">{{ selectedEdgeDetail.targetNode.name }}</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- 共同登场页码 -->
-          <div class="detail-section">
-            <div class="section-title">共同出场页码 ({{ selectedEdgeDetail.common_pages.length }})</div>
-            <div class="pages-chips">
-              <span v-for="page in selectedEdgeDetail.common_pages" :key="page" class="page-chip common">
-                第 {{ page }} 页
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 空提示 -->
-        <div v-else class="detail-empty">
-          <div class="hint-icon">👆</div>
-          <p class="hint-title">交互指引</p>
-          <ul class="hint-list">
-            <li><strong>滚轮缩放</strong>：平滑放大或缩小图谱</li>
-            <li><strong>拖动画布</strong>：按住背景拖拽漫游视野</li>
-            <li><strong>拖动节点</strong>：按住圆圈拖拽调整局部拓扑</li>
-            <li><strong>悬浮高亮</strong>：查看该实体直接一度关联</li>
-            <li><strong>点击节点/连线</strong>：查看详尽登场与共现伙伴数据</li>
+              <span class="knowledge-graph-panel__neighbor-name">{{ item.node.name }}</span>
+              <span class="knowledge-graph-panel__neighbor-weight">共现 {{ item.weight }} 次</span>
+            </li>
           </ul>
-        </div>
-      </div>
+        </template>
+
+        <template v-else-if="selectedEdgeDetail">
+          <h3 class="knowledge-graph-panel__detail-title">关系详情</h3>
+          <p class="knowledge-graph-panel__detail-text">
+            {{ selectedEdgeDetail.source?.name ?? '未知' }} ↔
+            {{ selectedEdgeDetail.target?.name ?? '未知' }}
+          </p>
+          <p class="knowledge-graph-panel__detail-meta">
+            共现 {{ selectedEdgeDetail.edge.weight ?? 0 }} 次
+            <span v-if="selectedEdgeDetail.edge.common_pages?.length">
+              · 页码 {{ selectedEdgeDetail.edge.common_pages.slice(0, 20).join('、') }}
+            </span>
+          </p>
+        </template>
+
+        <p v-else class="knowledge-graph-panel__detail-empty">
+          点击一个实体或一条关系，查看它的共现邻居与页码证据。
+        </p>
+      </aside>
     </div>
   </div>
 </template>
 
 <style scoped>
 .knowledge-graph-panel {
-  --graph-panel-surface: #1e1b2e;
-  --graph-panel-stroke-whisper: rgba(255, 255, 255, 0.08);
-  --graph-panel-surface-indigo: #262338;
-  --graph-panel-stroke-whisper-white: rgba(255, 255, 255, 0.1);
-  --graph-panel-surface-faint: rgba(255, 255, 255, 0.04);
-  --graph-panel-text: #94a3b8;
-  --graph-panel-text-white: #fff;
-  --graph-panel-shadow-medium: rgba(139, 92, 246, 0.35);
-  --graph-panel-surface-light: rgba(0, 0, 0, 0.25);
-  --graph-panel-surface-soft: rgba(0, 0, 0, 0.2);
-  --graph-panel-surface-soft-violet: rgba(139, 92, 246, 0.2);
-  --graph-panel-surface-faint-violet: rgba(139, 92, 246, 0.05);
-  --graph-panel-surface-indigo-deep: #2d2847;
-  --graph-panel-stroke-soft: rgba(255, 255, 255, 0.16);
-  --graph-panel-stroke: #c084fc;
-  --graph-panel-stroke-yellow: #fbbf24;
-  --graph-panel-stroke-heavy: rgba(255, 255, 255, 0.85);
-  --graph-panel-fill: #ffffff;
-  --graph-panel-fill-blue: #f1f5f9;
-  --graph-panel-surface-heavy: rgba(15, 12, 29, 0.88);
-  --graph-panel-surface-indigo-deep-alt2: #231f38;
-  --graph-panel-surface-soft-yellow: rgba(251, 191, 36, 0.15);
-  --graph-panel-surface-faint-white: rgba(255, 255, 255, 0.06);
-  --graph-panel-text-blue: #cbd5e1;
-  --graph-panel-surface-faint-white-bright: rgba(255, 255, 255, 0.03);
-  --graph-panel-stroke-faint: rgba(255, 255, 255, 0.05);
-  --graph-panel-surface-soft-violet-mid: rgba(139, 92, 246, 0.15);
-  --graph-panel-stroke-light: rgba(139, 92, 246, 0.3);
-  --graph-panel-text-violet: #d8b4fe;
-  --graph-panel-text-light: rgba(251, 191, 36, 0.3);
-  --graph-panel-text-yellow: #fde047;
-  --graph-panel-text-blue-bright: #e2e8f0;
-  --graph-panel-text-red: #ef4444;
-
   display: flex;
   flex-direction: column;
-  width: 100%;
-  height: 100%;
-  min-height: 640px;
-  background: var(--color-surface, var(--graph-panel-surface));
-  border-radius: var(--radius-lg, 12px);
-  border: 1px solid var(--color-border, var(--graph-panel-stroke-whisper));
-  overflow: hidden;
-  position: relative;
+  gap: 12px;
+  min-height: 560px;
 }
 
-/* 顶部工具栏 */
-.graph-toolbar {
+.knowledge-graph-panel__toolbar {
   display: flex;
   flex-wrap: wrap;
+  gap: 12px;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 18px;
-  background: var(--color-surface-hover, var(--graph-panel-surface-indigo));
-  border-bottom: 1px solid var(--color-border, var(--graph-panel-stroke-whisper));
-  z-index: var(--z-local-toolbar);
 }
 
-.category-chips {
+.knowledge-graph-panel__categories,
+.knowledge-graph-panel__controls {
   display: flex;
   flex-wrap: wrap;
+  gap: 8px;
   align-items: center;
-  gap: 6px;
 }
 
-.category-chip {
+.knowledge-graph-panel__count {
+  margin-left: 4px;
+  font-size: 11px;
+  opacity: 0.72;
+}
+
+.knowledge-graph-panel__search {
+  width: 200px;
+}
+
+.knowledge-graph-panel__field {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  border-radius: 9999px;
-  border: 1px solid var(--color-border, var(--graph-panel-stroke-whisper-white));
-  background: var(--graph-panel-surface-faint);
-  color: var(--color-text-secondary, var(--graph-panel-text));
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.15s ease;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }
 
-.category-chip:hover {
-  background: var(--graph-panel-stroke-whisper);
-  color: var(--graph-panel-text-white);
+.knowledge-graph-panel__number {
+  width: 84px;
 }
 
-.category-chip.active {
-  background: var(--color-brand-primary);
-  border-color: var(--color-brand-primary);
-  color: var(--graph-panel-text-white);
-  font-weight: 500;
-  box-shadow: 0 0 12px var(--graph-panel-shadow-medium);
-}
-
-.chip-count {
-  font-size: 11px;
-  padding: 1px 5px;
-  border-radius: 9999px;
-  background: var(--graph-panel-surface-light);
-}
-
-.toolbar-actions {
+.knowledge-graph-panel__stats {
   display: flex;
-  align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
-}
-
-.weight-filter {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--graph-panel-surface-soft);
-  padding: 4px 10px;
-  border-radius: var(--radius-md, 8px);
-  border: 1px solid var(--color-border, var(--graph-panel-stroke-whisper));
-}
-
-.weight-label {
+  gap: 16px;
   font-size: 12px;
-  color: var(--color-text-secondary, var(--graph-panel-text));
-  white-space: nowrap;
+  color: var(--color-text-secondary);
 }
 
-.weight-slider {
-  width: 80px;
-  accent-color: var(--color-brand-primary);
-  cursor: pointer;
+.knowledge-graph-panel__hint {
+  margin-left: auto;
 }
 
-.graph-search {
-  position: relative;
+.knowledge-graph-panel__body {
   display: flex;
-  align-items: center;
-}
-
-.search-input {
-  width: 140px;
-  padding: 4px 26px 4px 10px;
-  border-radius: var(--radius-md, 8px);
-  border: 1px solid var(--color-border, var(--graph-panel-stroke-whisper-white));
-  background: var(--graph-panel-surface-light);
-  color: var(--graph-panel-text-white);
-  font-size: 12px;
-  transition: all 0.2s;
-}
-
-.search-input:focus {
-  outline: none;
-  width: 180px;
-  border-color: var(--color-brand-primary);
-}
-
-.clear-btn {
-  position: absolute;
-  right: 6px;
-  background: transparent;
-  border: none;
-  color: var(--graph-panel-text);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.toolbar-actions .btn-active {
-  background: var(--graph-panel-surface-soft-violet);
-  border-color: var(--color-brand-primary);
-  color: var(--graph-panel-text-white);
-}
-
-/* 主画布与内容区 */
-.graph-content-area {
-  display: flex;
+  gap: 12px;
   flex: 1;
+  min-height: 0;
+}
+
+.knowledge-graph-panel__canvas-wrap {
   position: relative;
+  flex: 1;
+  min-height: 520px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background-color: var(--color-surface);
   overflow: hidden;
 }
 
-.graph-viewport {
-  flex: 1;
-  height: 100%;
-  position: relative;
-  cursor: grab;
-  background: radial-gradient(circle at center, var(--graph-panel-surface-faint-violet) 0%, transparent 70%),
-              radial-gradient(var(--graph-panel-surface-indigo-deep) 1px, transparent 1px);
-  background-size: 100% 100%, 24px 24px;
-}
-
-.graph-viewport.grabbing {
-  cursor: grabbing;
-}
-
-.graph-svg {
+.knowledge-graph-panel__canvas {
   width: 100%;
   height: 100%;
-  display: block;
+  min-height: 520px;
 }
 
-/* 连线样式 (纯净矢量绘制，零昂贵滤镜，极致丝滑) */
-.graph-edge {
-  stroke: var(--graph-panel-stroke-soft);
-  stroke-linecap: round;
-  cursor: pointer;
-  transition: stroke 0.15s, stroke-width 0.15s, opacity 0.15s;
-}
-
-.graph-edge:hover {
-  stroke: var(--color-brand-primary);
-  stroke-width: 3.5px;
-}
-
-.graph-edge.highlighted {
-  stroke: var(--graph-panel-stroke);
-  stroke-opacity: 0.95;
-  stroke-width: 3px;
-}
-
-.graph-edge.selected {
-  stroke: var(--graph-panel-stroke-yellow);
-  stroke-width: 4px;
-}
-
-.graph-edge.dimmed {
-  opacity: 0.05;
-}
-
-/* 节点样式 (简约扁平现代设计) */
-.graph-node-group {
-  cursor: pointer;
-  transition: opacity 0.15s;
-}
-
-.graph-node-group.dimmed {
-  opacity: 0.1;
-}
-
-.node-glow-ring {
-  fill: none;
-  stroke-width: 2px;
-  stroke-dasharray: 4 3;
-}
-
-.node-circle {
-  stroke: var(--graph-panel-stroke-heavy);
-  stroke-width: 1.5px;
-  transition: stroke 0.15s, stroke-width 0.15s;
-}
-
-.graph-node-group:hover .node-circle,
-.graph-node-group.selected .node-circle {
-  stroke: var(--graph-panel-stroke-yellow);
-  stroke-width: 3px;
-}
-
-.node-icon-text {
-  fill: var(--graph-panel-fill);
-  font-weight: 700;
-  pointer-events: none;
-  user-select: none;
-}
-
-.node-label {
-  fill: var(--color-text, var(--graph-panel-fill-blue));
-  font-size: 11.5px;
-  font-weight: 500;
-  pointer-events: none;
-  user-select: none;
-}
-
-/* 画布状态角标 */
-.viewport-badge {
+.knowledge-graph-panel__overlay {
   position: absolute;
-  bottom: 14px;
-  left: 14px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 9999px;
-  background: var(--graph-panel-surface-heavy);
-  border: 1px solid var(--graph-panel-stroke-whisper-white);
-  font-size: 11.5px;
-  color: var(--color-text-secondary, var(--graph-panel-text));
-  pointer-events: none;
-  user-select: none;
-}
-
-.viewport-badge .dot {
-  opacity: 0.4;
-}
-
-/* 右侧详情抽屉 */
-.graph-detail-drawer {
-  width: 340px;
-  height: 100%;
-  background: var(--color-surface-hover, var(--graph-panel-surface-indigo-deep-alt2));
-  border-left: 1px solid var(--color-border, var(--graph-panel-stroke-whisper));
+  inset: 0;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
-  z-index: var(--z-local);
-}
-
-.detail-card {
-  padding: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.detail-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
   gap: 10px;
-}
-
-.category-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 9999px;
-  font-size: 11px;
-  font-weight: 600;
-  margin-bottom: 6px;
-}
-
-.category-badge.link-badge {
-  background: var(--graph-panel-surface-soft-yellow);
-  color: var(--graph-panel-stroke-yellow);
-}
-
-.entity-title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--graph-panel-text-white);
-  line-height: 1.3;
-}
-
-.close-btn {
-  background: transparent;
-  border: none;
-  color: var(--graph-panel-text);
-  font-size: 14px;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-}
-
-.close-btn:hover {
-  background: var(--graph-panel-stroke-whisper-white);
-  color: var(--graph-panel-text-white);
-}
-
-.detail-stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  background: var(--graph-panel-surface-soft);
-  padding: 10px;
-  border-radius: var(--radius-md, 8px);
-}
-
-.stat-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-.stat-num {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--graph-panel-text-white);
-}
-
-.stat-label {
-  font-size: 11px;
-  color: var(--graph-panel-text);
-  margin-top: 2px;
-}
-
-.detail-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.section-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--graph-panel-text);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.tags-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.entity-tag {
-  padding: 3px 8px;
-  border-radius: 4px;
-  background: var(--graph-panel-surface-faint-white);
-  font-size: 12px;
-  color: var(--graph-panel-text-blue);
-}
-
-.neighbors-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.neighbor-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: var(--graph-panel-surface-faint-white-bright);
-  border: 1px solid var(--graph-panel-stroke-faint);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.neighbor-row:hover {
-  background: var(--graph-panel-stroke-whisper);
-  border-color: var(--color-brand-primary);
-}
-
-.neighbor-avatar {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--graph-panel-text-white);
-}
-
-.neighbor-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.neighbor-name {
-  font-size: 13px;
-  color: var(--graph-panel-text-white);
-  font-weight: 500;
-}
-
-.neighbor-cat {
-  font-size: 10px;
-  color: var(--graph-panel-text);
-}
-
-.neighbor-weight {
-  font-size: 11px;
-  color: var(--graph-panel-text-blue);
-}
-
-.neighbor-weight strong {
-  color: var(--graph-panel-stroke-yellow);
-}
-
-.pages-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  max-height: 140px;
-  overflow-y: auto;
-}
-
-.page-chip {
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--graph-panel-surface-soft-violet-mid);
-  border: 1px solid var(--graph-panel-stroke-light);
-  color: var(--graph-panel-text-violet);
-  font-size: 11px;
-}
-
-.page-chip.common {
-  background: var(--graph-panel-surface-soft-yellow);
-  border-color: var(--graph-panel-text-light);
-  color: var(--graph-panel-text-yellow);
-}
-
-.page-more {
-  font-size: 11px;
-  color: var(--graph-panel-text);
-  align-self: center;
-}
-
-/* 关系总结框 */
-.relation-summary-box {
-  background: var(--graph-panel-surface-light);
-  border: 1px solid var(--graph-panel-stroke-whisper);
-  border-radius: var(--radius-md, 8px);
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.co-occur-stat {
-  font-size: 13px;
-  color: var(--graph-panel-text-blue);
+  padding: 24px;
   text-align: center;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  background-color: var(--color-surface);
 }
 
-.highlight-count {
-  font-size: 16px;
-  color: var(--graph-panel-stroke-yellow);
+.knowledge-graph-panel__overlay--error {
+  color: var(--color-text-primary);
 }
 
-.relation-partners {
+.knowledge-graph-panel__detail {
+  width: 268px;
+  flex: none;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background-color: var(--color-surface);
+  overflow-y: auto;
+  max-height: 620px;
+}
+
+.knowledge-graph-panel__detail-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--color-text-primary);
+}
+
+.knowledge-graph-panel__detail-subtitle {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.knowledge-graph-panel__detail-meta,
+.knowledge-graph-panel__detail-text,
+.knowledge-graph-panel__detail-empty {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.knowledge-graph-panel__neighbors {
+  margin: 0;
+  padding: 0;
+  list-style: none;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.knowledge-graph-panel__neighbor {
+  display: flex;
   justify-content: space-between;
   gap: 8px;
-}
-
-.partner-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 8px;
-  background: var(--graph-panel-surface-faint);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.partner-card:hover {
-  background: var(--graph-panel-stroke-whisper);
-}
-
-.partner-role {
-  font-size: 10px;
-  font-weight: 600;
-  margin-bottom: 2px;
-}
-
-.partner-name {
   font-size: 12px;
-  font-weight: 600;
-  color: var(--graph-panel-text-white);
-  text-align: center;
+  color: var(--color-text-primary);
 }
 
-.partner-vs {
-  font-size: 16px;
+.knowledge-graph-panel__neighbor-weight {
+  color: var(--color-text-secondary);
 }
 
-/* 右侧空白状态引导 */
-.detail-empty {
-  padding: 24px 18px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  color: var(--graph-panel-text);
-  margin: auto 0;
-}
+@media (--breakpoint-xl-down) {
+  .knowledge-graph-panel__body {
+    flex-direction: column;
+  }
 
-.hint-icon {
-  font-size: 32px;
-  margin-bottom: 8px;
-}
-
-.hint-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--graph-panel-text-white);
-  margin-bottom: 12px;
-}
-
-.hint-list {
-  text-align: left;
-  font-size: 12px;
-  line-height: 1.8;
-  padding-left: 18px;
-  margin: 0;
-  color: var(--graph-panel-text);
-}
-
-.hint-list strong {
-  color: var(--graph-panel-text-blue-bright);
-}
-
-/* 覆盖层状态 */
-.graph-state-overlay {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 40px;
-  color: var(--graph-panel-text);
-}
-
-.graph-state-overlay.empty .empty-icon {
-  font-size: 48px;
-}
-
-.graph-state-overlay.empty h3 {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--graph-panel-text-white);
-  margin: 0;
-}
-
-.graph-state-overlay.error .error-msg {
-  color: var(--graph-panel-text-red);
-}
-
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--graph-panel-surface-soft-violet);
-  border-top-color: var(--color-brand-primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
+  .knowledge-graph-panel__detail {
+    width: auto;
+    max-height: none;
+  }
 }
 </style>

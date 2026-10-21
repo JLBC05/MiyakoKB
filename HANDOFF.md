@@ -86,6 +86,13 @@
 - `docs/assets/architecture.svg`（246,894 B，内联 SVG + 明暗主题）与 `docs/assets/architecture.png`（2199×1613，170,567 B）由 Archify 技能生成：覆盖启动器 → API/Worker 双进程 → SQLite 与 `objects/`/`chroma/` 存储 → 六阶段知识流水线 → 前端页面；`validate` 与 `visual-check` 均通过（3 处连线路由冲突已改为共用走廊）。
 - `.gitignore` 放行 `docs/assets/*.svg|*.png`（原本 `docs/*` 与图片规则会吞掉），`.archify/` 工作目录不入库。
 - 验证：`vitest` **89 files / 647 tests** 全绿、`vue-tsc -b` 0、eslint 0 errors / 20 warnings、stylelint 0、`check-ui-architecture.mjs` 与 `--audit` 0、`vite build` 成功（`index.DM_Ackj5.js`）；实栈 `http://127.0.0.1:5000/` 已服务新 bundle，`/pic/miyako-logo.png` 200（36,823 B）。提交 `bc9af19` 已 push。
+### 2.10 导入可配置化与蒸馏产物扩展（2026-10-21，用户 `m20522` 的 7 项）
+- **Venera 数据目录可设置 + 列表出封面**：新增设置域 `manga_import`（唯一键 `veneraBaseDir`，空串＝系统默认 `%APPDATA%\com.github.wgh136\venera`）；用户填 Venera 根目录或它的 `local` 子目录都接受，目录越界（`../../outside`）被 `resolve().relative_to()` 拦下。`GET /api/v2/import/venera/library` 增 `baseDir`/`baseDirSource`/`dbPath`，每条漫画增 `hasCover`；新增 `GET /api/v2/import/venera/cover?comicId=`（`send_file(conditional=True)` + `Cache-Control: private, max-age=3600`，缺参 400 / comic 或封面不存在 404）。前端导入弹窗顶部是「Venera 数据目录 + 保存并使用 + 来源标记（自定义目录/默认目录）」，卡片有封面时渲染 `<img loading="lazy">`。见报告发现 #45；新增 `tests_backend/v2/test_manga_import_venera.py` **7 passed**。
+- **蒸馏产物扩为三形态**：`skill`（Markdown 档案 + 5 参考文件）、`card`（SillyTavern V2/V3 角色卡 JSON）、`lorebook`（世界书条目：`keys`/`content`/`insertion_order`）。三者共享「页级证据 + 原画观察」，由同一个服务按 `kind` 分派、各自单飞（`_task_key(book_id, kind, entity_id)`），产物仍写 `analysis_artifacts`（`kind="character_card"` / `"character_lorebook"`，`template=<entityId>`，revision 自增）。归档统一成 `build_skill_archive(document, kind)`（`<书名>-<角色>-skill|card|worldbook.zip`，非法字符替换 + `filename*=UTF-8''`）。导航项「角色 Skill」改名「蒸馏角色」。见报告发现 #46、决策 23。
+- **关系图谱改用 AntV G6 5.1.1**：`new Graph({autoResize, layout: {type:'force', preventOverlap, linkDistance:110, nodeStrength:-260, alphaDecay:0.06}, behaviors: ['zoom-canvas','drag-canvas','drag-element','hover-activate']})`，保留 `node:click` / `edge:click` 选中联动与 `renderSequence` 竞态保护。见决策 24。
+- **实体浏览加搜索**（名称 + 别名、去空白小写归一、清空按钮、无命中态）与**时间线预览改大图**（`BaseModal` 内容 90vw、`img` `max-height: 85vh; object-fit: contain`）。
+- **门禁**：后端全量 **809 passed / 2 warnings / 42 subtests**（另 1 条 `test_real_launcher_confirms_candidate_and_cleans_backup` 在全量并发下 30s 健康检查超时，单跑 **17.12s 通过**，属负载相关的抖动）；前端 `vitest` **89 files / 647 tests**、`vue-tsc -b` 0、`eslint` 0 errors / 71 warnings、`stylelint` 0、`check-ui-architecture.mjs` 与 `--audit` 0、`vite build` 成功。
+- **第 7 项（系统设置可优化点）只给方案，未动代码**：方案要点＝①凭据回传改掩码（`GET /settings` 现在明文回传 `credentials[].secret.api_key`）；②自动保存与「立即保存全部更改」双写路径收敛为单一提交；③四个模型通道（VLM/Chat/Embedding/Reranker）合并成一张「通道表」，角色级覆盖而非四份重复表单；④补「恢复默认」与整库导入导出（目前只有提示词有）；⑤`vlm` 连接测试对自定义供应商误报（复用 `vision_ocr` 能力位）；⑥把 `analyzeConcurrency`/`imageMaxSize`/`RPM` 归入「性能与成本」分组并给等价换算；⑦加设置项搜索与 422 校验的就地提示。
 ## 3. 当前状态（精确到下一步）
 - [x] 验收点 1：漫画导入（Venera + 本地 ZIP/目录）及进度条实时反馈。
 - [x] 验收点 2：书架卡片精准展示构建状态（已构建/部分构建/未构建）。
@@ -96,6 +103,7 @@
 - [x] 角色 Skill 蒸馏（2026-10-20，用户要求「产品化 + 入口放在智能问答右边 + 必须带人格层」）：后端 `src/backend_v2/insight/character_skill.py` + 4 条路由、前端 `/character-skills` 页面与导航项、契约 3 条路径、`tests_backend/v2/test_character_skill.py` 4 条用例，实栈用呪術廻戦 虎杖悠仁跑通（85s，156 页/10 章/15 张原画，人格层与引用全绿）。见 §2.8、决策 21、坑 29、报告发现 #42。
 - [x] 实体对齐流程重写（2026-10-20，用户 `m18960` 给出规格）：候选图 + 单请求多边 + 结构性输出，请求数 705 → 260，串行 ambiguous 仲裁删除；新模块 `src/backend_v2/insight/entity_alignment.py`、新单测 16 条、后端全量 794 passed。见决策 22、坑 30、报告发现 #43。
 - [x] 发布文档与素材（2026-10-21）：README 重写、导航栏换品牌 logo、Archify 架构图入库（`docs/assets/architecture.svg|.png`）。见 §2.9、坑 32；提交 `bc9af19`。
+- [x] 导入可配置化与蒸馏产物扩展（2026-10-21，用户 `m20522` 的 1-6 项）：Venera 目录可设置 + 封面、图谱改 AntV G6、实体浏览搜索、时间线预览大图、蒸馏角色三形态（Skill/角色卡/世界书）；第 7 项（系统设置优化）**只给方案**。见 §2.10、决策 23/24、坑 33/34、报告发现 #45-#47。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；**2026-10-19 追加：全书构建 69% 墙钟耗在逐对裁决的问题已定案并落地**（报告发现 #34 / 决策 14 / 坑 19）：超集预取 + 批量裁决（30 对/批、3 并发）、对齐拆为独立步骤 `insight_stage_entity_alignment`、每批进度写用户日志；
@@ -240,6 +248,17 @@
 
 ---
 
+- **决策 23：蒸馏产物按「下游消费方」定义形态，而不是按生成流程定义**（2026-10-21，用户 `m20522` 第 6 项）
+  - *背景*：首版只产出面向 Agent/人读的 Markdown Skill；用户要喂给 SillyTavern 这类聊天前端时还需要角色卡（V2/V3 JSON）与世界书（关键词触发的设定条目），而这三者共享同一份证据（页级摘要 + 事件 + 原画观察）。
+  - *做法*：在 `src/backend_v2/insight/character_skill.py` 内按 `kind`（`skill`/`card`/`lorebook`）分派——共用 `CharacterSkillRepository.page_evidence` 与视觉选页/观察阶段，只在「合成提示词 + 产物文件 + payload 形状」分叉；三种 kind 各自单飞（`_task_key(book_id, kind, entity_id)` 去重），产物写同一 `analysis_artifacts`（`kind="character_card"`/`"character_lorebook"`，`template=<entityId>`，revision 自增，`uq_analysis_artifacts_active` 保证同键只有一行活跃）；归档复用 `build_skill_archive(document, kind)`。
+  - *理由*：若为卡片/世界书各写一套服务，「取证据 → 选页 → 看图 → 闸门」四段会立刻分叉，改一处漏三处；用 `kind` 分发把差异压到提示词与渲染层，路由也只多 3 条列表/状态/归档。
+  - *验证*：`tests_backend/v2/test_distill_outputs.py`（3 passed，卡片 JSON 必填键、世界书条目 `keys`/`content` 结构与 `insertion_order` 单调）与 `tests_backend/v2/test_distill_kinds_routes.py`（2 passed，`kind` 参数分派、未知 kind 422）；归档文件名对 `skill`/`card`/`worldbook` 三种后缀与缺 `characterName` 时的 `entityId` 兜底都有断言（`test_character_skill.py` 8 passed）。
+  - *未做（建议）*：卡片里的 `character_book` 目前只放摘要，可改为引用 `lorebook` 产物；世界书条目还没有「触发位置（before/after char）」的界面可调项。
+- **决策 24：关系图谱渲染从自研力导向换成 AntV G6**（2026-10-21，用户 `m20522` 第 3 项）
+  - *背景*：自研 canvas 力导向（坑 2）在 800+ 节点时靠手工停机阈值压 CPU，交互只有缩放/拖拽；用户要求「用 AntV G6 做」。
+  - *做法*：`vue-frontend/src/components/insight/KnowledgeGraphPanel.vue` 引入 `@antv/g6` 5.1.1，`new Graph({container, autoResize, background:'transparent', padding:24, data, node/edge 样式, layout:{type:'force', preventOverlap:true, nodeSize:40, linkDistance:110, nodeStrength:-260, edgeStrength:0.4, collideStrength:0.9, alphaDecay:0.06}, behaviors:['zoom-canvas','drag-canvas','drag-element','hover-activate']})`；`node:click`/`edge:click` 仍写 `selectedNodeId`/`selectedEdgeId`，重建前用 `renderSequence` 丢弃过期渲染，卸载时 `graph.destroy()`。
+  - *代价*：新增一个 1 MB 级依赖，`vite build` 出现 chunk 体积警告（不影响产物可用性）；G6 5.x 的 `Graph` 生命周期要手动 `destroy()`，否则切换书籍会泄漏 canvas。
+  - *验证*：`vitest` 全绿（图谱面板相关用例通过）、`vite build` 成功、实栈图谱页可缩放/拖拽/hover 高亮、点节点与点边都能出侧栏。
 ## 5. 踩过的坑 / 阻塞
 - **坑 1：Windows SQLite 嵌套锁（Database is locked）**
   - *原因*：在写数据库事务内部进行物理磁盘图片发布时，如果抛出异常或并发读写，容易造成 SQLite 长期死锁。
@@ -396,6 +415,16 @@
   - *根因*：`public/` 下的资源只在运行期按 URL 提供，而静态 `src` 会被 Vue SFC 编译器的 `transformAssetUrls` 改写成 `import _imports_0 from '/pic/miyako-logo.png'`；jsdom 里该路径被解析成 `file:///pic/...`，Vite 再去当文件读就抛错。
   - *解法*：与 `AuthView.vue` 一致，写成 `const logoUrl = '/pic/miyako-logo.png'` + `:src="logoUrl"`（动态绑定不参与资源改写）。
   - *教训*：`public/` 资源永远走绑定；只有 `src/assets/` 里的图才适合静态 `src`（那种情况才是真需要打包哈希）。
+- **坑 33：`node_modules` 被中断的 `npm install` 清空，且 `esbuild` 的 postinstall 需要 `node` 在 PATH 上**（2026-10-21）
+  - *现象*：为装 `@antv/g6` 跑的 `npm install` 被 kill 后，`vitest`/`vue-tsc`/`eslint`/`stylelint`/`openapi-typescript` 全部 MISSING（只剩半个 `node_modules`），全量门禁全崩。
+  - *根因*：①npm 在写 `node_modules` 前会先清目录，中断就留下半装状态；②`esbuild` 的 postinstall 执行 `cmd /c node install.js`，本机 `node` 不在 PATH → `'node' is not recognized`；③`registry.npmjs.org` 直连超时（`EIDLETIMEOUT`），要走 `https://registry.npmmirror.com`。
+  - *解法*：`$env:PATH="<node-bin-dir>;$env:PATH"` 后用 npm-cli 显式安装 `npm install --no-audit --no-fund --loglevel=error --registry=https://registry.npmmirror.com --fetch-timeout=180000 --fetch-retries=5`；本机无 `npm` 二进制，用自举的 `temp/npm-boot/package/bin/npm-cli.js` 配 `node.exe` 跑。恢复后版本：vitest 4.1.10、vue-tsc 3.3.9、eslint 9.39.5、stylelint 17.14.1、openapi-typescript 7.13.0、@antv/g6 5.1.1、vite 7.3.6。
+- **坑 34：`esbuild` 报 `Access is denied` 是 `TEMP` 不可写，不是构建配置问题**（2026-10-21）
+  - *现象*：`vite build` 在 `rendering chunks` 阶段失败，报 `[vite:esbuild-transpile] remove C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\esbuild-…: Access is denied.`。
+  - *解法*：把 `TEMP`/`TMP`/`TMPDIR` 指到项目内可写目录（如 `Saber-Translator-main/temp/vite-tmp`）再 build；与 PyInstaller probe 需要可写临时目录是同一类环境坑（坑 15）。
+- **坑 35：Vue 模板里两块并列区域不能共用一条 `v-if`/`v-else` 链**（2026-10-21，报告发现 #47）
+  - *现象*：给角色 Skill 页插「世界书」区块时写成 `<section v-else-if="characters.length > 0">` 插在详情区 `<section v-else>` 之前 → 详情区变成世界书的 else 分支，页面只剩标题与世界书，而 `vue-tsc`/`eslint` 全绿，只有组件测试断言正文文案时才暴露。
+  - *解法*：两块都要独立显示就各自写独立 `v-if`，或用 `<template v-else>` 包住多块；`v-else` 必须紧跟同级 `v-if`/`v-else-if`。教训：类型系统看不见模板条件链，加并列区块时必须有组件测试同时断言两边内容。
 ## 6. 新会话先读
 
 1. `AGENTS.md`：核心数据库脚本防手写约束与行为规范。
@@ -404,7 +433,7 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#44、裁决候选对离线回放与 Top-K 收窄标定数据、附录里的分析脚本清单）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#47、裁决候选对离线回放与 Top-K 收窄标定数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
 9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）、`tmp_stage_durations.py`（按 `job_events` 配对统计各步骤耗时）、`tmp_narrow_topk.py`（Top-K 收窄的对数/召回曲线，决策 16 依据）、`tmp_narrow_probe.py` / `tmp_narrow_recall_prod.py`（直接调生产函数在线上库复算收窄效果）、`tmp_audit_db_tables.py`（表三维对照：metadata 定义 vs 代码引用 vs 线上行数）、`tmp_audit_db_clusters.py`（按域打印 plugin / operations / studio 等簇的 metadata 覆盖与行数）、`tmp_qa_probe_artifact.py`（某书 artifact 版本表 + 每章已发布页覆盖）、`tmp_vec_probe.py`（`vector_generations` 各代状态/覆盖/active 与 Chroma 集合散列前缀）、`tmp_fp_probe.py`（快照指纹 vs 活动代指纹 + `qa_status`）、`tmp_chroma_embed_probe.py`（直接读 Chroma 集合的向量范数与两两 cos，区分「嵌入退化」与「索引读失败」）、`tmp_qa_repro.py`（复现某问题的 QA SSE，落盘 `tmp_qa_repro_sse.txt`）。
 

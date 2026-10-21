@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { useInsightStore } from '@/stores/insightStore'
 import { listInsightEntities, type V2InsightEntity } from '@/api/v2/insight'
 import UiButton from '@/components/ui/UiButton.vue'
+import UiInput from '@/components/ui/UiInput.vue'
 
 const route = useRoute()
 const insightStore = useInsightStore()
@@ -12,6 +13,7 @@ const entities = ref<V2InsightEntity[]>([])
 const isLoading = ref(false)
 const errorMessage = ref('')
 const selectedCategory = ref<string>('all')
+const searchQuery = ref('')
 const expandedEntityIds = ref<Set<string>>(new Set())
 
 const categories = [
@@ -38,11 +40,20 @@ const categoryCountMap = computed(() => {
   return map
 })
 
+const normalizedQuery = computed(() => searchQuery.value.trim().toLowerCase())
+
 const filteredEntities = computed(() => {
-  if (selectedCategory.value === 'all') {
-    return entities.value
-  }
-  return entities.value.filter(ent => ent.category === selectedCategory.value)
+  const query = normalizedQuery.value
+  return entities.value.filter(ent => {
+    if (selectedCategory.value !== 'all' && ent.category !== selectedCategory.value) {
+      return false
+    }
+    if (!query) return true
+    const haystack = [ent.canonical_name, ...(ent.aliases ?? [])]
+      .map(value => String(value ?? '').toLowerCase())
+      .join('\n')
+    return haystack.includes(query)
+  })
 })
 
 const groupedEntities = computed(() => {
@@ -60,7 +71,7 @@ const groupedEntities = computed(() => {
   const groups: Array<{ key: string; label: string; icon: string; list: V2InsightEntity[] }> = []
   for (const cat of categories) {
     if (cat.key === 'all') continue
-    const list = entities.value.filter(e => e.category === cat.key)
+    const list = filteredEntities.value.filter(e => e.category === cat.key)
     if (list.length > 0) {
       groups.push({
         key: cat.key,
@@ -140,6 +151,14 @@ onMounted(() => {
       </div>
 
       <div class="entity-browser-panel__actions">
+        <UiInput
+          v-model="searchQuery"
+          class="entity-search-input"
+          type="search"
+          placeholder="搜索实体或别名"
+          aria-label="搜索实体或别名"
+          clearable
+        />
         <UiButton
           variant="secondary"
           size="sm"
@@ -160,6 +179,17 @@ onMounted(() => {
     <div v-if="isLoading && entities.length === 0" class="entity-browser-panel__loading">
       <div class="entity-browser-panel__spinner"></div>
       <span>正在加载实体图谱...</span>
+    </div>
+
+    <!-- No match -->
+    <div
+      v-else-if="!isLoading && entities.length > 0 && filteredEntities.length === 0"
+      class="entity-browser-panel__empty"
+    >
+      <span class="entity-browser-panel__empty-icon">🔍</span>
+      <p class="entity-browser-panel__empty-text">没有匹配「{{ searchQuery }}」的实体</p>
+      <p class="entity-browser-panel__empty-subtext">试试更短的关键词，或切换到其它分类。</p>
+      <UiButton variant="secondary" size="sm" @click="searchQuery = ''">清除搜索</UiButton>
     </div>
 
     <!-- Empty State -->

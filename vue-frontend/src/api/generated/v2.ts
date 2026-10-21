@@ -1240,6 +1240,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/import/venera/cover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a Venera comic cover image from the configured data directory */
+        get: operations["getVeneraCover"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/import/venera": {
         parameters: {
             query?: never;
@@ -1613,6 +1630,58 @@ export interface paths {
         };
         /** Download every generated skill file of one character as a zip archive. */
         get: operations["downloadInsightCharacterSkillArchive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insight/books/{book_id}/lorebooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the world book distilled from the entity knowledge network of a book. */
+        get: operations["getInsightLorebook"];
+        put?: never;
+        /** Distill the entity knowledge network of a book into a world book. */
+        post: operations["buildInsightLorebook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insight/books/{book_id}/lorebooks/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Progress of the world book distillation of one book. */
+        get: operations["getInsightLorebookStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insight/books/{book_id}/lorebooks/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download the world book as a zip archive. */
+        get: operations["downloadInsightLorebookArchive"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3255,10 +3324,18 @@ export interface components {
         InsightCharacterSkillBuildCommand: {
             entityId: string;
             maxVisionPages?: number;
+            /**
+             * @default skill
+             * @enum {string}
+             */
+            kind: "skill" | "card";
         };
         InsightCharacterSkillStatus: {
             bookId: string;
             entityId: string;
+            /** @enum {string} */
+            kind?: "character_skill" | "character_card" | "lorebook";
+            label?: string;
             /** @enum {string} */
             status: "idle" | "running" | "ready" | "failed";
             stage?: string | null;
@@ -3269,6 +3346,30 @@ export interface components {
             startedAt?: string | null;
             finishedAt?: string | null;
             error?: string | null;
+        };
+        InsightLorebookBuildCommand: {
+            maxEntities?: number;
+        };
+        InsightLorebook: {
+            kind: string;
+            bookId: string;
+            bookTitle?: string;
+            runId?: string;
+            generatedAt?: string;
+            revision?: number;
+            updatedAt?: string | null;
+            status?: string;
+            stats?: {
+                [key: string]: unknown;
+            };
+            summary?: {
+                [key: string]: unknown;
+            };
+            files: {
+                [key: string]: string;
+            };
+        } & {
+            [key: string]: unknown;
         };
         InsightCharacterSkillEntry: {
             citation?: string;
@@ -3289,6 +3390,13 @@ export interface components {
             [key: string]: unknown;
         };
         InsightCharacterSkillSummary: {
+            evidence?: ({
+                claim?: string;
+                citation?: string;
+                confidence?: string;
+            } & {
+                [key: string]: unknown;
+            })[];
             one_liner?: string;
             identity?: {
                 [key: string]: unknown;
@@ -3307,7 +3415,8 @@ export interface components {
         InsightCharacterSkillStats: {
             pages: number;
             chapters: number;
-            events: number;
+            events?: number;
+            evidencePages?: number;
             visionPages: number;
             droppedCitations: number;
         };
@@ -3331,6 +3440,33 @@ export interface components {
             revision?: number | null;
             updatedAt?: string | null;
             status?: string | null;
+            kind?: string | null;
+            card?: components["schemas"]["InsightCharacterCard"];
+        };
+        InsightCharacterCard: {
+            spec: string;
+            specVersion: string;
+            data: components["schemas"]["InsightCharacterCardData"];
+        };
+        InsightCharacterCardData: {
+            name: string;
+            description: string;
+            personality?: string;
+            scenario?: string;
+            first_mes?: string;
+            mes_example?: string;
+            creator_notes?: string;
+            system_prompt?: string;
+            post_history_instructions?: string;
+            alternate_greetings?: string[];
+            tags?: string[];
+            creator?: string;
+            character_version?: string;
+            extensions?: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
         };
         InsightQaStatus: {
             available: boolean;
@@ -3668,6 +3804,7 @@ export interface components {
             directory: string;
             cover: string;
             coverPath: string;
+            hasCover?: boolean;
             comicType: number;
             chapterCount: number;
             downloadedChapters: string[];
@@ -3678,6 +3815,10 @@ export interface components {
             total: number;
             veneraFound: boolean;
             error?: string;
+            baseDir?: string;
+            /** @enum {string} */
+            baseDirSource?: "setting" | "default";
+            dbPath?: string;
         };
         VeneraImportDetail: {
             comic_id: string;
@@ -6372,6 +6513,38 @@ export interface operations {
             };
         };
     };
+    getVeneraCover: {
+        parameters: {
+            query: {
+                comicId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cover image bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/*": string;
+                };
+            };
+            /** @description comicId is required. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
     importVeneraComics: {
         parameters: {
             query?: never;
@@ -7011,7 +7184,10 @@ export interface operations {
     };
     getInsightCharacterSkill: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which distilled artifact to read (skill, card or lorebook). */
+                kind?: "skill" | "card" | "lorebook";
+            };
             header?: never;
             path: {
                 book_id: components["parameters"]["BookId"];
@@ -7036,7 +7212,10 @@ export interface operations {
     };
     getInsightCharacterSkillStatus: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which distilled artifact to read (skill, card or lorebook). */
+                kind?: "skill" | "card" | "lorebook";
+            };
             header?: never;
             path: {
                 book_id: components["parameters"]["BookId"];
@@ -7061,7 +7240,10 @@ export interface operations {
     };
     downloadInsightCharacterSkillArchive: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which distilled artifact to read (skill, card or lorebook). */
+                kind?: "skill" | "card" | "lorebook";
+            };
             header?: never;
             path: {
                 book_id: components["parameters"]["BookId"];
@@ -7073,6 +7255,106 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Zip archive holding SKILL.md and the reference documents. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getInsightLorebook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description World book document holding every entry and its trigger keywords. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightLorebook"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    buildInsightLorebook: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable key for this normalized command and target scope. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                book_id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InsightLorebookBuildCommand"];
+            };
+        };
+        responses: {
+            /** @description Distillation accepted; poll the status route for progress. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightCharacterSkillStatus"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    getInsightLorebookStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current stage of the world book task. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightCharacterSkillStatus"];
+                };
+            };
+        };
+    };
+    downloadInsightLorebookArchive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Zip archive holding lorebook.json and lorebook.md. */
             200: {
                 headers: {
                     [name: string]: unknown;

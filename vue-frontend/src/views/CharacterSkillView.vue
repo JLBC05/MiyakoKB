@@ -10,12 +10,17 @@ import UiNumberField from '@/components/ui/UiNumberField.vue'
 import { getBookDetail } from '@/api/bookshelf'
 import {
   buildInsightCharacterSkill,
+  buildInsightLorebook,
   characterSkillArchiveUrl,
   getInsightCharacterSkill,
   getInsightCharacterSkillStatus,
+  getInsightLorebook,
+  getInsightLorebookStatus,
   listInsightCharacterSkills,
+  lorebookArchiveUrl,
   type V2InsightCharacterSkill,
   type V2InsightCharacterSkillStatus,
+  type V2InsightLorebook,
 } from '@/api/v2/insight'
 import { downloadBlob } from '@/api/download'
 import { triggerBlobDownload } from '@/utils/browserDownload'
@@ -57,10 +62,20 @@ const actionError = ref<string | null>(null)
 const copied = ref('')
 const minPages = ref<number | null>(3)
 const isExporting = ref(false)
+const activeKind = ref<'skill' | 'card'>('skill')
+const charTrigger = '{{char}}'
+const userTrigger = '{{user}}'
+const card = ref<V2InsightCharacterSkill | null>(null)
+const lorebook = ref<V2InsightLorebook | null>(null)
+const lorebookTask = ref<V2InsightCharacterSkillStatus | null>(null)
+const isLorebookLoading = ref(false)
+const isLorebookExporting = ref(false)
 
 let loadSequence = 0
 let skillSequence = 0
+let lorebookSequence = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let lorebookTimer: ReturnType<typeof setInterval> | null = null
 let isMounted = false
 
 const selectedCharacter = computed(
@@ -75,7 +90,51 @@ const progressPercent = computed(() => {
   return Math.min(100, Math.round((value.done / value.total) * 100))
 })
 
-const summary = computed(() => skill.value?.summary ?? null)
+const activeDoc = computed(() => (activeKind.value === 'card' ? card.value : skill.value))
+
+const kindLabel = computed(() => (activeKind.value === 'card' ? '角色卡' : '角色 Skill'))
+
+const hasActiveDoc = computed(() => Boolean(activeDoc.value))
+
+const summary = computed(() => activeDoc.value?.summary ?? null)
+
+const isLorebookBuilding = computed(() => lorebookTask.value?.status === 'running')
+
+const lorebookEntryCount = computed(() => {
+  const stats = lorebook.value?.stats
+  const value = stats && typeof stats === 'object' ? (stats as Record<string, unknown>).entries : null
+  if (typeof value === 'number') return value
+  const entries = lorebook.value?.summary
+  const list = entries && typeof entries === 'object' ? (entries as Record<string, unknown>).entries : null
+  return Array.isArray(list) ? list.length : 0
+})
+
+const cardFields = computed<Array<{ label: string; value: string }>>(() => {
+  const data = activeDoc.value?.['card']?.data
+  if (!data) return []
+  const rows: Array<{ label: string; value: string }> = []
+  const push = (label: string, value: unknown) => {
+    const text =
+      typeof value === 'string'
+        ? value.trim()
+        : Array.isArray(value)
+          ? value.map(item => String(item ?? '')).filter(Boolean).join('、')
+          : ''
+    if (text) rows.push({ label, value: text })
+  }
+  push('角色名（name）', data.name)
+  push('简介（description）', data.description)
+  push('性格（personality）', data.personality)
+  push('场景（scenario）', data.scenario)
+  push('开场白（first_mes）', data.first_mes)
+  push('对话示例（mes_example）', data.mes_example)
+  push('系统提示（system_prompt）', data.system_prompt)
+  push('历史后指令（post_history_instructions）', data.post_history_instructions)
+  push('备用开场（alternate_greetings）', data.alternate_greetings)
+  push('标签（tags）', data.tags)
+  push('创建者备注（creator_notes）', data.creator_notes)
+  return rows
+})
 
 function stopPolling(): void {
   if (pollTimer !== null) {
@@ -126,6 +185,82 @@ const skillSections: Array<{ key: SectionKey; title: string }> = [
   { key: 'timeline', title: '关键事件' },
 ]
 
+function stopLorebookPolling(): void {
+  if (lorebookTimer) {
+    clearInterval(lorebookTimer)
+    lorebookTimer = null
+  }
+}
+
+async function loadLorebook(options: { silent?: boolean } = {}): Promise<void> {
+  if (!bookId.value) return
+  const sequence = ++lorebookSequence
+  if (!options.silent) isLorebookLoading.value = true
+  try {
+    const document = await getInsightLorebook(bookId.value)
+    if (!isMounted || sequence !== lorebookSequence) return
+    lorebook.value = document
+  } catch {
+    if (!isMounted || sequence !== lorebookSequence) return
+    lorebook.value = null
+  } finally {
+    if (isMounted && sequence === lorebookSequence) isLorebookLoading.value = false
+  }
+}
+
+async function pollLorebookStatus(): Promise<void> {
+  try {
+    const current = await getInsightLorebookStatus(bookId.value)
+    if (!isMounted) return
+    lorebookTask.value = current
+    if (current.status === 'ready') {
+      stopLorebookPolling()
+      await loadLorebook({ silent: true })
+      return
+    }
+    if (current.status === 'failed') {
+      stopLorebookPolling()
+      actionError.value = current.error ?? '世界书生成失败'
+    }
+  } catch (pollError) {
+    stopLorebookPolling()
+    actionError.value = pollError instanceof Error ? pollError.message : '世界书状态读取失败'
+  }
+}
+
+async function buildLorebook(): Promise<void> {
+  if (!bookId.value || isLorebookBuilding.value) return
+  actionError.value = null
+  try {
+    const started = await buildInsightLorebook(bookId.value, {})
+    lorebookTask.value = started
+    stopLorebookPolling()
+    lorebookTimer = setInterval(() => {
+      void pollLorebookStatus()
+    }, 2000)
+  } catch (buildError) {
+    actionError.value = buildError instanceof Error ? buildError.message : '世界书生成失败'
+  }
+}
+
+async function exportLorebook(): Promise<void> {
+  if (!bookId.value || isLorebookExporting.value) return
+  isLorebookExporting.value = true
+  actionError.value = null
+  try {
+    const result = await downloadBlob({
+      url: lorebookArchiveUrl(bookId.value),
+      fallbackFilename: `${bookTitle.value || 'book'}-lorebook.zip`,
+      fallbackErrorMessage: '导出世界书失败',
+    })
+    triggerBlobDownload(result.blob, result.filename)
+  } catch (exportError) {
+    actionError.value = exportError instanceof Error ? exportError.message : '导出世界书失败'
+  } finally {
+    if (isMounted) isLorebookExporting.value = false
+  }
+}
+
 async function copyText(kind: string, text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
@@ -142,18 +277,25 @@ async function loadSkill(entityId: string, options: { silent?: boolean } = {}): 
   if (!bookId.value || !entityId) return
   // 单独的序号：Skill 详情的加载不能推进书籍加载的序号，否则书籍加载的
   // finally 会认定自己已被取代，isLoading 永远停在 true。
+  const kind = activeKind.value
   const sequence = ++skillSequence
   if (!options.silent) isSkillLoading.value = true
   try {
-    const document = await getInsightCharacterSkill(bookId.value, entityId)
+    const document = await getInsightCharacterSkill(bookId.value, entityId, { kind })
     if (!isMounted || sequence !== skillSequence) return
-    skill.value = document
+    if (kind === 'card') card.value = document
+    else skill.value = document
     actionError.value = null
   } catch (loadError) {
     if (!isMounted || sequence !== skillSequence) return
-    skill.value = null
-    if (!options.silent) {
-      actionError.value = loadError instanceof Error ? loadError.message : '角色 Skill 读取失败'
+    if (kind === 'card') {
+      // 角色卡未生成是常态，用占位说明而不是错误横幅。
+      card.value = null
+    } else {
+      skill.value = null
+      if (!options.silent) {
+        actionError.value = loadError instanceof Error ? loadError.message : '角色 Skill 读取失败'
+      }
     }
   } finally {
     if (isMounted && sequence === skillSequence) isSkillLoading.value = false
@@ -171,7 +313,8 @@ async function refreshCharacters(): Promise<void> {
     if (fallback) {
       selectedEntityId.value = fallback.entityId
       skill.value = null
-      if (fallback.hasSkill) await loadSkill(fallback.entityId)
+      card.value = null
+      if (fallback.hasSkill || activeKind.value === 'card') await loadSkill(fallback.entityId)
     }
   }
 }
@@ -199,8 +342,9 @@ async function loadBook(targetBookId: string): Promise<void> {
       characters.value[0]
     if (preferred) {
       selectedEntityId.value = preferred.entityId
-      if (preferred.hasSkill) await loadSkill(preferred.entityId)
+      if (preferred.hasSkill || activeKind.value === 'card') await loadSkill(preferred.entityId)
     }
+    await loadLorebook({ silent: true })
   } catch (loadError) {
     if (!isMounted || sequence !== loadSequence) return
     error.value = loadError instanceof Error ? loadError.message : '角色列表加载失败'
@@ -227,10 +371,11 @@ async function selectCharacter(row: CharacterRow): Promise<void> {
   selectedEntityId.value = row.entityId
   stopPolling()
   task.value = null
-  if (row.hasSkill) {
+  if (row.hasSkill || activeKind.value === 'card') {
     await loadSkill(row.entityId)
   } else {
     skill.value = null
+    card.value = null
     actionError.value = null
   }
 }
@@ -244,7 +389,9 @@ function startPolling(entityId: string): void {
 
 async function pollStatus(entityId: string): Promise<void> {
   try {
-    const current = await getInsightCharacterSkillStatus(bookId.value, entityId)
+    const current = await getInsightCharacterSkillStatus(bookId.value, entityId, {
+      kind: activeKind.value,
+    })
     if (!isMounted) return
     task.value = current
     if (current.status === 'ready') {
@@ -268,7 +415,10 @@ async function buildSkill(): Promise<void> {
   if (!row || isBuilding.value) return
   actionError.value = null
   try {
-    const started = await buildInsightCharacterSkill(bookId.value, { entityId: row.entityId })
+    const started = await buildInsightCharacterSkill(bookId.value, {
+      entityId: row.entityId,
+      kind: activeKind.value,
+    })
     task.value = started
     startPolling(row.entityId)
   } catch (buildError) {
@@ -283,9 +433,10 @@ async function exportSkill(): Promise<void> {
   isExporting.value = true
   actionError.value = null
   try {
+    const kind = activeKind.value
     const result = await downloadBlob({
-      url: characterSkillArchiveUrl(bookId.value, entityId),
-      fallbackFilename: `${row.name}-skill.zip`,
+      url: characterSkillArchiveUrl(bookId.value, entityId, kind),
+      fallbackFilename: `${row.name}-${kind === 'card' ? 'card' : 'skill'}.zip`,
       fallbackErrorMessage: '导出压缩包失败',
     })
     triggerBlobDownload(result.blob, result.filename)
@@ -306,7 +457,17 @@ onUnmounted(() => {
   isMounted = false
   loadSequence += 1
   skillSequence += 1
+  lorebookSequence += 1
   stopPolling()
+  stopLorebookPolling()
+})
+
+watch(activeKind, () => {
+  const entityId = selectedEntityId.value
+  if (!isMounted || !bookId.value || !entityId) return
+  const cached = activeKind.value === 'card' ? card.value : skill.value
+  if (cached) return
+  void loadSkill(entityId)
 })
 
 watch(minPages, () => {
@@ -403,7 +564,46 @@ watch(
         请先在任务中心完成一次知识库构建（需要实体知识网络）。
       </ProductStatusBanner>
 
-      <section v-else class="character-skill-body">
+      <section v-if="characters.length > 0" class="character-skill-lorebook">
+        <div class="character-skill-section__head">
+          <h2 class="character-skill-section__title">世界书 Lorebook</h2>
+          <span class="character-skill-lorebook__actions">
+            <UiButton
+              size="sm"
+              variant="secondary"
+              :loading="isLorebookBuilding"
+              :disabled="isLorebookBuilding"
+              @click="buildLorebook"
+            >
+              {{ lorebook ? '重新蒸馏世界书' : '蒸馏世界书' }}
+            </UiButton>
+            <UiButton
+              v-if="lorebook"
+              size="sm"
+              variant="secondary"
+              :loading="isLorebookExporting"
+              :disabled="isLorebookExporting"
+              @click="exportLorebook"
+            >
+              导出世界书 .zip
+            </UiButton>
+          </span>
+        </div>
+        <p v-if="isLorebookBuilding" class="character-skill-section__text">
+          正在整理全书实体与设定 · {{ lorebookTask?.stage ?? '处理中' }}
+          {{ lorebookTask?.done ?? 0 }}/{{ lorebookTask?.total ?? 0 }}
+        </p>
+        <p v-else-if="lorebook" class="character-skill-section__text">
+          已生成 {{ lorebookEntryCount }} 条词条，触发词 <code>{{ charTrigger }}</code> /
+          <code>{{ userTrigger }}</code>，可直接导入酒馆类工具；导出的压缩包内含
+          <code>lorebook.json</code> 与逐条 Markdown。
+        </p>
+        <p v-else-if="!isLorebookLoading" class="character-skill-section__text">
+          还没有世界书。世界书会把这本书的实体、设定与关键事件整理成可触发的条目。
+        </p>
+      </section>
+
+      <section v-if="characters.length > 0" class="character-skill-body">
         <aside class="character-skill-list" aria-label="角色列表">
           <UiButton
             v-for="row in characters"
@@ -448,19 +648,39 @@ watch(
                 <h1 class="character-skill-detail__title">{{ selectedCharacter.name }}</h1>
                 <p class="character-skill-detail__subtitle">
                   {{ selectedCharacter.pageCount }} 页 · {{ selectedCharacter.chapterCount }} 话出场
-                  <span v-if="skill?.stats">
-                    · 事件 {{ skill.stats.events }} 条 · 原画观察 {{ skill.stats.visionPages }} 页
+                  <span v-if="activeDoc?.stats">
+                    · 事件 {{ activeDoc.stats.events ?? 0 }} 条 · 原画观察
+                    {{ activeDoc.stats.visionPages }} 页
                   </span>
                 </p>
               </div>
-              <UiButton
-                variant="primary"
-                :disabled="isBuilding"
-                @click="buildSkill"
-              >
-                {{ selectedCharacter.hasSkill ? '重新生成' : '生成角色 Skill' }}
+              <UiButton variant="primary" :disabled="isBuilding" @click="buildSkill">
+                {{ hasActiveDoc ? '重新生成' : `生成${kindLabel}` }}
               </UiButton>
             </header>
+
+            <div class="character-skill-kind-tabs" role="tablist" aria-label="蒸馏产物类型">
+              <UiButton
+                variant="tab"
+                class="character-skill-kind-tabs__btn"
+                :class="{ 'character-skill-kind-tabs__btn--active': activeKind === 'skill' }"
+                role="tab"
+                :aria-selected="activeKind === 'skill'"
+                @click="activeKind = 'skill'"
+              >
+                🎭 角色 Skill
+              </UiButton>
+              <UiButton
+                variant="tab"
+                class="character-skill-kind-tabs__btn"
+                :class="{ 'character-skill-kind-tabs__btn--active': activeKind === 'card' }"
+                role="tab"
+                :aria-selected="activeKind === 'card'"
+                @click="activeKind = 'card'"
+              >
+                🃏 角色卡
+              </UiButton>
+            </div>
 
             <ProductStatusBanner
               v-if="isSkillLoading"
@@ -470,15 +690,19 @@ watch(
               aria-live="polite"
             />
 
-            <div v-else-if="!skill" class="character-skill-empty__card character-skill-detail__placeholder">
+            <div
+              v-else-if="!activeDoc"
+              class="character-skill-empty__card character-skill-detail__placeholder"
+            >
               <p class="character-skill-empty__desc">
-                还没有为「{{ selectedCharacter.name }}」生成 Skill。点击右上角按钮开始蒸馏，
-                系统会读取该角色的页面分析证据与原画页面，产出带页码引用的人格档案。
+                还没有为「{{ selectedCharacter.name }}」生成{{ kindLabel }}。点击右上角按钮开始蒸馏，
+                系统会读取该角色的页面分析证据与原画页面，产出带页码引用的档案。
               </p>
             </div>
 
             <template v-else>
-              <section v-if="summary" class="character-skill-section">
+              <template v-if="activeKind === 'skill'">
+              <section v-if="summary?.one_liner" class="character-skill-section">
                 <h2 class="character-skill-section__title">一句话</h2>
                 <p class="character-skill-section__text">{{ summary.one_liner }}</p>
               </section>
@@ -530,9 +754,45 @@ watch(
                 </ul>
               </section>
 
-              <section v-if="skill.files && Object.keys(skill.files).length > 0" class="character-skill-section">
+              </template>
+
+              <template v-else>
+                <section class="character-skill-section">
+                  <h2 class="character-skill-section__title">角色卡字段（chara_card_v3）</h2>
+                  <ul v-if="cardFields.length" class="character-skill-entries">
+                    <li
+                      v-for="field in cardFields"
+                      :key="field.label"
+                      class="character-skill-entries__item"
+                    >
+                      <span class="character-skill-entries__headline">{{ field.label }}</span>
+                      <span class="character-skill-entries__detail">{{ field.value }}</span>
+                    </li>
+                  </ul>
+                  <p v-else class="character-skill-section__text">角色卡还没有内容。</p>
+                </section>
+
+                <section v-if="summary?.evidence?.length" class="character-skill-section">
+                  <h2 class="character-skill-section__title">证据</h2>
+                  <ul class="character-skill-entries">
+                    <li
+                      v-for="(item, index) in summary.evidence"
+                      :key="`card-evidence-${index}`"
+                      class="character-skill-entries__item"
+                    >
+                      <span class="character-skill-entries__headline">{{ item.claim }}</span>
+                      <span class="character-skill-entries__citation">{{ item.citation }}</span>
+                    </li>
+                  </ul>
+                </section>
+              </template>
+
+              <section
+                v-if="activeDoc.files && Object.keys(activeDoc.files).length > 0"
+                class="character-skill-section"
+              >
                 <div class="character-skill-section__head">
-                  <h2 class="character-skill-section__title">可导出的 Skill 文件</h2>
+                  <h2 class="character-skill-section__title">可导出的文件</h2>
                   <UiButton
                     size="sm"
                     variant="secondary"
@@ -544,7 +804,11 @@ watch(
                   </UiButton>
                 </div>
                 <ul class="character-skill-files">
-                  <li v-for="(content, path) in skill.files" :key="path" class="character-skill-files__item">
+                  <li
+                    v-for="(content, path) in activeDoc.files"
+                    :key="path"
+                    class="character-skill-files__item"
+                  >
                     <code class="character-skill-files__path">{{ path }}</code>
                     <UiButton size="sm" variant="ghost" @click="copyText(String(path), String(content))">
                       {{ copied === String(path) ? '已复制' : '复制内容' }}
@@ -846,5 +1110,30 @@ watch(
   font-size: 0.92rem;
   line-height: 1.6;
   color: var(--color-text-secondary);
+}
+
+.character-skill-kind-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 12px 0 4px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.character-skill-kind-tabs__btn--active {
+  color: var(--color-text-brand);
+  box-shadow: inset 0 -2px 0 var(--color-brand-primary);
+}
+
+.character-skill-lorebook {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background-color: var(--color-surface);
+}
+
+.character-skill-lorebook__actions {
+  display: flex;
+  gap: 8px;
 }
 </style>

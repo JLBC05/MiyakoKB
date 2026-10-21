@@ -29,7 +29,12 @@ from src.backend_v2.api.request_helpers import (
 from src.backend_v2.redaction import redact_sensitive_text
 from src.backend_v2.insight.commands import InsightAnalysisCommandService
 from src.backend_v2.insight.character_skill import (
+    CHARACTER_CARD_KIND,
+    CHARACTER_SKILL_KIND,
+    DEFAULT_LOREBOOK_ENTITIES,
     DEFAULT_MAX_VISION_PAGES,
+    LOREBOOK_KIND,
+    MAX_LOREBOOK_ENTITIES,
     MAX_VISION_PAGES,
     CharacterSkillService,
     build_skill_archive,
@@ -360,6 +365,18 @@ def create_insight_blueprint(
             202,
         )
 
+    def _distill_kind(default: str = CHARACTER_SKILL_KIND) -> str:
+        raw = str(request.args.get("kind", "") or "").strip().lower()
+        if not raw:
+            return default
+        if raw == "card":
+            return CHARACTER_CARD_KIND
+        if raw == "skill":
+            return CHARACTER_SKILL_KIND
+        if raw == "lorebook":
+            return LOREBOOK_KIND
+        raise ValueError("kind must be one of skill, card, lorebook")
+
     @blueprint.get("/books/<book_id>/character-skills")
     def list_character_skills(book_id: str) -> Response:
         min_pages = _integer_value(
@@ -375,10 +392,17 @@ def create_insight_blueprint(
     @blueprint.post("/books/<book_id>/character-skills")
     def build_character_skill(book_id: str):
         _require_idempotency_key()
-        command = _json_body(allowed_keys={"entityId", "maxVisionPages"})
+        command = _json_body(allowed_keys={"entityId", "maxVisionPages", "kind"})
         entity_id = str(command.get("entityId") or "").strip()
         if not entity_id:
             raise ValueError("entityId is required")
+        raw_kind = str(command.get("kind") or "skill").strip().lower()
+        if raw_kind == "card":
+            kind = CHARACTER_CARD_KIND
+        elif raw_kind == "skill":
+            kind = CHARACTER_SKILL_KIND
+        else:
+            raise ValueError("kind must be one of skill, card")
         raw_limit = command.get("maxVisionPages")
         max_vision_pages = (
             DEFAULT_MAX_VISION_PAGES
@@ -391,6 +415,7 @@ def create_insight_blueprint(
                     book_id=book_id,
                     entity_id=entity_id,
                     max_vision_pages=max_vision_pages,
+                    kind=kind,
                 )
             ),
             202,
@@ -398,19 +423,93 @@ def create_insight_blueprint(
 
     @blueprint.get("/books/<book_id>/character-skills/<entity_id>")
     def get_character_skill(book_id: str, entity_id: str) -> Response:
-        return jsonify(character_skills.get(book_id=book_id, entity_id=entity_id))
+        return jsonify(
+            character_skills.get(
+                book_id=book_id,
+                entity_id=entity_id,
+                kind=_distill_kind(),
+            )
+        )
 
     @blueprint.get("/books/<book_id>/character-skills/<entity_id>/status")
     def character_skill_status(book_id: str, entity_id: str) -> Response:
-        return jsonify(character_skills.status(book_id=book_id, entity_id=entity_id))
+        return jsonify(
+            character_skills.status(
+                book_id=book_id,
+                entity_id=entity_id,
+                kind=_distill_kind(),
+            )
+        )
 
     @blueprint.get("/books/<book_id>/character-skills/<entity_id>/archive")
     def character_skill_archive(book_id: str, entity_id: str) -> Response:
-        document = character_skills.get(book_id=book_id, entity_id=entity_id)
-        filename, payload = build_skill_archive(document)
+        kind = _distill_kind()
+        document = character_skills.get(book_id=book_id, entity_id=entity_id, kind=kind)
+        filename, payload = build_skill_archive(document, kind)
         response = Response(payload, mimetype="application/zip")
         response.headers["Content-Disposition"] = (
             'attachment; filename="character-skill.zip"; '
+            f"filename*=UTF-8''{quote(filename)}"
+        )
+        response.headers["Content-Length"] = str(len(payload))
+        return response
+
+    @blueprint.post("/books/<book_id>/lorebooks")
+    def build_lorebook(book_id: str):
+        _require_idempotency_key()
+        command = _json_body(allowed_keys={"maxEntities"})
+        raw_limit = command.get("maxEntities")
+        max_entities = (
+            DEFAULT_LOREBOOK_ENTITIES
+            if raw_limit is None
+            else _integer_value(
+                raw_limit,
+                "maxEntities",
+                minimum=1,
+                maximum=MAX_LOREBOOK_ENTITIES,
+            )
+        )
+        return (
+            jsonify(
+                character_skills.start_lorebook(
+                    book_id=book_id,
+                    max_entities=max_entities,
+                )
+            ),
+            202,
+        )
+
+    @blueprint.get("/books/<book_id>/lorebooks")
+    def get_lorebook(book_id: str) -> Response:
+        return jsonify(
+            character_skills.get(
+                book_id=book_id,
+                entity_id="default",
+                kind=LOREBOOK_KIND,
+            )
+        )
+
+    @blueprint.get("/books/<book_id>/lorebooks/status")
+    def lorebook_status(book_id: str) -> Response:
+        return jsonify(
+            character_skills.status(
+                book_id=book_id,
+                entity_id="default",
+                kind=LOREBOOK_KIND,
+            )
+        )
+
+    @blueprint.get("/books/<book_id>/lorebooks/archive")
+    def lorebook_archive(book_id: str) -> Response:
+        document = character_skills.get(
+            book_id=book_id,
+            entity_id="default",
+            kind=LOREBOOK_KIND,
+        )
+        filename, payload = build_skill_archive(document, LOREBOOK_KIND)
+        response = Response(payload, mimetype="application/zip")
+        response.headers["Content-Disposition"] = (
+            'attachment; filename="lorebook.zip"; '
             f"filename*=UTF-8''{quote(filename)}"
         )
         response.headers["Content-Length"] = str(len(payload))

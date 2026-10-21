@@ -30,7 +30,7 @@ const navItems: NavItem[] = [
   { name: 'bookshelf', path: '/', label: '漫画库', icon: '📚' },
   { name: 'graph', path: '/graph', label: '知识图谱', icon: '🏷️' },
   { name: 'qa', path: '/qa', label: '智能问答', icon: '💬' },
-  { name: 'characters', path: '/characters', label: '角色 Skill', icon: '🎭' },
+  { name: 'characters', path: '/characters', label: '蒸馏角色', icon: '🎭' },
   { name: 'settings', path: '/settings', label: '设置', icon: '⚙️' },
 ]
 

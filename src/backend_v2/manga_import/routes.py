@@ -3,13 +3,15 @@ import json
 import uuid
 import sqlite3
 import shutil
+import mimetypes
 from pathlib import Path
 from typing import Any
-from flask import Blueprint, jsonify, request, Response
+from flask import Blueprint, jsonify, request, Response, send_file
 from sqlalchemy import select, insert, update
 
 from src.backend_v2.storage.schema import books, chapters, pages, page_assets
 from src.backend_v2.content.repository import ContentRepository
+from src.backend_v2.settings.resolver import SettingsResolver
 from src.backend_v2.storage.assets import AssetStorageService
 from src.backend_v2.content.image_import import ImageImportService
 from src.backend_v2.content.page_style import resolve_new_page_style
@@ -19,17 +21,71 @@ from src.backend_v2.auth.constants import LOCAL_USER_ID
 from src.backend_v2.manga_import.local_preview import preview_local_paths
 from src.backend_v2.manga_import.local_confirm import import_single_local_book
 
-def get_venera_base_dir() -> Path:
+def default_venera_base_dir() -> Path:
+    """Venera 的默认数据目录（安装后即存在；用户可在导入界面覆盖）。"""
     appdata = os.environ.get("APPDATA")
     if not appdata:
         raise FileNotFoundError("APPDATA environment variable not found")
     return Path(appdata) / "com.github.wgh136" / "venera"
 
-def get_venera_local_db_path() -> Path:
-    return get_venera_base_dir() / "local.db"
 
-def list_venera_comics() -> list[dict[str, object]]:
-    db_path = get_venera_local_db_path()
+def _expand_user_path(raw: str) -> Path:
+    text = os.path.expandvars(os.path.expanduser(raw.strip().strip(chr(34))))
+    return Path(text)
+
+
+def resolve_venera_base_dir(engine: object) -> tuple[Path, str]:
+    """返回 (Venera 数据目录, 来源)；来源为 ``setting`` 或 ``default``。
+
+    用户在设置里可能填 Venera 根目录（含 ``local.db``），也可能填它的 ``local``
+    子目录；两种都接受，避免因为多一层/少一层目录就报「未检测到」。
+    """
+    configured = ""
+    try:
+        configured = str(SettingsResolver(engine).resolve_manga_import().get("venera_base_dir") or "")
+    except Exception:
+        configured = ""
+    if configured:
+        candidate = _expand_user_path(configured)
+        if (candidate / "local.db").is_file():
+            return candidate, "setting"
+        if candidate.name.lower() == "local" and (candidate.parent / "local.db").is_file():
+            return candidate.parent, "setting"
+        return candidate, "setting"
+    return default_venera_base_dir(), "default"
+
+
+def venera_local_db_path(base_dir: Path) -> Path:
+    return base_dir / "local.db"
+
+
+def venera_comic_dir(base_dir: Path, directory: object) -> Path | None:
+    name = str(directory or "").strip()
+    if not name:
+        return None
+    candidate = base_dir / "local" / name
+    try:
+        candidate.resolve().relative_to((base_dir / "local").resolve())
+    except (ValueError, OSError):
+        return None
+    return candidate
+
+
+def venera_cover_path(base_dir: Path, comic: dict[str, Any]) -> Path | None:
+    comic_dir = venera_comic_dir(base_dir, comic.get("directory"))
+    cover = str(comic.get("cover") or "").strip()
+    if comic_dir is None or not cover:
+        return None
+    path = comic_dir / cover
+    try:
+        path.resolve().relative_to((base_dir / "local").resolve())
+    except (ValueError, OSError):
+        return None
+    return path if path.is_file() else None
+
+
+def list_venera_comics(base_dir: Path) -> list[dict[str, object]]:
+    db_path = venera_local_db_path(base_dir)
     if not db_path.exists():
         return []
     
@@ -54,6 +110,8 @@ def list_venera_comics() -> list[dict[str, object]]:
                 tags = []
 
             cover_rel = f"local/{directory}/{cover}" if directory and cover else ""
+            comic_dir = venera_comic_dir(base_dir, directory)
+            has_cover = bool(comic_dir and cover and (comic_dir / cover).is_file())
 
             result.append({
                 "id": cid,
@@ -63,6 +121,7 @@ def list_venera_comics() -> list[dict[str, object]]:
                 "directory": directory,
                 "cover": cover,
                 "coverPath": cover_rel,
+                "hasCover": has_cover,
                 "comicType": comic_type,
                 "chapterCount": len(downloaded_list),
                 "downloadedChapters": downloaded_list,
@@ -72,8 +131,8 @@ def list_venera_comics() -> list[dict[str, object]]:
     finally:
         conn.close()
 
-def _get_venera_comic_detail(comic_id: str) -> dict[str, Any] | None:
-    db_path = get_venera_local_db_path()
+def _get_venera_comic_detail(base_dir: Path, comic_id: str) -> dict[str, Any] | None:
+    db_path = venera_local_db_path(base_dir)
     if not db_path.exists():
         return None
     abs_posix = db_path.resolve().as_posix()
@@ -111,17 +170,19 @@ def _get_venera_comic_detail(comic_id: str) -> dict[str, Any] | None:
 
 def import_single_venera_comic(
     *,
+    base_dir: Path,
     comic_id: str,
     data_root: Path,
     engine: object,
     importer: ImageImportService,
 ) -> dict[str, Any]:
-    comic = _get_venera_comic_detail(comic_id)
+    comic = _get_venera_comic_detail(base_dir, comic_id)
     if not comic:
         return {"comic_id": comic_id, "status": "failed", "error": f"Venera comic '{comic_id}' not found in local.db"}
 
-    venera_base = get_venera_base_dir()
-    comic_dir = venera_base / "local" / comic["directory"]
+    comic_dir = venera_comic_dir(base_dir, comic["directory"])
+    if comic_dir is None:
+        return {"comic_id": comic_id, "status": "failed", "error": f"Comic directory for '{comic_id}' is invalid"}
     if not comic_dir.exists():
         return {"comic_id": comic_id, "status": "failed", "error": f"Comic directory '{comic_dir}' does not exist"}
 
@@ -270,11 +331,15 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
     @blueprint.get("/venera/library")
     def get_venera_library() -> Response:
         try:
-            comics = list_venera_comics()
+            base_dir, source = resolve_venera_base_dir(engine)
+            comics = list_venera_comics(base_dir)
             return jsonify({
                 "comics": comics,
                 "total": len(comics),
                 "veneraFound": True,
+                "baseDir": str(base_dir),
+                "baseDirSource": source,
+                "dbPath": str(venera_local_db_path(base_dir)),
             })
         except Exception as e:
             return jsonify({
@@ -283,6 +348,26 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
                 "veneraFound": False,
                 "error": str(e),
             }), 200
+
+    @blueprint.get("/venera/cover")
+    def get_venera_cover() -> Response:
+        comic_id = str(request.args.get("comicId") or "").strip()
+        if not comic_id:
+            return jsonify({"error": "comicId is required"}), 400
+        try:
+            base_dir, _ = resolve_venera_base_dir(engine)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 404
+        comic = _get_venera_comic_detail(base_dir, comic_id)
+        if comic is None:
+            return jsonify({"error": "comic not found"}), 404
+        path = venera_cover_path(base_dir, comic)
+        if path is None:
+            return jsonify({"error": "cover not found"}), 404
+        mimetype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        response = send_file(path, mimetype=mimetype, conditional=True)
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        return response
 
     @blueprint.post("/venera")
     def import_venera() -> Response:
@@ -295,9 +380,15 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
         imported_count = 0
         failed_count = 0
 
+        try:
+            base_dir, _ = resolve_venera_base_dir(engine)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
         for cid in comic_ids:
             try:
                 res = import_single_venera_comic(
+                    base_dir=base_dir,
                     comic_id=str(cid),
                     data_root=data_root,
                     engine=engine,

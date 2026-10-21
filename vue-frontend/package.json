@@ -24,6 +24,7 @@
     "visual:test": "playwright test"
   },
   "dependencies": {
+    "@antv/g6": "^5.1.1",
     "@lucide/vue": "^1.21.0",
     "axios": "^1.19.0",
     "marked": "^17.0.1",

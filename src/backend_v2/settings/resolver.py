@@ -393,6 +393,33 @@ class SettingsResolver:
             }
         return options
 
+    def resolve_manga_import(self) -> dict[str, Any]:
+        """漫画导入相关的用户设置；缺行时回落到空串（表示用系统默认位置）。"""
+        with read_transaction(self.engine) as connection:
+            row = connection.execute(
+                select(
+                    app_settings.c.payload_json,
+                    app_settings.c.revision,
+                ).where(
+                    app_settings.c.domain == "manga_import",
+                    app_settings.c.owner_user_id == effective_owner_id(),
+                )
+            ).mappings().one_or_none()
+        payload: dict[str, Any] = {}
+        if row is not None:
+            try:
+                raw = json.loads(row["payload_json"])
+            except (TypeError, ValueError):
+                raw = None
+            if isinstance(raw, dict):
+                payload = raw
+        venera_base_dir = payload.get("veneraBaseDir")
+        if not isinstance(venera_base_dir, str):
+            venera_base_dir = ""
+        return {
+            "venera_base_dir": venera_base_dir.strip(),
+            "revision": int(row["revision"]) if row is not None else 0,
+        }
     def resolve_insight(
         self,
         *,

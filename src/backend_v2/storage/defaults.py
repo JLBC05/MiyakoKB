@@ -39,6 +39,10 @@ DEFAULT_CUSTOM_AI_PROFILES: dict[str, object] = {
     "profiles": [],
 }
 
+DEFAULT_MANGA_IMPORT_SETTINGS: dict[str, object] = {
+    # 空串表示「用系统默认位置」（%APPDATA%/com.github.wgh136/venera）。
+    "veneraBaseDir": "",
+}
 DEFAULT_BROWSER_DOM_AGENT = {
     "provider": "siliconflow",
     "modelName": "",

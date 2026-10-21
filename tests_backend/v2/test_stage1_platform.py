@@ -223,6 +223,7 @@ def test_launcher_initialization_seeds_one_persistent_quick_workspace(
         "custom_ai_profiles",
         "export_preferences",
         "insight",
+        "manga_import",
         "text_style_defaults",
         "translation",
         "web_import",

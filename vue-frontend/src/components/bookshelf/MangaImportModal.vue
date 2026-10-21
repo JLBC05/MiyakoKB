@@ -10,6 +10,7 @@ import UiNumberField from '@/components/ui/UiNumberField.vue'
 import ProductActionRow from '@/components/product/ProductActionRow.vue'
 import {
   getVeneraLibrary,
+  getVeneraCoverUrl,
   importVeneraComics,
   previewLocalManga,
   confirmLocalImport,
@@ -18,6 +19,7 @@ import {
   type LocalChapterPreview,
   type LocalBookConfirmPayload,
 } from '@/api/v2/mangaImport'
+import { getV2Settings, saveV2SettingsTransaction } from '@/api/v2/settings'
 import { showToast } from '@/utils/toast'
 
 const emit = defineEmits<{
@@ -65,6 +67,12 @@ const expandedBookIds = ref<Set<string>>(new Set())
 const aiVisionNeededCount = ref(0)
 const localScanError = ref<string | null>(null)
 
+// Venera base dir setting (empty means "use the system default")
+const veneraBaseDir = ref('')
+const veneraBaseDirSource = ref<'setting' | 'default'>('default')
+const isSavingVeneraBaseDir = ref(false)
+const veneraBaseDirHint = ref<string | null>(null)
+
 async function loadVeneraComics() {
   isLoading.value = true
   errorMessage.value = null
@@ -72,6 +80,8 @@ async function loadVeneraComics() {
     const res = await getVeneraLibrary()
     veneraFound.value = res.veneraFound
     comics.value = res.comics || []
+    veneraBaseDir.value = res.baseDir ?? ''
+    veneraBaseDirSource.value = res.baseDirSource === 'setting' ? 'setting' : 'default'
     if (!res.veneraFound) {
       errorMessage.value = res.error || '未检测到 Venera，请确认已安装并下载漫画'
     }
@@ -80,6 +90,36 @@ async function loadVeneraComics() {
     errorMessage.value = err instanceof Error ? err.message : '获取 Venera 漫画列表失败'
   } finally {
     isLoading.value = false
+  }
+}
+
+function veneraCoverUrl(comic: VeneraComic): string | undefined {
+  return comic.hasCover ? getVeneraCoverUrl(comic.id) : undefined
+}
+
+async function saveVeneraBaseDir() {
+  if (isSavingVeneraBaseDir.value) return
+  isSavingVeneraBaseDir.value = true
+  veneraBaseDirHint.value = null
+  try {
+    const document = await getV2Settings(['manga_import'])
+    const entry = (document.settings ?? []).find(item => item.domain === 'manga_import')
+    const revision = typeof entry?.revision === 'number' ? entry.revision : 0
+    await saveV2SettingsTransaction({
+      settings: [
+        {
+          domain: 'manga_import',
+          payload: { veneraBaseDir: veneraBaseDir.value.trim() },
+          baseRevision: revision,
+        },
+      ],
+    })
+    await loadVeneraComics()
+    veneraBaseDirHint.value = veneraBaseDir.value.trim() ? '已保存并使用该目录' : '已恢复默认目录'
+  } catch (err: unknown) {
+    veneraBaseDirHint.value = err instanceof Error ? err.message : '保存失败'
+  } finally {
+    isSavingVeneraBaseDir.value = false
   }
 }
 
@@ -329,6 +369,28 @@ onMounted(() => {
 
       <!-- Tab 1: Venera Import -->
       <div v-if="activeTab === 'venera'" class="manga-import-content">
+        <div class="venera-path-row">
+          <span class="venera-path-label">Venera 数据目录</span>
+          <UiInput
+            v-model="veneraBaseDir"
+            class="venera-path-input"
+            size="sm"
+            placeholder="留空则使用默认位置"
+            aria-label="Venera 数据目录"
+            :disabled="isSavingVeneraBaseDir"
+          />
+          <UiButton
+            variant="secondary"
+            size="sm"
+            :loading="isSavingVeneraBaseDir"
+            :disabled="isSavingVeneraBaseDir"
+            @click="saveVeneraBaseDir"
+          >保存并使用</UiButton>
+          <span class="venera-path-source">
+            {{ veneraBaseDirSource === 'setting' ? '自定义目录' : '默认目录' }}
+          </span>
+        </div>
+        <p v-if="veneraBaseDirHint" class="venera-path-hint">{{ veneraBaseDirHint }}</p>
         <div v-if="isLoading" class="manga-import-status">
           <UiIcon name="loading" size="24" class="spinning" />
           <span>正在读取 Venera 本地漫画库...</span>
@@ -382,7 +444,14 @@ onMounted(() => {
                 />
               </div>
               <div class="card-cover-wrapper">
-                <div class="card-cover-placeholder">
+                <img
+                  v-if="comic.hasCover"
+                  class="card-cover-image"
+                  :src="veneraCoverUrl(comic)"
+                  :alt="comic.title"
+                  loading="lazy"
+                />
+                <div v-else class="card-cover-placeholder">
                   <UiIcon name="book-open" size="32" />
                 </div>
               </div>
@@ -773,6 +842,43 @@ onMounted(() => {
 
 .card-cover-placeholder {
   color: var(--color-text-muted);
+}
+
+.card-cover-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.venera-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.venera-path-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.venera-path-input {
+  flex: 1 1 320px;
+  min-width: 220px;
+}
+
+.venera-path-source {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.venera-path-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }
 
 .card-info {

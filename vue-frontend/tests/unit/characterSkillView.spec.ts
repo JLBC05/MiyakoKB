@@ -37,8 +37,12 @@ vi.mock('@/api/v2/insight', () => ({
   getInsightCharacterSkill: skillMock,
   getInsightCharacterSkillStatus: statusMock,
   buildInsightCharacterSkill: buildMock,
-  characterSkillArchiveUrl: (bookId: string, entityId: string) =>
-    `/archive/${bookId}/${entityId}`,
+  characterSkillArchiveUrl: (bookId: string, entityId: string, kind?: string) =>
+    kind && kind !== 'skill' ? `/archive/${bookId}/${entityId}?kind=${kind}` : `/archive/${bookId}/${entityId}`,
+  getInsightLorebook: () => Promise.reject(new Error('lorebook not found')),
+  getInsightLorebookStatus: () => Promise.resolve({ status: 'idle' }),
+  buildInsightLorebook: () => Promise.resolve({ status: 'running', stage: 'evidence', done: 0, total: 3 }),
+  lorebookArchiveUrl: (bookId: string) => `/archive/${bookId}/lorebook`,
 }))
 
 vi.mock('@/api/download', () => ({ downloadBlob: downloadBlobMock }))
@@ -130,7 +134,7 @@ describe('character skill view', () => {
 
     expect(wrapper.text()).not.toContain('正在读取角色档案')
     expect(wrapper.text()).toContain('把母亲亏掉的两千万赢回来。')
-    expect(skillMock).toHaveBeenCalledWith(BOOK_ID, ENTITY_ID)
+    expect(skillMock).toHaveBeenCalledWith(BOOK_ID, ENTITY_ID, { kind: 'skill' })
     wrapper.unmount()
   })
 

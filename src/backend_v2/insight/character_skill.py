@@ -57,6 +57,38 @@ VISION_BATCH_SIZE = 5
 MAX_EVENT_LINES = 150
 MAX_FACT_PAGES = 400
 
+# 一个实体可以蒸馏出三种产物（都以 analysis_artifacts 落库，kind 区分）。
+CHARACTER_CARD_KIND = "character_card"
+LOREBOOK_KIND = "lorebook"
+DISTILL_KINDS: dict[str, str] = {
+    "skill": CHARACTER_SKILL_KIND,
+    "card": CHARACTER_CARD_KIND,
+}
+DISTILL_KIND_LABELS: dict[str, str] = {
+    "skill": "角色档案 Skill",
+    "card": "角色卡 Character Card",
+    "lorebook": "世界书 Lorebook",
+}
+KIND_LABEL_KEYS: dict[str, str] = {value: key for key, value in DISTILL_KINDS.items()}
+KIND_LABEL_KEYS[LOREBOOK_KIND] = "lorebook"
+
+
+def _label_key(kind: str) -> str:
+    return KIND_LABEL_KEYS.get(kind, kind)
+CARD_MIN_VISION_PAGES = 4
+CARD_MAX_VISION_PAGES = 16
+DEFAULT_LOREBOOK_ENTITIES = 60
+MAX_LOREBOOK_ENTITIES = 200
+LOREBOOK_PREVIEW_PAGES = 3
+LOREBOOK_ENTITY_ID = "default"
+CATEGORY_LABELS: dict[str, str] = {
+    "characters": "角色",
+    "locations": "地点",
+    "items": "物品",
+    "concepts": "概念",
+    "abilities": "能力",
+}
+
 CITATION_RE = re.compile(r"《(?P<chapter>[^》]+)》第(?P<page>\d+)页（全书第(?P<global>\d+)页）")
 CHAPTER_NUMBER_RE = re.compile(r"第(?P<number>\d+)[话話]")
 VOLUME_APPENDIX_RE = re.compile(r"(?P<volume>\d+)[卷巻](?:附录|附錄|附録)")
@@ -193,23 +225,23 @@ class CharacterSkillRepository:
         """
         with self.engine.connect() as connection:
             payload = self.alignment(connection, book_id)
-            generated = {
-                str(row.template): {
+            generated: dict[str, dict[str, dict[str, Any]]] = {}
+            for row in connection.execute(
+                select(
+                    analysis_artifacts.c.template,
+                    analysis_artifacts.c.kind,
+                    analysis_artifacts.c.revision,
+                    analysis_artifacts.c.updated_at,
+                ).where(
+                    analysis_artifacts.c.book_id == book_id,
+                    analysis_artifacts.c.kind.in_(tuple(DISTILL_KINDS.values())),
+                    analysis_artifacts.c.is_active.is_(True),
+                )
+            ).all():
+                generated.setdefault(str(row.template), {})[str(row.kind)] = {
                     "revision": int(row.revision),
                     "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
                 }
-                for row in connection.execute(
-                    select(
-                        analysis_artifacts.c.template,
-                        analysis_artifacts.c.revision,
-                        analysis_artifacts.c.updated_at,
-                    ).where(
-                        analysis_artifacts.c.book_id == book_id,
-                        analysis_artifacts.c.kind == CHARACTER_SKILL_KIND,
-                        analysis_artifacts.c.is_active.is_(True),
-                    )
-                ).all()
-            }
             chapter_of_page = self._chapter_ordinals_by_page(connection, book_id)
         characters: list[dict[str, Any]] = []
         for entity in payload.get("canonical_entities") or []:
@@ -221,7 +253,9 @@ class CharacterSkillRepository:
             chapter_pages = entity.get("pages") or []
             if len(chapter_pages) < min_pages:
                 continue
-            skill = generated.get(entity_id)
+            artifacts = generated.get(entity_id) or {}
+            skill = artifacts.get(CHARACTER_SKILL_KIND)
+            card = artifacts.get(CHARACTER_CARD_KIND)
             chapter_ordinals: set[int] = set()
             for number in chapter_pages:
                 ordinal = chapter_of_page.get(_page_number(number))
@@ -239,6 +273,9 @@ class CharacterSkillRepository:
                     "skillRevision": skill["revision"] if skill else None,
                     "skillUpdatedAt": skill["updatedAt"] if skill else None,
                     "updatedAt": skill["updatedAt"] if skill else None,
+                    "hasCard": card is not None,
+                    "cardRevision": card["revision"] if card else None,
+                    "cardUpdatedAt": card["updatedAt"] if card else None,
                 }
             )
         characters.sort(key=lambda item: (-item["pageCount"], item["name"]))
@@ -268,7 +305,13 @@ class CharacterSkillRepository:
             mapping.setdefault(int(row.page_number_snapshot), int(row.ordinal))
         return mapping
 
-    def get_skill(self, *, book_id: str, entity_id: str) -> dict[str, Any]:
+    def get_skill(
+        self,
+        *,
+        book_id: str,
+        entity_id: str,
+        kind: str = CHARACTER_SKILL_KIND,
+    ) -> dict[str, Any]:
         with self.engine.connect() as connection:
             row = connection.execute(
                 select(
@@ -278,13 +321,13 @@ class CharacterSkillRepository:
                     analysis_artifacts.c.status,
                 ).where(
                     analysis_artifacts.c.book_id == book_id,
-                    analysis_artifacts.c.kind == CHARACTER_SKILL_KIND,
+                    analysis_artifacts.c.kind == kind,
                     analysis_artifacts.c.template == entity_id,
                     analysis_artifacts.c.is_active.is_(True),
                 )
             ).mappings().one_or_none()
         if row is None or not row["payload_json"]:
-            raise InsightNotFound("该角色还没有生成 Skill")
+            raise InsightNotFound(f"该角色还没有生成{DISTILL_KIND_LABELS.get(_label_key(kind), kind)}")
         payload = json.loads(row["payload_json"])
         payload["revision"] = int(row["revision"])
         payload["updatedAt"] = row["updated_at"].isoformat() if row["updated_at"] else None
@@ -400,6 +443,7 @@ class CharacterSkillRepository:
         run_id: str,
         fingerprint: str,
         payload: Mapping[str, Any],
+        kind: str = CHARACTER_SKILL_KIND,
     ) -> dict[str, Any]:
         now = utcnow()
         with self.engine.begin() as connection:
@@ -407,7 +451,7 @@ class CharacterSkillRepository:
                 connection.execute(
                     select(func.coalesce(func.max(analysis_artifacts.c.revision), 0) + 1).where(
                         analysis_artifacts.c.book_id == book_id,
-                        analysis_artifacts.c.kind == CHARACTER_SKILL_KIND,
+                        analysis_artifacts.c.kind == kind,
                         analysis_artifacts.c.template == entity_id,
                     )
                 ).scalar_one()
@@ -416,7 +460,7 @@ class CharacterSkillRepository:
                 update(analysis_artifacts)
                 .where(
                     analysis_artifacts.c.book_id == book_id,
-                    analysis_artifacts.c.kind == CHARACTER_SKILL_KIND,
+                    analysis_artifacts.c.kind == kind,
                     analysis_artifacts.c.template == entity_id,
                     analysis_artifacts.c.is_active.is_(True),
                 )
@@ -428,7 +472,7 @@ class CharacterSkillRepository:
                     id=artifact_id,
                     book_id=book_id,
                     run_id=run_id,
-                    kind=CHARACTER_SKILL_KIND,
+                    kind=kind,
                     template=entity_id,
                     status="ready",
                     revision=revision,
@@ -466,6 +510,7 @@ class CharacterSkillBuilder:
         entity_id: str,
         max_vision_pages: int = DEFAULT_MAX_VISION_PAGES,
         progress: Callable[[str, int, int], None] | None = None,
+        kind: str = CHARACTER_SKILL_KIND,
     ) -> dict[str, Any]:
         return asyncio.run(
             self.build_async(
@@ -473,6 +518,7 @@ class CharacterSkillBuilder:
                 entity_id=entity_id,
                 max_vision_pages=max_vision_pages,
                 progress=progress,
+                kind=kind,
             )
         )
 
@@ -483,6 +529,7 @@ class CharacterSkillBuilder:
         entity_id: str,
         max_vision_pages: int = DEFAULT_MAX_VISION_PAGES,
         progress: Callable[[str, int, int], None] | None = None,
+        kind: str = CHARACTER_SKILL_KIND,
     ) -> dict[str, Any]:
         limit = max(1, min(int(max_vision_pages or DEFAULT_MAX_VISION_PAGES), MAX_VISION_PAGES))
         report = progress or (lambda stage, done, total: None)
@@ -505,6 +552,20 @@ class CharacterSkillBuilder:
 
         facts = _aggregate(entity, evidence, alias_map)
         report("evidence", 1, 3)
+
+        if kind == CHARACTER_CARD_KIND:
+            return await self._build_card(
+                book_id=book_id,
+                book_title=title,
+                character=entity,
+                evidence=evidence,
+                facts=facts,
+                run_id=run_id,
+                limit=limit,
+                report=report,
+            )
+        if kind != CHARACTER_SKILL_KIND:
+            raise InsightConflict(f"不支持的蒸馏类型：{kind}")
 
         selected = _select_vision_pages(evidence, facts, limit)
         observations = await self._observe(
@@ -549,6 +610,7 @@ class CharacterSkillBuilder:
             run_id=run_id,
             fingerprint=fingerprint,
             payload=payload,
+            kind=kind,
         )
         payload.update(stored)
         return payload
@@ -608,18 +670,160 @@ class CharacterSkillBuilder:
         observations.sort(key=lambda item: int(item["global_page"]))
         return observations
 
-    async def _chat_json(self, prompt: str) -> dict[str, Any]:
+    async def _chat_json(self, prompt: str, system: str = SYNTH_SYSTEM) -> dict[str, Any]:
         from src.core.manga_insight.embedding_client import ChatClient
 
         client = ChatClient(self.chat_config)
         content = await client.generate_json(
             prompt,
-            system=SYNTH_SYSTEM,
+            system=system,
             validator=lambda parsed: parsed,
         )
         if not isinstance(content, Mapping):
             raise InsightConflict("角色档案需要 JSON 对象，模型返回了其它结构")
         return dict(content)
+
+    # ---- 角色卡（SillyTavern V2/V3）----------------------------------
+
+    async def _build_card(
+        self,
+        *,
+        book_id: str,
+        book_title: str,
+        character: Mapping[str, Any],
+        evidence: Sequence[PageEvidence],
+        facts: _Facts,
+        run_id: str,
+        limit: int,
+        report: Callable[[str, int, int], None],
+    ) -> dict[str, Any]:
+        card_limit = max(CARD_MIN_VISION_PAGES, min(int(limit or CARD_MIN_VISION_PAGES), CARD_MAX_VISION_PAGES))
+        selected = _select_vision_pages(evidence, facts, card_limit)
+        observations = await self._observe(
+            book_title=book_title,
+            character=str(character.get("canonical_name") or ""),
+            aliases=[str(item) for item in character.get("aliases") or []],
+            pages=selected,
+            progress=lambda done, total: report("vision", done, total),
+        )
+        report("vision", len(selected), len(selected) or 1)
+        report("synthesis", 0, 1)
+
+        prompt, used_vision = _card_prompt(
+            book_title=book_title,
+            character=character,
+            facts=facts,
+            observations=observations,
+        )
+        raw = await self._chat_json(prompt, CARD_SYSTEM)
+        invalid: Counter[str] = Counter()
+        allowed = {(page.chapter_title, page.page_ordinal, page.global_page) for page in evidence}
+        card = _sanitize(raw, allowed, invalid)
+        report("synthesis", 1, 1)
+
+        payload = _build_card_payload(
+            book_id=book_id,
+            book_title=book_title,
+            character=character,
+            run_id=run_id,
+            facts=facts,
+            evidence=evidence,
+            observations=used_vision,
+            card=card,
+            dropped=sum(invalid.values()),
+            vlm_model=str(getattr(self.vlm_config, "model", "") or ""),
+            chat_model=str(getattr(self.chat_config, "model", "") or ""),
+        )
+        fingerprint = _fingerprint(
+            book_id=book_id,
+            entity_id=str(character.get("entity_id") or ""),
+            run_id=run_id,
+            pages=evidence,
+        )
+        stored = self.repository.save_skill(
+            book_id=book_id,
+            entity_id=str(character.get("entity_id") or ""),
+            run_id=run_id,
+            fingerprint=fingerprint,
+            payload=payload,
+            kind=CHARACTER_CARD_KIND,
+        )
+        payload.update(stored)
+        return payload
+
+    # ---- 世界书（SillyTavern World Info）-----------------------------
+
+    def build_lorebook(
+        self,
+        *,
+        book_id: str,
+        max_entities: int = DEFAULT_LOREBOOK_ENTITIES,
+        progress: Callable[[str, int, int], None] | None = None,
+    ) -> dict[str, Any]:
+        report = progress or (lambda stage, done, total: None)
+        limit = max(1, min(int(max_entities or DEFAULT_LOREBOOK_ENTITIES), MAX_LOREBOOK_ENTITIES))
+
+        with self.repository.engine.connect() as connection:
+            title = self.repository.book_title(connection, book_id)
+            alignment = self.repository.alignment(connection, book_id)
+            run_id = self.repository.latest_run_id(connection, book_id)
+
+        report("evidence", 0, 2)
+        entities = [dict(item) for item in alignment.get("canonical_entities") or []]
+        entities = [item for item in entities if item.get("entity_id") and item.get("pages")]
+        entities.sort(key=lambda item: (-len(item.get("pages") or []), str(item.get("canonical_name") or "")))
+        entities = entities[:limit]
+        if not entities:
+            raise InsightConflict("该书没有可用的实体知识，无法生成世界书")
+
+        preview: dict[str, list[int]] = {}
+        wanted: set[int] = set()
+        for entity in entities:
+            numbers = [_page_number(item) for item in entity.get("pages") or []]
+            numbers = [number for number in dict.fromkeys(numbers) if number > 0]
+            picks = _spread_picks(numbers, LOREBOOK_PREVIEW_PAGES)
+            preview[str(entity.get("entity_id"))] = picks
+            wanted.update(picks)
+        report("evidence", 1, 2)
+
+        evidence = self.repository.page_evidence(
+            book_id=book_id,
+            run_id=run_id,
+            page_numbers=sorted(wanted),
+        )
+        by_page = {page.global_page: page for page in evidence}
+        report("evidence", 2, 2)
+        report("synthesis", 0, 1)
+
+        entries = _lorebook_entries(
+            book_title=title,
+            entities=entities,
+            preview=preview,
+            by_page=by_page,
+        )
+        report("synthesis", 1, 1)
+
+        payload = _build_lorebook_payload(
+            book_id=book_id,
+            book_title=title,
+            run_id=run_id,
+            entries=entries,
+            entity_total=len(entities),
+            page_total=len(evidence),
+        )
+        fingerprint = hashlib.sha256(
+            f"{book_id}|{run_id}|{len(entries)}|{_entries_digest(entries)}".encode("utf-8")
+        ).hexdigest()[:32]
+        stored = self.repository.save_skill(
+            book_id=book_id,
+            entity_id="default",
+            run_id=run_id,
+            fingerprint=fingerprint,
+            payload=payload,
+            kind=LOREBOOK_KIND,
+        )
+        payload.update(stored)
+        return payload
 
 
 # ---- 纯函数 ------------------------------------------------------------
@@ -869,6 +1073,454 @@ def _synth_prompt(
     )
     return prompt, used
 
+
+CARD_SYSTEM = (
+    "你是漫画角色卡的整理员。你只根据给定的知识库证据填写 SillyTavern 角色卡字段，"
+    "任何无法从证据推出的设定宁可不写；引用一律使用《第X话》第Y页（全书第Z页）的格式。"
+    "只输出严格 JSON，不要代码块。"
+)
+
+CARD_PROMPT = """请为漫画《{book_title}》中的角色「{character}」填写一张 SillyTavern 角色卡。
+
+## 角色元信息
+
+{meta}
+
+## 章节分布
+
+{chapters}
+
+## 同页共现的角色
+
+{cooccurrence}
+
+## 相关概念
+
+{concepts}
+
+## 关键事件（每条都带引用）
+
+{events}
+
+## 原画观察（外貌与口吻的直接证据）
+
+{vision}
+
+## 输出格式（严格 JSON）
+
+{{"name": "角色名",
+ "description": "外貌、身份、处境与性格的连续描述，尽量带引用",
+ "personality": "性格关键词与行为习惯，一句话一段",
+ "scenario": "对话开始的处境；只写知识库能支撑的内容",
+ "first_mes": "以该角色口吻写的开场白（第一人称，不要旁白）",
+ "mes_example": "<START>\\n{{{{user}}}}: ...\\n{{{{char}}}}: ...",
+ "creator_notes": "这份卡片的证据来源与边界说明",
+ "system_prompt": "扮演该角色时的系统提示",
+ "post_history_instructions": "写作风格与禁忌",
+ "alternate_greetings": ["另一句开场白"],
+ "tags": ["标签"],
+ "evidence": [{{"claim": "结论", "citation": "《第1话》第3页（全书第3页）"}}]}}
+
+规则：
+1. `mes_example` 里的台词只能逐字取自「原画观察」中记录的画面文字；没有就写成符合其说话方式的短句，并在 creator_notes 里注明。
+2. `evidence` 至少 5 条，覆盖外貌、性格、关系；引用必须严格来自上面的证据。
+3. 不要写书里没有的设定（年龄、生日、血型等）——拿不准就省略。
+"""
+
+
+def _nl_join(lines: Iterable[str]) -> str:
+    return "\n".join(lines)
+
+
+def _card_prompt(
+    *,
+    book_title: str,
+    character: Mapping[str, Any],
+    facts: _Facts,
+    observations: Sequence[Mapping[str, Any]],
+) -> tuple[str, list[Mapping[str, Any]]]:
+    name = str(character.get("canonical_name") or "")
+    aliases = [str(item) for item in character.get("aliases") or []]
+    meta = (
+        f"- 姓名：{name}\n"
+        f"- 别名：{_describe_aliases(aliases, name)}\n"
+        f"- 出场页数：{len(character.get('pages') or [])}\n"
+        f"- 事件总数：{len(facts.events)}，其中 high={facts.importance.get('high', 0)}"
+    )
+    chapters = _nl_join(
+        f"- {title}：{count} 页" for title, count in facts.chapter_distribution.items()
+    )
+    cooccurrence = (
+        _nl_join(f"- {name_}: {pages_} 页" for name_, pages_ in facts.co_occurrence[:10])
+        or "- 无"
+    )
+    concepts = (
+        _nl_join(f"- {name_}: {count} 次" for name_, count in facts.concepts[:20]) or "- 无"
+    )
+    vision_text, used = _vision_lines(observations)
+    prompt = CARD_PROMPT.format(
+        book_title=book_title,
+        character=name,
+        meta=meta,
+        chapters=chapters,
+        cooccurrence=cooccurrence,
+        concepts=concepts,
+        events=_event_lines(facts),
+        vision=vision_text or "（本次没有可用的画面观察记录）",
+    )
+    return prompt, used
+
+
+def _card_text(card: Mapping[str, Any], key: str) -> str:
+    value = card.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _card_list(card: Mapping[str, Any], key: str) -> list[str]:
+    value = card.get(key)
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item or "").strip()]
+
+
+def _card_data(
+    *,
+    book_id: str,
+    book_title: str,
+    character: Mapping[str, Any],
+    run_id: str,
+    card: Mapping[str, Any],
+    facts: _Facts,
+    used_vision: Sequence[Mapping[str, Any]],
+    models: Mapping[str, str],
+) -> dict[str, Any]:
+    """SillyTavern data 段（V2 与 V3 共用）。"""
+    name = str(character.get("canonical_name") or "")
+    evidence = [dict(item) for item in card.get("evidence") or [] if isinstance(item, Mapping)]
+    appendix = _nl_join(
+        f"- {item.get('claim')}（{item.get('citation')}）" for item in evidence
+    )
+    description = _card_text(card, "description") or f"《{book_title}》中的{name}。"
+    if appendix:
+        description = f"{description}\n\n证据：\n{appendix}"
+    return {
+        "name": _card_text(card, "name") or name,
+        "description": description,
+        "personality": _card_text(card, "personality"),
+        "scenario": _card_text(card, "scenario"),
+        "first_mes": _card_text(card, "first_mes"),
+        "mes_example": _card_text(card, "mes_example"),
+        "creator_notes": _card_text(card, "creator_notes"),
+        "system_prompt": _card_text(card, "system_prompt"),
+        "post_history_instructions": _card_text(card, "post_history_instructions"),
+        "alternate_greetings": _card_list(card, "alternate_greetings"),
+        "tags": _card_list(card, "tags"),
+        "creator": "MiyakoKB",
+        "character_version": f"run-{run_id[:8]}" if run_id else "1.0",
+        "extensions": {
+            "miyako": {
+                "bookId": book_id,
+                "bookTitle": book_title,
+                "entityId": str(character.get("entity_id") or ""),
+                "runId": run_id,
+                "pages": len(character.get("pages") or []),
+                "chapters": len(facts.chapter_distribution),
+                "visionPages": len(used_vision),
+                "models": dict(models),
+            }
+        },
+    }
+
+
+_CARD_V3_ONLY = ("group_only_greetings", "nickname", "creator_notes_multilingual", "source")
+
+
+def _render_card_files(
+    *,
+    data: Mapping[str, Any],
+    character: Mapping[str, Any],
+    facts: _Facts,
+    used_vision: Sequence[Mapping[str, Any]],
+) -> dict[str, str]:
+    v3 = {"spec": "chara_card_v3", "spec_version": "3.0", "data": dict(data)}
+    v2_data = {key: value for key, value in data.items() if key not in _CARD_V3_ONLY}
+    v2 = {"spec": "chara_card_v2", "spec_version": "2.0", "data": v2_data}
+
+    name = str(character.get("canonical_name") or "")
+    preview = [
+        f"# {name} · 角色卡",
+        "",
+        f"- 规格：SillyTavern Character Card V3（同目录另有 V2 版本）",
+        f"- 出场：{len(character.get('pages') or [])} 页 / {len(facts.chapter_distribution)} 个章节单元",
+        f"- 原画观察：{len(used_vision)} 页",
+        "",
+        "## 描述",
+        "",
+        str(data.get("description") or ""),
+        "",
+        "## 性格",
+        "",
+        str(data.get("personality") or ""),
+        "",
+        "## 场景",
+        "",
+        str(data.get("scenario") or ""),
+        "",
+        "## 开场白",
+        "",
+        str(data.get("first_mes") or ""),
+        "",
+        "## 对话示例",
+        "",
+        "```",
+        str(data.get("mes_example") or ""),
+        "```",
+        "",
+        "## 扮演系统提示",
+        "",
+        str(data.get("system_prompt") or ""),
+        "",
+        "## 写作禁忌",
+        "",
+        str(data.get("post_history_instructions") or ""),
+        "",
+        "## 证据与边界",
+        "",
+        str(data.get("creator_notes") or ""),
+        "",
+    ]
+    return {
+        "character-card-v3.json": json.dumps(v3, ensure_ascii=False, indent=2),
+        "character-card-v2.json": json.dumps(v2, ensure_ascii=False, indent=2),
+        "character-card.md": "\n".join(preview),
+    }
+
+
+def _build_card_payload(
+    *,
+    book_id: str,
+    book_title: str,
+    character: Mapping[str, Any],
+    run_id: str,
+    facts: _Facts,
+    evidence: Sequence[PageEvidence],
+    observations: Sequence[Mapping[str, Any]],
+    card: Mapping[str, Any],
+    dropped: int,
+    vlm_model: str,
+    chat_model: str,
+) -> dict[str, Any]:
+    models = {"vlm": vlm_model, "chat": chat_model}
+    data = _card_data(
+        book_id=book_id,
+        book_title=book_title,
+        character=character,
+        run_id=run_id,
+        card=card,
+        facts=facts,
+        used_vision=observations,
+        models=models,
+    )
+    files = _render_card_files(
+        data=data,
+        character=character,
+        facts=facts,
+        used_vision=observations,
+    )
+    generated = utcnow()
+    pages = len(character.get("pages") or [])
+    return {
+        "kind": CHARACTER_CARD_KIND,
+        "bookId": book_id,
+        "bookTitle": book_title,
+        "entityId": str(character.get("entity_id") or ""),
+        "characterName": str(character.get("canonical_name") or ""),
+        "runId": run_id,
+        "generatedAt": generated.isoformat(timespec="seconds"),
+        "models": models,
+        "stats": {
+            "pages": pages,
+            "chapters": len(facts.chapter_distribution),
+            "visionPages": len(observations),
+            "evidencePages": len(evidence),
+            "droppedCitations": int(dropped),
+        },
+        "summary": dict(card),
+        "card": {"spec": "chara_card_v3", "specVersion": "3.0", "data": data},
+        "files": files,
+        "status": "ready",
+    }
+
+
+def _spread_picks(numbers: Sequence[int], limit: int) -> list[int]:
+    """从有序页码里均匀挑 limit 个（含首尾），用于世界书的剧情摘录。"""
+    unique = list(dict.fromkeys(int(number) for number in numbers if int(number) > 0))
+    if limit <= 0 or not unique:
+        return []
+    if len(unique) <= limit:
+        return unique
+    picks: list[int] = []
+    for index in range(limit):
+        position = round(index * (len(unique) - 1) / (limit - 1)) if limit > 1 else 0
+        picks.append(unique[position])
+    return list(dict.fromkeys(picks))
+
+
+def _lorebook_entry(
+    *,
+    index: int,
+    book_title: str,
+    entity: Mapping[str, Any],
+    preview_pages: Sequence[PageEvidence],
+) -> dict[str, Any]:
+    name = str(entity.get("canonical_name") or "").strip()
+    category = str(entity.get("category") or "")
+    label = CATEGORY_LABELS.get(category, category or "实体")
+    aliases = [str(item).strip() for item in entity.get("aliases") or [] if str(item or "").strip()]
+    pages = [int(number) for number in entity.get("pages") or [] if int(number or 0) > 0]
+    lines = [f"《{book_title}》{label}：「{name}」。"]
+    if pages:
+        lines.append(f"出场 {len(pages)} 页（全书第 {min(pages)}–{max(pages)} 页）。")
+    if aliases:
+        lines.append(f"别名：{'、'.join(aliases[:8])}。")
+    if preview_pages:
+        lines.append("相关剧情：")
+        for page in preview_pages:
+            summary = (page.page_summary or "").strip().replace("\n", " ")
+            if not summary:
+                continue
+            lines.append(f"- （{page.citation()}）{summary[:90]}")
+    keys = [name] + [alias for alias in aliases if len(alias) <= 12 and alias != name]
+    return {
+        "uid": index,
+        "key": keys[:12],
+        "keysecondary": [],
+        "comment": f"{label}：{name}",
+        "content": "\n".join(lines),
+        "constant": False,
+        "vectorized": False,
+        "selective": True,
+        "selectiveLogic": 0,
+        "addMemories": True,
+        "addEmoji": True,
+        "order": 100,
+        "position": 0,
+        "disable": False,
+        "excludeRecursion": False,
+        "preventRecursion": False,
+        "delayUntilRecursion": False,
+        "probability": 100,
+        "useProbability": True,
+        "depth": 4,
+        "group": label,
+        "groupOverride": False,
+        "groupWeight": 100,
+        "scanDepth": None,
+        "caseSensitive": None,
+        "matchWholeWords": None,
+        "useGroupScoring": None,
+        "automationId": "",
+        "role": 0,
+        "sticky": 0,
+        "cooldown": 0,
+        "delay": 0,
+        "triggers": [],
+        "displayIndex": index,
+        "extensions": {
+            "miyako": {
+                "entityId": str(entity.get("entity_id") or ""),
+                "category": category,
+                "pages": len(pages),
+            }
+        },
+    }
+
+
+def _lorebook_entries(
+    *,
+    book_title: str,
+    entities: Sequence[Mapping[str, Any]],
+    preview: Mapping[str, Sequence[int]],
+    by_page: Mapping[int, PageEvidence],
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for index, entity in enumerate(entities):
+        picks = [by_page[number] for number in preview.get(str(entity.get("entity_id")), []) if number in by_page]
+        entries.append(
+            _lorebook_entry(
+                index=index,
+                book_title=book_title,
+                entity=entity,
+                preview_pages=picks,
+            )
+        )
+    return entries
+
+
+def _render_lorebook_files(
+    *,
+    book_title: str,
+    entries: Sequence[Mapping[str, Any]],
+) -> dict[str, str]:
+    world = {
+        "name": f"{book_title} · 世界书",
+        "description": "由 MiyakoKB 从实体知识网络与页面级分析生成；每条内容都带页码引用。",
+        "entries": {str(entry["uid"]): dict(entry) for entry in entries},
+        "extensions": {"miyako": {"generator": "MiyakoKB", "bookTitle": book_title}},
+    }
+    lines = [f"# {book_title} · 世界书", "", f"共 {len(entries)} 条条目。", ""]
+    for entry in entries:
+        lines.append(f"## {entry['comment']}")
+        lines.append("")
+        lines.append(f"- 触发关键词：{'、'.join(entry['key'])}")
+        lines.append("")
+        lines.append(str(entry["content"]))
+        lines.append("")
+    return {
+        "lorebook.json": json.dumps(world, ensure_ascii=False, indent=2),
+        "lorebook.md": "\n".join(lines),
+    }
+
+
+def _entries_digest(entries: Sequence[Mapping[str, Any]]) -> str:
+    payload = [{"uid": entry.get("uid"), "key": entry.get("key"), "content": entry.get("content")} for entry in entries]
+    return hashlib.sha256(_json(payload).encode("utf-8")).hexdigest()
+
+
+def _build_lorebook_payload(
+    *,
+    book_id: str,
+    book_title: str,
+    run_id: str,
+    entries: Sequence[Mapping[str, Any]],
+    entity_total: int,
+    page_total: int,
+) -> dict[str, Any]:
+    files = _render_lorebook_files(book_title=book_title, entries=entries)
+    generated = utcnow()
+    by_category: Counter[str] = Counter()
+    for entry in entries:
+        by_category[str((entry.get("extensions") or {}).get("miyako", {}).get("category") or "unknown")] += 1
+    return {
+        "kind": LOREBOOK_KIND,
+        "bookId": book_id,
+        "bookTitle": book_title,
+        "runId": run_id,
+        "generatedAt": generated.isoformat(timespec="seconds"),
+        "stats": {
+            "entries": len(entries),
+            "entities": entity_total,
+            "previewPages": page_total,
+            "byCategory": dict(by_category),
+        },
+        "summary": {
+            "entryCount": len(entries),
+            "categories": dict(by_category),
+            "triggers": len({key for entry in entries for key in entry.get("key") or []}),
+        },
+        "files": files,
+        "status": "ready",
+    }
 
 def _validate_citation(text: str, allowed: set[tuple[str, int, int]]) -> bool:
     match = CITATION_RE.search(text or "")
@@ -1124,41 +1776,57 @@ def _fingerprint(*, book_id: str, entity_id: str, run_id: str, pages: Sequence[P
     return digest.hexdigest()[:32]
 
 
-def _task_key(book_id: str, entity_id: str) -> str:
-    return f"{book_id}:{entity_id}"
+def _task_key(book_id: str, kind: str, entity_id: str) -> str:
+    return f"{book_id}:{kind}:{entity_id}"
 
 
 _UNSAFE_FILENAME_CHARS = frozenset('\\/:*?"<>|')
 
 
-def _archive_filename(document: Mapping[str, Any]) -> str:
-    """下载文件名：书名的角色名在 Windows 资源管理器里也能落地。"""
-    character = str(document.get("characterName") or "").strip()
+def _archive_stem(document: Mapping[str, Any], kind: str) -> str:
     book_title = str(document.get("bookTitle") or "").strip()
+    character = str(document.get("characterName") or "").strip()
     entity_id = str(document.get("entityId") or "").strip()
-    if character:
-        stem = f"{book_title}-{character}-skill" if book_title else f"{character}-skill"
+    if kind == LOREBOOK_KIND:
+        suffix = "worldbook"
+        subject = ""
+    elif kind == CHARACTER_CARD_KIND:
+        suffix = "card"
+        subject = character or entity_id
     else:
-        stem = f"{entity_id or 'character'}-skill"
-    cleaned = "".join(
-        "_" if char in _UNSAFE_FILENAME_CHARS else char for char in stem
-    )
-    cleaned = " ".join(cleaned.split()).strip(" .")
-    return f"{cleaned or 'character-skill'}.zip"
+        suffix = "skill"
+        subject = character or entity_id
+    if subject:
+        stem = f"{book_title}-{subject}-{suffix}" if book_title else f"{subject}-{suffix}"
+    elif book_title:
+        stem = f"{book_title}-{suffix}"
+    else:
+        stem = f"character-{suffix}"
+    cleaned = "".join("_" if char in _UNSAFE_FILENAME_CHARS else char for char in stem)
+    return " ".join(cleaned.split()).strip(" .")
 
 
-def build_skill_archive(document: Mapping[str, Any]) -> tuple[str, bytes]:
-    """把角色 Skill 的全部文件打成 zip，返回（下载文件名, 压缩包字节）。"""
+def _archive_filename(document: Mapping[str, Any], kind: str = CHARACTER_SKILL_KIND) -> str:
+    "\u4e0b\u8f7d\u6587\u4ef6\u540d\uff1a\u4e66\u540d\u89d2\u8272\u540d\u5728 Windows \u8d44\u6e90\u7ba1\u7406\u5668\u91cc\u4e5f\u80fd\u843d\u5730\u3002"
+    stem = _archive_stem(document, kind)
+    return f"{stem or 'character-skill'}.zip"
+
+
+def build_skill_archive(
+    document: Mapping[str, Any],
+    kind: str = CHARACTER_SKILL_KIND,
+) -> tuple[str, bytes]:
+    "\u628a\u4e00\u4efd\u84b8\u998f\u4ea7\u7269\u7684\u5168\u90e8\u6587\u4ef6\u6253\u6210 zip\uff0c\u8fd4\u56de\uff08\u4e0b\u8f7d\u6587\u4ef6\u540d, \u538b\u7f29\u5305\u5b57\u8282\uff09\u3002"
     files = document.get("files")
     if not isinstance(files, Mapping) or not files:
-        raise InsightNotFound("该角色 Skill 没有可导出的文件")
+        raise InsightNotFound("该蒸馏产物没有可导出的文件")
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(str(key) for key in files):
             content = files[path]
-            text = content if isinstance(content, str) else str(content)
-            archive.writestr(path, text.encode("utf-8"))
-    return _archive_filename(document), buffer.getvalue()
+            entry = content if isinstance(content, str) else str(content)
+            archive.writestr(path, entry.encode("utf-8"))
+    return _archive_filename(document, kind), buffer.getvalue()
 
 
 def _page_number(value: Any) -> int:
@@ -1183,21 +1851,34 @@ class CharacterSkillService:
     def characters(self, *, book_id: str, min_pages: int = 0) -> list[dict[str, Any]]:
         return self.repository.characters(book_id=book_id, min_pages=min_pages)
 
-    def get(self, *, book_id: str, entity_id: str) -> dict[str, Any]:
-        return self.repository.get_skill(book_id=book_id, entity_id=entity_id)
+    def get(
+        self,
+        *,
+        book_id: str,
+        entity_id: str,
+        kind: str = CHARACTER_SKILL_KIND,
+    ) -> dict[str, Any]:
+        return self.repository.get_skill(book_id=book_id, entity_id=entity_id, kind=kind)
 
-    def status(self, *, book_id: str, entity_id: str) -> dict[str, Any]:
-        key = _task_key(book_id, entity_id)
+    def status(
+        self,
+        *,
+        book_id: str,
+        entity_id: str,
+        kind: str = CHARACTER_SKILL_KIND,
+    ) -> dict[str, Any]:
+        key = _task_key(book_id, kind, entity_id)
         with self._guard:
             task = self._tasks.get(key)
             if task is not None:
                 return dict(task)
         try:
-            skill = self.repository.get_skill(book_id=book_id, entity_id=entity_id)
+            document = self.repository.get_skill(book_id=book_id, entity_id=entity_id, kind=kind)
         except InsightNotFound:
             return {
                 "bookId": book_id,
                 "entityId": entity_id,
+                "kind": kind,
                 "status": "idle",
                 "stage": None,
                 "done": 0,
@@ -1206,12 +1887,13 @@ class CharacterSkillService:
         return {
             "bookId": book_id,
             "entityId": entity_id,
+            "kind": kind,
             "status": "ready",
             "stage": "done",
             "done": 1,
             "total": 1,
-            "revision": skill.get("revision"),
-            "updatedAt": skill.get("updatedAt"),
+            "revision": document.get("revision"),
+            "updatedAt": document.get("updatedAt"),
         }
 
     # ---- 触发 ----------------------------------------------------------
@@ -1222,9 +1904,14 @@ class CharacterSkillService:
         book_id: str,
         entity_id: str,
         max_vision_pages: int = DEFAULT_MAX_VISION_PAGES,
+        kind: str = CHARACTER_SKILL_KIND,
     ) -> dict[str, Any]:
-        key = _task_key(book_id, entity_id)
+        if kind not in (CHARACTER_SKILL_KIND, CHARACTER_CARD_KIND):
+            raise ValueError(f"不支持的蒸馏类型：{kind}")
+        limit = max(1, min(int(max_vision_pages or DEFAULT_MAX_VISION_PAGES), MAX_VISION_PAGES))
+        label = DISTILL_KIND_LABELS.get(kind, kind)
         with self._guard:
+            key = _task_key(book_id, kind, entity_id)
             existing = self._tasks.get(key)
             if existing is not None and existing.get("status") == "running":
                 return dict(existing)
@@ -1235,6 +1922,8 @@ class CharacterSkillService:
             task = {
                 "bookId": book_id,
                 "entityId": entity_id,
+                "kind": kind,
+                "label": label,
                 "status": "running",
                 "stage": "queued",
                 "done": 0,
@@ -1243,11 +1932,45 @@ class CharacterSkillService:
                 "error": None,
             }
             self._tasks[key] = task
-        limit = max(1, min(int(max_vision_pages or DEFAULT_MAX_VISION_PAGES), MAX_VISION_PAGES))
         threading.Thread(
             target=self._run,
-            args=(key, book_id, entity_id, limit, vlm_config, chat_config),
-            name="character-skill",
+            args=(key, book_id, entity_id, limit, vlm_config, chat_config, kind),
+            name=f"distill-{kind}",
+            daemon=True,
+        ).start()
+        return dict(task)
+
+    def start_lorebook(
+        self,
+        *,
+        book_id: str,
+        max_entities: int = DEFAULT_LOREBOOK_ENTITIES,
+    ) -> dict[str, Any]:
+        limit = max(1, min(int(max_entities or DEFAULT_LOREBOOK_ENTITIES), MAX_LOREBOOK_ENTITIES))
+        entity_id = LOREBOOK_ENTITY_ID
+        with self._guard:
+            key = _task_key(book_id, LOREBOOK_KIND, entity_id)
+            existing = self._tasks.get(key)
+            if existing is not None and existing.get("status") == "running":
+                return dict(existing)
+            vlm_config, chat_config = self._runtime_configs(book_id)
+            task = {
+                "bookId": book_id,
+                "entityId": entity_id,
+                "kind": LOREBOOK_KIND,
+                "label": DISTILL_KIND_LABELS.get(LOREBOOK_KIND, LOREBOOK_KIND),
+                "status": "running",
+                "stage": "queued",
+                "done": 0,
+                "total": 2,
+                "startedAt": utcnow().isoformat(timespec="seconds"),
+                "error": None,
+            }
+            self._tasks[key] = task
+        threading.Thread(
+            target=self._run,
+            args=(key, book_id, entity_id, limit, vlm_config, chat_config, LOREBOOK_KIND),
+            name="distill-lorebook",
             daemon=True,
         ).start()
         return dict(task)
@@ -1262,6 +1985,7 @@ class CharacterSkillService:
         limit: int,
         vlm_config: Any,
         chat_config: Any,
+        kind: str,
     ) -> None:
         def progress(stage: str, done: int, total: int) -> None:
             with self._guard:
@@ -1275,15 +1999,24 @@ class CharacterSkillService:
                 vlm_config=vlm_config,
                 chat_config=chat_config,
             )
-            payload = builder.build(
-                book_id=book_id,
-                entity_id=entity_id,
-                max_vision_pages=limit,
-                progress=progress,
-            )
+            if kind == LOREBOOK_KIND:
+                payload = builder.build_lorebook(
+                    book_id=book_id,
+                    max_entities=limit,
+                    progress=progress,
+                )
+            else:
+                payload = builder.build(
+                    book_id=book_id,
+                    entity_id=entity_id,
+                    max_vision_pages=limit,
+                    progress=progress,
+                    kind=kind,
+                )
         except Exception as error:  # noqa: BLE001 - 结果通过任务状态回传
             LOGGER.warning(
-                "character skill build failed for %s/%s: %s",
+                "distill %s failed for %s/%s: %s",
+                kind,
                 book_id,
                 entity_id,
                 error,
@@ -1293,6 +2026,7 @@ class CharacterSkillService:
                 self._tasks[key] = {
                     "bookId": book_id,
                     "entityId": entity_id,
+                    "kind": kind,
                     "status": "failed",
                     "stage": "failed",
                     "done": 0,
@@ -1305,6 +2039,7 @@ class CharacterSkillService:
             self._tasks[key] = {
                 "bookId": book_id,
                 "entityId": entity_id,
+                "kind": kind,
                 "status": "ready",
                 "stage": "done",
                 "done": 1,

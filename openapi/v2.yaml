@@ -1,4 +1,4 @@
-openapi: 3.1.0
+﻿openapi: 3.1.0
 info:
   title: Saber Translator Backend-First API
   version: 2.0.0-dev
@@ -1675,6 +1675,29 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/VeneraLibrary"}
+  /import/venera/cover:
+    get:
+      tags: [import]
+      operationId: getVeneraCover
+      summary: Read a Venera comic cover image from the configured data directory
+      parameters:
+        - name: comicId
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Cover image bytes
+          content:
+            image/*:
+              schema: {type: string, format: binary}
+        "400":
+          description: comicId is required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404": {$ref: "#/components/responses/NotFound"}
   /import/venera:
     post:
       tags: [import]
@@ -2146,6 +2169,11 @@ paths:
       parameters:
         - $ref: "#/components/parameters/BookId"
         - $ref: "#/components/parameters/EntityId"
+        - name: kind
+          in: query
+          required: false
+          description: Which distilled artifact to read (skill, card or lorebook).
+          schema: {type: string, enum: [skill, card, lorebook], default: skill}
       responses:
         "200":
           description: Distilled skill document with citations and generated files.
@@ -2161,6 +2189,11 @@ paths:
       parameters:
         - $ref: "#/components/parameters/BookId"
         - $ref: "#/components/parameters/EntityId"
+        - name: kind
+          in: query
+          required: false
+          description: Which distilled artifact to read (skill, card or lorebook).
+          schema: {type: string, enum: [skill, card, lorebook], default: skill}
       responses:
         "200":
           description: Current stage of the distillation task.
@@ -2176,9 +2209,76 @@ paths:
       parameters:
         - $ref: "#/components/parameters/BookId"
         - $ref: "#/components/parameters/EntityId"
+        - name: kind
+          in: query
+          required: false
+          description: Which distilled artifact to read (skill, card or lorebook).
+          schema: {type: string, enum: [skill, card, lorebook], default: skill}
       responses:
         "200":
           description: Zip archive holding SKILL.md and the reference documents.
+          content:
+            application/zip:
+              schema: {type: string, format: binary}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /insight/books/{book_id}/lorebooks:
+    get:
+      tags: [insight]
+      operationId: getInsightLorebook
+      summary: Read the world book distilled from the entity knowledge network of a book.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+      responses:
+        "200":
+          description: World book document holding every entry and its trigger keywords.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightLorebook"}
+        "404": {$ref: "#/components/responses/NotFound"}
+    post:
+      tags: [insight, jobs]
+      operationId: buildInsightLorebook
+      summary: Distill the entity knowledge network of a book into a world book.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/InsightLorebookBuildCommand"}
+      responses:
+        "202":
+          description: Distillation accepted; poll the status route for progress.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightCharacterSkillStatus"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+  /insight/books/{book_id}/lorebooks/status:
+    get:
+      tags: [insight]
+      operationId: getInsightLorebookStatus
+      summary: Progress of the world book distillation of one book.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+      responses:
+        "200":
+          description: Current stage of the world book task.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightCharacterSkillStatus"}
+  /insight/books/{book_id}/lorebooks/archive:
+    get:
+      tags: [insight]
+      operationId: downloadInsightLorebookArchive
+      summary: Download the world book as a zip archive.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+      responses:
+        "200":
+          description: Zip archive holding lorebook.json and lorebook.md.
           content:
             application/zip:
               schema: {type: string, format: binary}
@@ -5450,6 +5550,7 @@ components:
       properties:
         entityId: {type: string}
         maxVisionPages: {type: integer, minimum: 1, maximum: 30}
+        kind: {type: string, enum: [skill, card], default: skill}
     InsightCharacterSkillStatus:
       type: object
       additionalProperties: false
@@ -5457,6 +5558,8 @@ components:
       properties:
         bookId: {type: string}
         entityId: {type: string}
+        kind: {type: string, enum: [character_skill, character_card, lorebook]}
+        label: {type: string}
         status: {type: string, enum: [idle, running, ready, failed]}
         stage: {type: string, nullable: true}
         done: {type: integer, minimum: 0}
@@ -5466,6 +5569,27 @@ components:
         startedAt: {type: string, nullable: true}
         finishedAt: {type: string, nullable: true}
         error: {type: string, nullable: true}
+    InsightLorebookBuildCommand:
+      type: object
+      additionalProperties: false
+      properties:
+        maxEntities: {type: integer, minimum: 1, maximum: 200}
+    InsightLorebook:
+      type: object
+      additionalProperties: true
+      required: [kind, bookId, files]
+      properties:
+        kind: {type: string}
+        bookId: {type: string}
+        bookTitle: {type: string}
+        runId: {type: string}
+        generatedAt: {type: string}
+        revision: {type: integer, minimum: 0}
+        updatedAt: {type: string, nullable: true}
+        status: {type: string}
+        stats: {type: object, additionalProperties: true}
+        summary: {type: object, additionalProperties: true}
+        files: {type: object, additionalProperties: {type: string}}
     InsightCharacterSkillEntry:
       type: object
       additionalProperties: true
@@ -5486,6 +5610,15 @@ components:
       type: object
       additionalProperties: true
       properties:
+        evidence:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              claim: {type: string}
+              citation: {type: string}
+              confidence: {type: string}
         one_liner: {type: string}
         identity: {type: object, additionalProperties: true}
         appearance:
@@ -5513,11 +5646,12 @@ components:
     InsightCharacterSkillStats:
       type: object
       additionalProperties: false
-      required: [pages, chapters, events, visionPages, droppedCitations]
+      required: [pages, chapters, visionPages, droppedCitations]
       properties:
         pages: {type: integer, minimum: 0}
         chapters: {type: integer, minimum: 0}
         events: {type: integer, minimum: 0}
+        evidencePages: {type: integer, minimum: 0}
         visionPages: {type: integer, minimum: 0}
         droppedCitations: {type: integer, minimum: 0}
     InsightCharacterSkillModels:
@@ -5547,6 +5681,39 @@ components:
         revision: {type: integer, minimum: 0, nullable: true}
         updatedAt: {type: string, nullable: true}
         status: {type: string, nullable: true}
+        kind: {type: string, nullable: true}
+        card: {$ref: "#/components/schemas/InsightCharacterCard"}
+    InsightCharacterCard:
+      type: object
+      additionalProperties: false
+      required: [spec, specVersion, data]
+      properties:
+        spec: {type: string}
+        specVersion: {type: string}
+        data: {$ref: "#/components/schemas/InsightCharacterCardData"}
+    InsightCharacterCardData:
+      type: object
+      additionalProperties: true
+      required: [name, description]
+      properties:
+        name: {type: string}
+        description: {type: string}
+        personality: {type: string}
+        scenario: {type: string}
+        first_mes: {type: string}
+        mes_example: {type: string}
+        creator_notes: {type: string}
+        system_prompt: {type: string}
+        post_history_instructions: {type: string}
+        alternate_greetings:
+          type: array
+          items: {type: string}
+        tags:
+          type: array
+          items: {type: string}
+        creator: {type: string}
+        character_version: {type: string}
+        extensions: {type: object, additionalProperties: true}
     InsightQaStatus:
       type: object
       additionalProperties: false
@@ -6196,6 +6363,7 @@ components:
         directory: {type: string}
         cover: {type: string}
         coverPath: {type: string}
+        hasCover: {type: boolean}
         comicType: {type: integer}
         chapterCount: {type: integer, minimum: 0}
         downloadedChapters: {type: array, items: {type: string}}
@@ -6209,6 +6377,9 @@ components:
         total: {type: integer, minimum: 0}
         veneraFound: {type: boolean}
         error: {type: string}
+        baseDir: {type: string}
+        baseDirSource: {type: string, enum: [setting, default]}
+        dbPath: {type: string}
     VeneraImportDetail:
       type: object
       additionalProperties: false

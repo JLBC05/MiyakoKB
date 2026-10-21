@@ -29,6 +29,7 @@ const mainEntities = ref<V2InsightEntity[]>([])
 
 // 缩略图大图预览弹窗
 const previewImageUrl = ref<string | null>(null)
+const previewZoomed = ref(false)
 
 const bookId = computed(() => {
   const queryBook = typeof route?.query?.book === 'string' ? route.query.book.trim() : ''
@@ -210,6 +211,7 @@ function getThumbnail(event: TimelineEvent): string | null {
 
 function openThumbnailPreview(url: string) {
   previewImageUrl.value = url
+  previewZoomed.value = false
 }
 
 function closeThumbnailPreview() {
@@ -514,9 +516,19 @@ onMounted(() => {
       body-padding="none"
       @update:model-value="closeThumbnailPreview"
     >
-      <div class="thumbnail-modal-card">
-        <img :src="previewImageUrl ?? undefined" alt="全屏预览" class="thumbnail-modal-img">
+      <div class="thumbnail-modal-card" :class="{ 'thumbnail-modal-card--zoomed': previewZoomed }">
+        <img
+          :src="previewImageUrl ?? undefined"
+          alt="全屏预览"
+          class="thumbnail-modal-img"
+          :class="{ 'thumbnail-modal-img--zoomed': previewZoomed }"
+          title="点击切换原始尺寸"
+          @click="previewZoomed = !previewZoomed"
+        >
       </div>
+      <p class="thumbnail-modal-hint">
+        点击图片切换原始尺寸 · 放大后可在弹窗内滚动查看（{{ previewZoomed ? '原始尺寸' : '适合窗口' }}）
+      </p>
     </BaseModal>
   </div>
 </template>
@@ -1107,8 +1119,8 @@ onMounted(() => {
   overflow: hidden;
   border: 1px solid var(--color-border);
   cursor: pointer;
-  max-width: 140px;
-  height: 90px;
+  width: 128px;
+  height: 176px;
 }
 
 .timeline-card__thumb-img {
@@ -1151,10 +1163,32 @@ onMounted(() => {
   box-shadow: var(--synopsis-accent-gray);
 }
 
+.thumbnail-modal-card--zoomed {
+  overflow: auto;
+  max-width: 92vw;
+  max-height: 82vh;
+}
+
 .thumbnail-modal-img {
   max-width: 100%;
   max-height: 85vh;
   object-fit: contain;
   display: block;
+  cursor: zoom-in;
+}
+
+.thumbnail-modal-img--zoomed {
+  max-width: none;
+  max-height: none;
+  width: auto;
+  height: auto;
+  cursor: zoom-out;
+}
+
+.thumbnail-modal-hint {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }
 </style>
