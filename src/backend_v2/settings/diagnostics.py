@@ -305,11 +305,15 @@ class ProviderDiagnostics:
         capability: str,
     ) -> str:
         provider = self._provider(body)
-        if not provider_supports_capability(provider, capability):
-            raise DiagnosticRequestError(f"provider does not support vision: {provider}")
         secret = self._secret(body, provider=provider)
         api_key = self._api_key(secret, field=api_key_field)
         manifest = get_provider_manifest(provider)
+        # 能力清单是「供应商级」静态快照，而能不能看图取决于具体模型：同一个供应商
+        # 上新模型先能出图、清单还没更新时，按清单直接拒绝会把可用配置判成失败。
+        # 对 OpenAI 兼容通道改为真发一次请求，让服务端给出结论；其它通道（本地/适配器）
+        # 协议不同，仍按清单拦截。
+        if not provider_supports_capability(provider, capability) and manifest.kind != "openai_compatible":
+            raise DiagnosticRequestError(f"provider does not support vision: {provider}")
         model = self._required_string(body, "model")
         base_url = self._optional_string(body, "baseUrl")
         if provider_requires_api_key(provider, base_url) and not api_key:

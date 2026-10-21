@@ -2542,6 +2542,48 @@ def test_provider_diagnostics_allow_uncredentialed_local_ai_vision(
     assert "连接成功：Saber OCR test 123" in messages
 
 
+def test_vision_connection_test_asks_the_provider_instead_of_a_stale_capability_list(
+    platform,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _data_root, engine = platform
+    diagnostics = ProviderDiagnostics(SettingsRepository(engine))
+    captured: dict[str, object] = {}
+
+    def complete_vision(request):
+        captured["model"] = request.model
+        captured["base_url"] = request.base_url
+        return "Saber OCR test 123"
+
+    monkeypatch.setattr(diagnostics.chat, "complete_vision", complete_vision)
+    # deepseek 的清单只登记文字能力，但 deepseek-flash 实际能看图：
+    # 测试应当真发一次请求，而不是按清单直接判「不支持视觉」。
+    result = diagnostics.connection_test(
+        "ai_vision_ocr",
+        {
+            "provider": "deepseek",
+            "domain": "ai_vision_ocr",
+            "baseUrl": "https://api.deepseek.com/v1",
+            "model": "deepseek-flash",
+            "secret": {"ai_vision_api_key": "fixture-key"},
+        },
+    )
+
+    assert result == {"success": True, "message": "连接成功：Saber OCR test 123"}
+    assert captured == {"model": "deepseek-flash", "base_url": "https://api.deepseek.com/v1"}
+
+    with pytest.raises(ValueError, match="does not support vision"):
+        diagnostics.connection_test(
+            "vlm",
+            {
+                "provider": "caiyun",
+                "domain": "insight_vlm",
+                "model": "caiyun-vision",
+                "secret": {"api_key": "fixture-key"},
+            },
+        )
+
+
 def test_browser_dom_agent_model_catalog(platform, monkeypatch: pytest.MonkeyPatch) -> None:
     _data_root, engine = platform
     diagnostics = ProviderDiagnostics(SettingsRepository(engine))
