@@ -14,6 +14,7 @@ import { useSettingsAutoSave } from '@/composables/useSettingsAutoSave'
 import { isRevisionConflictError, REVISION_CONFLICT_MESSAGE } from '@/utils/settingsConflict'
 import * as insightApi from '@/api/insight'
 
+import ChannelOverviewTab from '@/components/insight/settings/ChannelOverviewTab.vue'
 import VlmSettingsTab from '@/components/insight/settings/VlmSettingsTab.vue'
 import LlmSettingsTab from '@/components/insight/settings/LlmSettingsTab.vue'
 import EmbeddingSettingsTab from '@/components/insight/settings/EmbeddingSettingsTab.vue'
@@ -23,9 +24,10 @@ import PromptsSettingsTab from '@/components/insight/settings/PromptsSettingsTab
 
 const insightStore = useInsightStore()
 
-type SettingsTabId = 'vlm' | 'llm' | 'embedding' | 'reranker' | 'analysis' | 'prompts'
+type SettingsTabId = 'channels' | 'vlm' | 'llm' | 'embedding' | 'reranker' | 'analysis' | 'prompts'
 
 const settingsTabs = [
+  { id: 'channels', label: '模型通道总览', icon: '🧩', desc: '四条模型通道的供应商、模型与密钥状态一览' },
   { id: 'vlm', label: 'VLM 视觉模型', icon: '🖼️', desc: '用于分镜画面识别与实体初筛' },
   { id: 'llm', label: 'Chat 对话/裁决', icon: '💬', desc: '用于实体语义裁决、剧情问答与概览生成' },
   { id: 'embedding', label: 'Embedding 向量', icon: '🔢', desc: '用于画面与分镜语义检索、多模态 RAG 索引' },
@@ -34,7 +36,7 @@ const settingsTabs = [
   { id: 'prompts', label: '提示词配置', icon: '📝', desc: '分镜分析、段落汇总、全书总结提示词' },
 ] satisfies Array<{ id: SettingsTabId; label: string; icon: string; desc: string }>
 
-const activeTab = ref<SettingsTabId>('vlm')
+const activeTab = ref<SettingsTabId>('channels')
 const isLoadingConfig = ref(true)
 const backendConfigReady = ref(false)
 const statusMessage = ref('')
@@ -273,6 +275,14 @@ async function handleManualSave(): Promise<void> {
           </div>
 
           <div v-else class="settings-panel-card">
+            <!-- 0. 模型通道总览 -->
+            <div v-show="activeTab === 'channels'" class="settings-tab-pane">
+              <ChannelOverviewTab
+                @show-message="showMessage"
+                @goto="activeTab = $event"
+              />
+            </div>
+
             <!-- 1. VLM 视觉模型 -->
             <div v-show="activeTab === 'vlm'" class="settings-tab-pane">
               <VlmSettingsTab
