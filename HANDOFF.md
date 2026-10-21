@@ -103,7 +103,8 @@
 - [x] 角色 Skill 蒸馏（2026-10-20，用户要求「产品化 + 入口放在智能问答右边 + 必须带人格层」）：后端 `src/backend_v2/insight/character_skill.py` + 4 条路由、前端 `/character-skills` 页面与导航项、契约 3 条路径、`tests_backend/v2/test_character_skill.py` 4 条用例，实栈用呪術廻戦 虎杖悠仁跑通（85s，156 页/10 章/15 张原画，人格层与引用全绿）。见 §2.8、决策 21、坑 29、报告发现 #42。
 - [x] 实体对齐流程重写（2026-10-20，用户 `m18960` 给出规格）：候选图 + 单请求多边 + 结构性输出，请求数 705 → 260，串行 ambiguous 仲裁删除；新模块 `src/backend_v2/insight/entity_alignment.py`、新单测 16 条、后端全量 794 passed。见决策 22、坑 30、报告发现 #43。
 - [x] 发布文档与素材（2026-10-21）：README 重写、导航栏换品牌 logo、Archify 架构图入库（`docs/assets/architecture.svg|.png`）。见 §2.9、坑 32；提交 `bc9af19`。
-- [x] 导入可配置化与蒸馏产物扩展（2026-10-21，用户 `m20522` 的 1-6 项）：Venera 目录可设置 + 封面、图谱改 AntV G6、实体浏览搜索、时间线预览大图、蒸馏角色三形态（Skill/角色卡/世界书）；第 7 项（系统设置优化）**只给方案**。见 §2.10、决策 23/24、坑 33/34、报告发现 #45-#47。
+- [x] 导入可配置化与蒸馏产物扩展（2026-10-21，用户 `m20522` 的 1-6 项）：Venera 目录可设置 + 封面、图谱改 AntV G6、实体浏览搜索、时间线预览大图、蒸馏角色三形态（Skill/角色卡/世界书）；第 7 项（系统设置优化）**已按 P0→P2 全部落地**（见决策 25、报告 #48/#49）。见 §2.10、决策 23/24、坑 33/34、报告发现 #45-#47。
+- [x] 设置面可运维化（2026-10-21，用户 `m21338`「按你建议的顺序来」）：凭据读出恒为掩码 + `hasKey`、摘除前端翻译死面、修订冲突停止保存、「模型通道总览」页签、校验错误定位到页签与字段、设置项搜索、每域恢复默认、整库导入导出（不含凭据）、视觉探测不再信静态能力清单、性能与成本换算说明。见 §2.10、决策 25、坑 36-38、报告 #48/#49。
 - **阻塞**：无代码或架构阻塞。
 - **下一步**（按优先级）：
   1. **对齐裁决候选对问题**（报告发现 #13-#17）：**方案 4 → 1 → 5 已实施**（见 §4 决策 5）；用户已拍板，方案 3（给裁决器注入频次/页/描述上下文）与方案 2（改提议通道 + 向量召回）留作第二阶段评估；**2026-10-19 追加：全书构建 69% 墙钟耗在逐对裁决的问题已定案并落地**（报告发现 #34 / 决策 14 / 坑 19）：超集预取 + 批量裁决（30 对/批、3 并发）、对齐拆为独立步骤 `insight_stage_entity_alignment`、每批进度写用户日志；
@@ -259,6 +260,23 @@
   - *做法*：`vue-frontend/src/components/insight/KnowledgeGraphPanel.vue` 引入 `@antv/g6` 5.1.1，`new Graph({container, autoResize, background:'transparent', padding:24, data, node/edge 样式, layout:{type:'force', preventOverlap:true, nodeSize:40, linkDistance:110, nodeStrength:-260, edgeStrength:0.4, collideStrength:0.9, alphaDecay:0.06}, behaviors:['zoom-canvas','drag-canvas','drag-element','hover-activate']})`；`node:click`/`edge:click` 仍写 `selectedNodeId`/`selectedEdgeId`，重建前用 `renderSequence` 丢弃过期渲染，卸载时 `graph.destroy()`。
   - *代价*：新增一个 1 MB 级依赖，`vite build` 出现 chunk 体积警告（不影响产物可用性）；G6 5.x 的 `Graph` 生命周期要手动 `destroy()`，否则切换书籍会泄漏 canvas。
   - *验证*：`vitest` 全绿（图谱面板相关用例通过）、`vite build` 成功、实栈图谱页可缩放/拖拽/hover 高亮、点节点与点边都能出侧栏。
+- **决策 25：设置页当运维面重做——凭据只回掩码、校验错误能定位、四条通道一屏可见（P0→P2 九项）**（2026-10-21，用户 `m21338`「按你建议的顺序来」）
+  - *背景*：设置页是发布后唯一的运维入口，但 `GET /api/v2/settings` 把 8 条凭据的 `secret.api_key` 明文回传；前端仍留着翻译时代的 `translation` 设置域与任务中心 `translation` 类型；保存失败只弹一句「保存失败: …」，用户不知道去哪个页签改哪个字段；四条模型通道分散在四个页签，没有一处能回答「是否都配好了」；改坏了也没有「只恢复这一块」的手段，换机器迁移要靠手抄。
+  - *做法*（按用户批准的顺序逐项落地，每项一次提交 + 每轮全门禁）：
+    - **P0-1 凭据掩码**：`src/backend_v2/storage/platform_repositories.py` 新增 `_mask_secret`，`_credential_summaries_from_connection` 与 `_save_credential` 的两处返回都改走它——密钥字段名保留、值一律空串，另给 `hasKey` 真实状态；前端空值表示「沿用已保存的密钥」，连接测试留空时由后端按 `domain` 解析已存凭据（`diagnosticRequest` 只在用户真的输入时才带 `secret`）。
+    - **P0-2 摘除翻译死面**：删掉前端 `translation`/`hqTranslation` 能力联合、诊断默认域、任务中心默认 `kinds`、`TaskStatusBadge` 的 `translation` 判断与 `stores/settings/{defaults,schema}.ts` 这套只被自身测试引用的死代码（后端域集合与库里的 `translation` 行**保留**，留给 3.5.4 与一次存储迁移，见「未做」）。
+    - **P1-3 冲突止损**：`src/utils/settingsConflict.ts` 统一判定「已被其他页面更新/修改」，命中即停止自动保存、提示重新加载，并在保存按钮下显示未保存状态。
+    - **P1-4 通道总览**：新增 `vue-frontend/src/components/insight/settings/ChannelOverviewTab.vue` 作为设置页第一个页签，列出 VLM/Chat/Embedding/Reranker 的供应商、模型、Base URL、密钥状态（`已保存`/`未填写`/`本次已填写`），逐行「测试」调用既有 connection-test，「去配置」跳到对应页签。
+    - **P1-5 校验定位**：`src/utils/settingsValidation.ts` 把后端 `provider_settings.<domain>.<field> …` / `insight.analysis.batch …` 解析成「页签 + 字段中文名 + 原文」，设置页据此跳到该页签并在顶部就地说明（修订冲突与网络错误仍走原提示）。
+    - **P1-6 设置搜索**：页签元数据抽到 `vue-frontend/src/views/settingsTabs.ts`（含中文关键词），左侧搜索框按标签/描述/关键词过滤，空结果给清除入口。
+    - **P2-7 每域恢复默认**：`components/insight/settings/settingsDefaults.ts` 是唯一的默认值来源（供应商相关字段从清单取），页签上方「恢复该页签默认值」只重置该域，密钥与供应商不变。
+    - **P2-8 整库导入导出**：`src/utils/settingsTransfer.ts` 导出 `{format:'miyakokb-settings', version, exportedAt, settings, providerSettings}`——**凭据永不导出**；导入按「导入前刚取到的当前修订号」构造事务（覆盖式恢复），本机没有的域跳过并在提示里计数，密钥需重新填写。
+    - **P2-9 视觉探测不再信静态清单**：`src/backend_v2/settings/diagnostics.py` 的 `_test_vision` 对 OpenAI 兼容通道直接发一次真实单图请求，本地/适配器通道仍按清单拦截（发现 #49）。
+    - **P2-10 成本说明**：分析页加「性能与成本怎么估」块，写清请求数/墙钟/成本三者的换算，并用本轮真实实测（387 页 19 分钟、1507 页对齐 269 请求 1 小时 52 分、向量 48 秒）做锚点。
+  - *理由*：运维面的三类错误——**看不见状态**（密钥是否就绪、哪条通道没配）、**找不到位置**（422 只说保存失败）、**改坏了回不去**（没有分域恢复/迁移手段）——都不是靠加开关能解决的，必须让「当前状态」和「出错位置」成为页面结构的一部分。
+  - *验证*：后端全量 **810 passed**（P0-1 后）与新增视觉探测用例；前端每轮 `vitest`（89→93 files，644→664 tests）、`vue-tsc` 0、`eslint` 0 errors、`stylelint` 0、`check-ui-architecture.mjs` 与 `--audit` 均 0、`vite build` 成功；实栈复核 8 条凭据 `plaintextKeys=0 / hasKeyTrue=8`、`GET /` 引用新 bundle、导入事务 `manga_import` revision 2→3 成功。
+  - *未做（建议）*：后端 `APP_SETTING_DOMAINS` 仍含 `translation`、库里也仍有该行（前端已不读），随 3.5.4 悬空表清理一起退；导入导出暂不含提示词与书籍级设置；每域恢复默认没有二次确认。
+
 ## 5. 踩过的坑 / 阻塞
 - **坑 1：Windows SQLite 嵌套锁（Database is locked）**
   - *原因*：在写数据库事务内部进行物理磁盘图片发布时，如果抛出异常或并发读写，容易造成 SQLite 长期死锁。
@@ -425,6 +443,18 @@
 - **坑 35：Vue 模板里两块并列区域不能共用一条 `v-if`/`v-else` 链**（2026-10-21，报告发现 #47）
   - *现象*：给角色 Skill 页插「世界书」区块时写成 `<section v-else-if="characters.length > 0">` 插在详情区 `<section v-else>` 之前 → 详情区变成世界书的 else 分支，页面只剩标题与世界书，而 `vue-tsc`/`eslint` 全绿，只有组件测试断言正文文案时才暴露。
   - *解法*：两块都要独立显示就各自写独立 `v-if`，或用 `<template v-else>` 包住多块；`v-else` 必须紧跟同级 `v-if`/`v-else-if`。教训：类型系统看不见模板条件链，加并列区块时必须有组件测试同时断言两边内容。
+
+- **坑 36：`translation` 设置域摘了前端不等于摘了后端，导入导出会把它原样带回来**（2026-10-21，决策 25）
+  - *现象*：P0-2 之后前端已无翻译设置入口，但 `GET /api/v2/settings` 的 `settings` 里仍有 `translation` 行（历史种入），整库导出会包含它、导入又会写回去。
+  - *判据*：`src/backend_v2/settings/validation.py` 的 `APP_SETTING_DOMAINS` 与 `storage/seeding.py` 的 `default_domains` 是「域是否存在」的真源，前端有没有页面无关。
+  - *处置*：本轮保留（后端仍在用该域校验、删它需要一次存储迁移），随 3.5.4 悬空表/死域清理一并退；在报告发现 #48 与决策 25「未做」里记明。
+- **坑 37：`vite build` 需要可写的 `TEMP`，否则 `[vite:esbuild-transpile] remove …Access is denied`**（2026-10-21）
+  - *原因*：esbuild 在 `%TEMP%` 下建临时目录并删除，本机默认临时目录对当前进程不可写。
+  - *解法*：`$env:TEMP=$env:TMP=$env:TMPDIR='<repo>/temp/esbuild-tmp'` 后再 `vite build`（仍失败时 `New-Item -ItemType Directory` 先建好）。
+- **坑 38：本机 `node` 不在 PATH——`npm install` 会在 esbuild 的 postinstall 处失败**（2026-10-21）
+  - *现象*：`npm error command C:\windows\system32\cmd.exe /d /s /c node install.js` + `'node' is not recognized`；`registry.npmjs.org` 还会 `EIDLETIMEOUT`。
+  - *解法*：`$env:PATH="C:\Users\Administrator\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin;$env:PATH"`，用绝对路径的 node 跑 `npm-cli.js`，并加 `--registry=https://registry.npmmirror.com --fetch-timeout=180000 --fetch-retries=5`。
+
 ## 6. 新会话先读
 
 1. `AGENTS.md`：核心数据库脚本防手写约束与行为规范。
@@ -433,7 +463,7 @@
 4. `src/backend_v2/insight/derived.py`：实体对齐、自动归并、图谱数据生成算法。
 5. `src/backend_v2/insight/qa.py`：问答系统、实体解析器与证据格式化。
 6. `vue-frontend/src/views/`：前端核心页面实现。
-7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#47、裁决候选对离线回放与 Top-K 收窄标定数据、附录里的分析脚本清单）。
+7. `acceptance6_stress_report.md`：验收点6 全量报告（阶段0-4、发现 #1-#49、裁决候选对离线回放与 Top-K 收窄标定数据、附录里的分析脚本清单）。
 8. `verify_acceptance6_alignment.py` / `verify_acceptance6_downstream.py` / `verify_acceptance6_qa.py`：三项验收脚本（问答用法 `python verify_acceptance6_qa.py <bookId> "问题" [--mode generic|exact|global]`）。
 9. 本轮新增的工作区临时脚本（**不入库**）：`tmp_replay_rules.py`（对齐规则离线回放，零 token）、`tmp_scan_undefined.py`（未定义全局名扫描）、`tmp_job_status.py`/`tmp_guard_job.py`（job 监控与守护）、`tmp_check_state.py`（job/artifact 现状）、`tmp_retry_failed.py`（只重跑失败项）、`tmp_inspect_retry_job.py`（job + items + 冻结配置 vlm/chat/embedding + 产物）、`tmp_artifact_detail.py`（产物全列 + payload 键 + warnings）、`tmp_wait_job.py`（轮询至终态，`<jobId> <maxMinutes>`）、`tmp_verify_vector_events.py`（向量事件回退验证）、`tmp_trim_plugin_spec.py`（OpenAPI 已删域残留裁剪：按缩进删路径/schema/参数/tag，幂等）、`tmp_stage_durations.py`（按 `job_events` 配对统计各步骤耗时）、`tmp_narrow_topk.py`（Top-K 收窄的对数/召回曲线，决策 16 依据）、`tmp_narrow_probe.py` / `tmp_narrow_recall_prod.py`（直接调生产函数在线上库复算收窄效果）、`tmp_audit_db_tables.py`（表三维对照：metadata 定义 vs 代码引用 vs 线上行数）、`tmp_audit_db_clusters.py`（按域打印 plugin / operations / studio 等簇的 metadata 覆盖与行数）、`tmp_qa_probe_artifact.py`（某书 artifact 版本表 + 每章已发布页覆盖）、`tmp_vec_probe.py`（`vector_generations` 各代状态/覆盖/active 与 Chroma 集合散列前缀）、`tmp_fp_probe.py`（快照指纹 vs 活动代指纹 + `qa_status`）、`tmp_chroma_embed_probe.py`（直接读 Chroma 集合的向量范数与两两 cos，区分「嵌入退化」与「索引读失败」）、`tmp_qa_repro.py`（复现某问题的 QA SSE，落盘 `tmp_qa_repro_sse.txt`）。
 

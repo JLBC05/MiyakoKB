@@ -1,6 +1,6 @@
 # MiyakoKB 验收点6 压测报告
 
-> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #47。
+> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #49。
 > 目标：生产环境大体量漫画（50+ 话）端到端压力测试与跨章节实体消歧观察。
 
 ## 1. 测试范围与环境
@@ -407,6 +407,9 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 | 46 | 中 | **蒸馏产物只有一种形态（文本 Skill），而用户真正要喂给聊天前端的是角色卡与世界书；关系图谱又是自研力导向渲染**：`character_skill.py` 只产出 `SKILL.md` + 5 个参考文档，既不能导入 SillyTavern（缺 V2/V3 JSON 角色卡），也没有「世界书」这种按关键词触发的设定条目；图谱侧 `KnowledgeGraphPanel.vue` 自研 canvas 力导向（坑 2 曾因无停机阈值把 CPU 打满），交互只有缩放与拖拽，没有 hover 高亮与节点/边选中联动；实体浏览面板只能按类别平铺，找某个实体要靠肉眼扫；故事梗概的时间线缩略图点开仍是小图（`max-width: 480px`），看不清分镜 | **已实施**：①蒸馏服务扩为三种 `kind`——`skill`（原 6 文件）、`card`（SillyTavern V2/V3 角色卡 JSON，含 `name/description/personality/scenario/first_mes/mes_example/alternate_greetings/system_prompt/tags/creator_notes` 与 `character_book` 摘要）、`lorebook`（世界书：按实体/设定/关键事件生成带 `keys`/`content`/`insertion_order` 的条目），三条触发各自单飞（`_task_key(book_id, kind, entity_id)`），产物仍落 `analysis_artifacts`（`kind="character_card"` / `"character_lorebook"`，`template=<entityId>`，revision 自增），`GET …/character-skills?kind=` 与 `POST` body `kind` 分派，新增 `GET …/lorebooks`、`GET …/lorebooks/status`、`GET …/lorebooks/archive`；归档函数统一成 `build_skill_archive(document, kind)`（文件名 `<书名>-<角色>-skill|card|worldbook.zip`，非法字符替换、`filename*=UTF-8''` 兜底）；②图谱换 AntV G6 5.1.1（`graphology` 无关，`new Graph({autoResize, layout: {type:'force', preventOverlap, linkDistance:110, nodeStrength:-260, alphaDecay:0.06}, behaviors: ['zoom-canvas','drag-canvas','drag-element','hover-activate']})`，保留 `node:click`/`edge:click` 选中联动与 `renderSequence` 竞态保护）；③实体浏览加搜索框（名称 + 别名，`normalize` 去空白小写，带清空按钮与无命中态）；④时间线预览改为大图（`BaseModal` 内容 90vw、`img` `max-height: 85vh; object-fit: contain`）。门禁：后端全量 **809 passed**（另 1 条 `test_real_launcher_confirms_candidate_and_cleans_backup` 在全量并发下 30s 健康检查超时，单跑 17.12s 通过）、前端 **89 files / 647 tests**、`vue-tsc`/`eslint`(0 error)/`stylelint`/`lint:ui`/`--audit` 全 0。建议：蒸馏类功能的「产物形态」应按下游消费方定义（聊天前端要卡片/世界书、Agent 要 Markdown），而不是按生成流程定义
 
 | 47 | 低 | **Vue 模板里两块并列区域若共用一条 `v-if`/`v-else` 链，只会渲染其中一块**：给角色 Skill 页加「世界书」区块时，把新 `<section v-else-if="characters.length > 0">` 插在详情区 `<section v-else>` 之前，于是 `v-else` 变成了世界书区块的 else 分支——世界书渲染时详情区永远不出现（页面只剩标题与世界书），而 `vue-tsc` 与 `eslint` 全绿，只有组件测试断言正文文案时才暴露 | **踩坑与解法**：①`v-else` 必须紧跟同级的 `v-if`/`v-else-if`，中间插一块就会把链截断；②两块都要独立显示时，各自写独立 `v-if`（本例两个 `<section v-if="characters.length > 0">`），或用一个 `<template v-else>` 包住多块；③这类错误类型系统看不见，必须靠组件测试断言「两边内容同时存在」。教训：加并列区块时先确认它是否落在既有条件链上
+
+| 48 | 中 | **设置页是唯一的运维面，却把凭据明文回传、留着翻译时代死面，四种失败都只说“保存失败”**：`GET /api/v2/settings` 的 8 条 credentials 全部回传 `secret.api_key` 明文；前端仍有 `translation` 设置域与任务中心 `translation` 任务类型（后端 `APP_SETTING_DOMAINS` 与库里的 `translation` 行仍在）；422 只弹一句全局提示，用户不知道去哪个页签改哪个字段；四条模型通道分散在四个页签，没有一处能回答「是否都配好了」。已按 P0→P2 全部处理：凭据读出恒为掩码（写入才传真值，留空表示沿用已保存值，连接测试按 domain 由后端解析）、摘除前端翻译设置死面、修订冲突改为停止保存并提示重新加载、新增「模型通道总览」页签（供应商/模型/Base URL/密钥状态 + 逐通道测试 + 跳转）、校验错误按 `provider_settings.<domain>.<field>` 解析成页签与字段中文名并跳转就地说明、设置项关键词搜索、每域恢复默认、整库导出/导入（备份**永不包含**凭据，导入按当前修订号构造事务并跳过本机没有的域）、分析页补性能与成本换算说明。 |
+| 49 | 中 | **连接测试先查静态能力清单，会把能用的模型判成“不支持视觉”**：`src/backend_v2/settings/diagnostics.py` 的 `_test_vision` 在发请求前用 `provider_supports_capability` 拦截，而清单是**供应商级**快照——`deepseek` 只登记了文字能力，但 `deepseek-flash` 实际接受图片，于是一个能用的配置被直接判死（早期 DeepSeek 试用期就撞过）。改为：OpenAI 兼容通道直接发一次真实单图请求，由服务端给结论；本地/适配器通道（`sakura`/`caiyun` 等）协议不同仍按清单拦截。回归用例 `tests_backend/v2/test_stage1_platform.py::test_vision_connection_test_asks_the_provider_instead_of_a_stale_capability_list`。 |
 
 
 
