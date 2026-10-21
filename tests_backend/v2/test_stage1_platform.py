@@ -2675,12 +2675,23 @@ def test_provider_diagnostics_enforce_capabilities_and_fatal_memory_errors(
         },
     )["success"] is True
 
+    # OpenAI 兼容通道不再拿供应商级能力清单预判视觉：清单里 deepseek 没有登记
+    # vision_ocr，但它能接受图片，静态拦截会把可用配置判死（报告发现 #49）。
+    assert diagnostics.connection_test(
+        "ai_vision_ocr",
+        {
+            "provider": "deepseek",
+            "model": "deepseek-chat",
+            "secret": {"ai_vision_api_key": "test-key"},
+        },
+    )["success"] is True
+
+    # 本地/适配器通道协议不同，仍按清单在发请求前拦下。
     with pytest.raises(ValueError, match="does not support vision"):
         diagnostics.connection_test(
             "ai_vision_ocr",
             {
-                "provider": "deepseek",
-                "model": "deepseek-chat",
+                "provider": "caiyun",
                 "secret": {"ai_vision_api_key": "test-key"},
             },
         )

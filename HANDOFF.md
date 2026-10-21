@@ -274,7 +274,7 @@
     - **P2-9 视觉探测不再信静态清单**：`src/backend_v2/settings/diagnostics.py` 的 `_test_vision` 对 OpenAI 兼容通道直接发一次真实单图请求，本地/适配器通道仍按清单拦截（发现 #49）。
     - **P2-10 成本说明**：分析页加「性能与成本怎么估」块，写清请求数/墙钟/成本三者的换算，并用本轮真实实测（387 页 19 分钟、1507 页对齐 269 请求 1 小时 52 分、向量 48 秒）做锚点。
   - *理由*：运维面的三类错误——**看不见状态**（密钥是否就绪、哪条通道没配）、**找不到位置**（422 只说保存失败）、**改坏了回不去**（没有分域恢复/迁移手段）——都不是靠加开关能解决的，必须让「当前状态」和「出错位置」成为页面结构的一部分。
-  - *验证*：后端全量 **810 passed**（P0-1 后）与新增视觉探测用例；前端每轮 `vitest`（89→93 files，644→664 tests）、`vue-tsc` 0、`eslint` 0 errors、`stylelint` 0、`check-ui-architecture.mjs` 与 `--audit` 均 0、`vite build` 成功；实栈复核 8 条凭据 `plaintextKeys=0 / hasKeyTrue=8`、`GET /` 引用新 bundle、导入事务 `manga_import` revision 2→3 成功。
+  - *验证*：后端全量 **811 passed**（新增视觉探测与能力门禁用例后）；前端每轮 `vitest`（89→93 files，644→664 tests）、`vue-tsc` 0、`eslint` 0 errors、`stylelint` 0、`check-ui-architecture.mjs` 与 `--audit` 均 0、`vite build` 成功；实栈复核 8 条凭据 `plaintextKeys=0 / hasKeyTrue=8`、`GET /` 引用新 bundle、导入事务 `manga_import` revision 2→3 成功。
   - *未做（建议）*：后端 `APP_SETTING_DOMAINS` 仍含 `translation`、库里也仍有该行（前端已不读），随 3.5.4 悬空表清理一起退；导入导出暂不含提示词与书籍级设置；每域恢复默认没有二次确认。
 
 ## 5. 踩过的坑 / 阻塞
