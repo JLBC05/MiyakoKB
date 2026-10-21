@@ -12,6 +12,8 @@ import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import { useInsightStore } from '@/stores/insightStore'
 import { useSettingsAutoSave } from '@/composables/useSettingsAutoSave'
 import { isRevisionConflictError, REVISION_CONFLICT_MESSAGE } from '@/utils/settingsConflict'
+import { parseSettingsValidationIssue, type SettingsTabId, type SettingsValidationIssue } from '@/utils/settingsValidation'
+import { SETTINGS_TABS as settingsTabs, filterSettingsTabs } from './settingsTabs'
 import * as insightApi from '@/api/insight'
 
 import ChannelOverviewTab from '@/components/insight/settings/ChannelOverviewTab.vue'
@@ -24,19 +26,12 @@ import PromptsSettingsTab from '@/components/insight/settings/PromptsSettingsTab
 
 const insightStore = useInsightStore()
 
-type SettingsTabId = 'channels' | 'vlm' | 'llm' | 'embedding' | 'reranker' | 'analysis' | 'prompts'
 
-const settingsTabs = [
-  { id: 'channels', label: '模型通道总览', icon: '🧩', desc: '四条模型通道的供应商、模型与密钥状态一览' },
-  { id: 'vlm', label: 'VLM 视觉模型', icon: '🖼️', desc: '用于分镜画面识别与实体初筛' },
-  { id: 'llm', label: 'Chat 对话/裁决', icon: '💬', desc: '用于实体语义裁决、剧情问答与概览生成' },
-  { id: 'embedding', label: 'Embedding 向量', icon: '🔢', desc: '用于画面与分镜语义检索、多模态 RAG 索引' },
-  { id: 'reranker', label: 'Reranker 重排序', icon: '🔄', desc: '用于二次检索精排，提高问答检索准度' },
-  { id: 'analysis', label: '知识库分析参数', icon: '⚙️', desc: '配置 SLUG_MODE（拼音/罗马音）、实体类别与批次' },
-  { id: 'prompts', label: '提示词配置', icon: '📝', desc: '分镜分析、段落汇总、全书总结提示词' },
-] satisfies Array<{ id: SettingsTabId; label: string; icon: string; desc: string }>
 
 const activeTab = ref<SettingsTabId>('channels')
+const settingsQuery = ref('')
+const normalizedQuery = computed(() => settingsQuery.value.trim().toLowerCase())
+const visibleTabs = computed(() => filterSettingsTabs(settingsTabs, settingsQuery.value))
 const isLoadingConfig = ref(true)
 const backendConfigReady = ref(false)
 const statusMessage = ref('')
@@ -72,6 +67,11 @@ const availableEntityCategories = [
 ]
 
 const needsReload = ref(false)
+const validationIssue = ref<SettingsValidationIssue | null>(null)
+
+function tabLabel(tab: SettingsTabId): string {
+  return settingsTabs.find(item => item.id === tab)?.label ?? '设置'
+}
 
 function showMessage(text: string, type: 'success' | 'error'): void {
   statusMessage.value = text
@@ -87,10 +87,20 @@ function showMessage(text: string, type: 'success' | 'error'): void {
 function reportSaveError(error: unknown): void {
   if (isRevisionConflictError(error)) {
     needsReload.value = true
+    validationIssue.value = null
     showMessage(REVISION_CONFLICT_MESSAGE, 'error')
     return
   }
-  showMessage('保存失败: ' + (error instanceof Error ? error.message : '网络错误'), 'error')
+  const rawMessage = error instanceof Error ? error.message : '网络错误'
+  const issue = parseSettingsValidationIssue(rawMessage)
+  if (issue) {
+    // 校验错误能定位到具体字段：跳到该页签并在顶部说明，避免用户逐个页签试。
+    validationIssue.value = issue
+    activeTab.value = issue.tab
+  } else {
+    validationIssue.value = null
+  }
+  showMessage('保存失败: ' + rawMessage, 'error')
 }
 
 const { isSaving, hasUnsavedChanges } = useSettingsAutoSave({
@@ -114,6 +124,7 @@ const { isSaving, hasUnsavedChanges } = useSettingsAutoSave({
 
     savedConfig = await insightApi.saveGlobalConfig(current, savedConfig)
     needsReload.value = false
+    validationIssue.value = null
     showMessage('设置已自动保存并同步到后端', 'success')
   },
   onError: reportSaveError,
@@ -223,9 +234,19 @@ async function handleManualSave(): Promise<void> {
             <p class="settings-sidebar__subtitle">MiyakoKB 核心分析与模型参数</p>
           </div>
 
+          <div class="settings-search">
+            <UiInput
+              v-model="settingsQuery"
+              type="search"
+              clearable
+              aria-label="搜索设置项"
+              placeholder="搜索设置项（模型、并发、密钥…）"
+            />
+          </div>
+
           <nav class="settings-nav" aria-label="设置分类">
             <UiButton
-              v-for="tab in settingsTabs"
+              v-for="tab in visibleTabs"
               :key="tab.id"
               variant="tab"
               class="settings-nav__item"
@@ -239,6 +260,11 @@ async function handleManualSave(): Promise<void> {
               </div>
             </UiButton>
           </nav>
+
+          <div v-if="normalizedQuery && !visibleTabs.length" class="settings-search-empty">
+            <p>没有匹配「{{ settingsQuery }}」的设置项</p>
+            <UiButton variant="ghost" size="sm" @click="settingsQuery = ''">清除搜索</UiButton>
+          </div>
 
           <div class="settings-sidebar__footer">
             <UiButton
@@ -275,6 +301,17 @@ async function handleManualSave(): Promise<void> {
           </div>
 
           <div v-else class="settings-panel-card">
+            <ProductStatusBanner
+              v-if="validationIssue"
+              class="settings-validation-banner"
+              tone="danger"
+              role="alert"
+              :title="`${tabLabel(validationIssue.tab)} · ${validationIssue.fieldLabel}`"
+            >
+              <p class="settings-validation-banner__detail">{{ validationIssue.detail }}</p>
+              <p class="settings-validation-banner__hint">已切换到该页签，修改后会自动重新保存。</p>
+            </ProductStatusBanner>
+
             <!-- 0. 模型通道总览 -->
             <div v-show="activeTab === 'channels'" class="settings-tab-pane">
               <ChannelOverviewTab
@@ -635,5 +672,40 @@ async function handleManualSave(): Promise<void> {
 .category-card__desc {
   font-size: 0.78rem;
   color: var(--color-text-secondary);
+}
+
+.settings-validation-banner {
+  --product-status-banner-margin-inline: 0;
+
+  margin-bottom: 14px;
+}
+
+.settings-validation-banner__detail,
+.settings-validation-banner__hint {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.settings-validation-banner__hint {
+  margin-top: 4px;
+  color: var(--color-text-muted);
+}
+
+.settings-search {
+  margin-bottom: 10px;
+}
+
+.settings-search-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.settings-search-empty p {
+  margin: 0;
 }
 </style>
