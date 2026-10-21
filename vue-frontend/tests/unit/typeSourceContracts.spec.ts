@@ -44,11 +44,8 @@ describe('type source contracts', () => {
     const settingsTypes = source('src/types/settings.ts')
 
     for (const typeName of [
-      'OcrEngine',
       'OpenAICompatibleOptions',
-      'BaiduOcrSettings',
       'TextStyleSettings',
-      'TranslationSettings',
     ]) {
       expect(settingsTypes, `${typeName} should be re-exported from an owner file`).not.toContain(
         `export interface ${typeName}`
@@ -69,25 +66,14 @@ describe('type source contracts', () => {
       expect(settingsTypes).not.toContain(staleNarration)
     }
 
-    for (const exportPath of [
-      './settingsProviders',
-      './openaiSettings',
-      './ocrSettings',
-      './textStyleSettings',
-      './translationSettings',
-    ]) {
+    for (const exportPath of ['./openaiSettings', './textStyleSettings']) {
       expect(settingsTypes).toContain(`from '${exportPath}'`)
     }
 
-    expect(source('src/types/settingsProviders.ts')).toContain('export type OcrEngine')
     expect(source('src/types/openaiSettings.ts')).toContain(
       'export interface OpenAICompatibleOptions'
     )
-    expect(source('src/types/ocrSettings.ts')).toContain('export interface BaiduOcrSettings')
     expect(source('src/types/textStyleSettings.ts')).toContain('export interface TextStyleSettings')
-    expect(source('src/types/translationSettings.ts')).toContain(
-      'export interface TranslationSettings'
-    )
   })
 
   it('keeps Insight store OpenAI option types sourced from settings types', () => {

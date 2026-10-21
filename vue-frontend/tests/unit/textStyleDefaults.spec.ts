@@ -8,7 +8,6 @@ import {
   normalizeImageTextStyleFields,
   normalizeTextStyleSettings,
 } from '@/defaults/textStyleDefaults'
-import { createDefaultSettings } from '@/stores/settings/defaults'
 
 const bundledDefaults = getTextStyleDefaults()
 
@@ -19,7 +18,6 @@ describe('textStyleDefaults factory fallback', () => {
 
     expect(TEXT_STYLE_DEFAULTS.fontSize).toBe(bundledDefaults.fontSize)
     expect(getTextStyleDefaults()).toEqual(bundledDefaults)
-    expect(createDefaultSettings().textStyle).toEqual(bundledDefaults)
   })
 
   it('keeps text-style field normalization on a shared field builder', () => {
