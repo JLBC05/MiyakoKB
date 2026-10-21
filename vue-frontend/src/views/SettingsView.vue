@@ -11,6 +11,7 @@ import ProductActionRow from '@/components/product/ProductActionRow.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import { useInsightStore } from '@/stores/insightStore'
 import { useSettingsAutoSave } from '@/composables/useSettingsAutoSave'
+import { isRevisionConflictError, REVISION_CONFLICT_MESSAGE } from '@/utils/settingsConflict'
 import * as insightApi from '@/api/insight'
 
 import VlmSettingsTab from '@/components/insight/settings/VlmSettingsTab.vue'
@@ -68,6 +69,8 @@ const availableEntityCategories = [
   { key: 'concepts', label: '概念/设定 (Concepts)', desc: '术语、规则、金额、专有名词' },
 ]
 
+const needsReload = ref(false)
+
 function showMessage(text: string, type: 'success' | 'error'): void {
   statusMessage.value = text
   statusType.value = type
@@ -79,7 +82,16 @@ function showMessage(text: string, type: 'success' | 'error'): void {
   }, 4000)
 }
 
-const { isSaving, persistChanges } = useSettingsAutoSave({
+function reportSaveError(error: unknown): void {
+  if (isRevisionConflictError(error)) {
+    needsReload.value = true
+    showMessage(REVISION_CONFLICT_MESSAGE, 'error')
+    return
+  }
+  showMessage('保存失败: ' + (error instanceof Error ? error.message : '网络错误'), 'error')
+}
+
+const { isSaving, hasUnsavedChanges } = useSettingsAutoSave({
   source: () => {
     const base = insightStore.getConfigForApi() as any
     // 注入当前知识库扩展参数，兼顾 base.config.batch 与 base.analysis?.batch / base.batch
@@ -99,10 +111,51 @@ const { isSaving, persistChanges } = useSettingsAutoSave({
     targetBatch.extraEntities = extraEntities.value
 
     savedConfig = await insightApi.saveGlobalConfig(current, savedConfig)
+    needsReload.value = false
     showMessage('设置已自动保存并同步到后端', 'success')
   },
-  onError: error => showMessage('保存失败: ' + (error instanceof Error ? error.message : '网络错误'), 'error'),
+  onError: reportSaveError,
 })
+
+function applyLoadedConfig(remote: any): void {
+  savedConfig = remote
+  if (typeof insightStore.setConfigFromApi === 'function') {
+    insightStore.setConfigFromApi(remote)
+  } else if (typeof (insightStore as any).loadConfigFromApi === 'function') {
+    (insightStore as any).loadConfigFromApi(remote)
+  }
+
+  // 读取后端扩展参数，支持 remote.config.batch、remote.analysis?.batch 或 remote.batch
+  const batchConfig = remote.config?.batch ?? remote.analysis?.batch ?? remote.batch
+  if (batchConfig?.slugMode) {
+    slugMode.value = batchConfig.slugMode === 'romanized' ? 'romanized' : 'pinyin'
+  }
+  if (typeof batchConfig?.knowledgeMode === 'boolean') {
+    knowledgeMode.value = batchConfig.knowledgeMode
+  }
+  if (Array.isArray(batchConfig?.extraEntities)) {
+    extraEntities.value = batchConfig.extraEntities
+  }
+
+  backendConfigReady.value = true
+}
+
+async function reloadSettings(): Promise<void> {
+  isLoadingConfig.value = true
+  backendConfigReady.value = false
+  try {
+    const remote = await insightApi.getGlobalConfig() as any
+    if (!isMounted) return
+    applyLoadedConfig(remote)
+    needsReload.value = false
+    showMessage('已重新加载后端设置', 'success')
+  } catch (error) {
+    if (!isMounted) return
+    showMessage('加载后端设置失败: ' + (error instanceof Error ? error.message : '网络错误'), 'error')
+  } finally {
+    if (isMounted) isLoadingConfig.value = false
+  }
+}
 
 onMounted(async () => {
   isMounted = true
@@ -110,26 +163,7 @@ onMounted(async () => {
   try {
     const remote = await insightApi.getGlobalConfig() as any
     if (!isMounted) return
-    savedConfig = remote
-    if (typeof insightStore.setConfigFromApi === 'function') {
-      insightStore.setConfigFromApi(remote)
-    } else if (typeof (insightStore as any).loadConfigFromApi === 'function') {
-      (insightStore as any).loadConfigFromApi(remote)
-    }
-
-    // 读取后端扩展参数，支持 remote.config.batch、remote.analysis?.batch 或 remote.batch
-    const batchConfig = remote.config?.batch ?? remote.analysis?.batch ?? remote.batch
-    if (batchConfig?.slugMode) {
-      slugMode.value = batchConfig.slugMode === 'romanized' ? 'romanized' : 'pinyin'
-    }
-    if (typeof batchConfig?.knowledgeMode === 'boolean') {
-      knowledgeMode.value = batchConfig.knowledgeMode
-    }
-    if (Array.isArray(batchConfig?.extraEntities)) {
-      extraEntities.value = batchConfig.extraEntities
-    }
-
-    backendConfigReady.value = true
+    applyLoadedConfig(remote)
   } catch (error) {
     if (!isMounted) return
     showMessage('加载后端设置失败: ' + (error instanceof Error ? error.message : '网络错误'), 'error')
@@ -166,9 +200,10 @@ async function handleManualSave(): Promise<void> {
     targetBatch.slugMode = slugMode.value
     targetBatch.extraEntities = extraEntities.value
     savedConfig = await insightApi.saveGlobalConfig(current, savedConfig, { force: true })
+    needsReload.value = false
     showMessage('设置保存成功', 'success')
   } catch (err) {
-    showMessage('保存失败: ' + (err instanceof Error ? err.message : '网络错误'), 'error')
+    reportSaveError(err)
   }
 }
 </script>
@@ -212,6 +247,9 @@ async function handleManualSave(): Promise<void> {
             >
               {{ isSaving ? '保存中…' : '立即保存全部更改' }}
             </UiButton>
+            <p v-if="hasUnsavedChanges && !isSaving" class="settings-save-hint">
+              有未保存的更改，将自动保存
+            </p>
           </div>
         </aside>
 
@@ -225,6 +263,9 @@ async function handleManualSave(): Promise<void> {
             :title="statusType === 'error' ? '提示' : '成功'"
           >
             {{ statusMessage }}
+            <template v-if="needsReload" #actions>
+              <UiButton variant="secondary" size="sm" @click="reloadSettings">重新加载</UiButton>
+            </template>
           </ProductStatusBanner>
 
           <div v-if="isLoadingConfig" class="settings-loading-card">
@@ -463,6 +504,13 @@ async function handleManualSave(): Promise<void> {
 .settings-save-btn {
   width: 100%;
   justify-content: center;
+}
+
+.settings-save-hint {
+  margin: 6px 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  text-align: center;
 }
 
 .settings-content {
