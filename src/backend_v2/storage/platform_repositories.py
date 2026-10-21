@@ -71,6 +71,12 @@ def _require_object(value: object, label: str) -> dict[str, Any]:
     return value
 
 
+def _mask_secret(secret: Mapping[str, Any]) -> dict[str, str]:
+    """清空密钥值但保留字段名，使读取路径永不回传明文。"""
+
+    return {str(key): "" for key in secret}
+
+
 def _idempotency_replay(
     connection: Connection,
     *,
@@ -915,7 +921,7 @@ class SettingsRepository:
                 "credentialVersionId": version_id,
                 "domain": edit.domain,
                 "provider": edit.provider,
-                "secret": secret,
+                "secret": _mask_secret(secret),
                 "hasKey": any(secret.values()),
                 "currentVersion": 1,
                 "revision": 1,
@@ -977,7 +983,7 @@ class SettingsRepository:
             "credentialVersionId": version_id,
             "domain": edit.domain,
             "provider": edit.provider,
-            "secret": secret,
+            "secret": _mask_secret(secret),
             "hasKey": any(secret.values()),
             "currentVersion": version,
             "revision": edit.base_revision + 1,
@@ -1023,22 +1029,28 @@ class SettingsRepository:
         if domains:
             statement = statement.where(credentials.c.domain.in_([self.scope.storage_domain(d) for d in domains]))
         rows = connection.execute(statement).mappings()
-        return [
-            {
-                "credentialId": row["id"],
-                "credentialVersionId": row["credential_version_id"],
-                "domain": self.scope.public_domain(row["domain"]),
-                "provider": row["provider"],
-                "secret": (secret := _require_object(
-                    json.loads(row["secret_json"]),
-                    "stored credential secret",
-                )),
-                "hasKey": any(secret.values()),
-                "currentVersion": row["version"],
-                "revision": row["revision"],
-            }
-            for row in rows
-        ]
+        summaries: list[dict[str, object]] = []
+        for row in rows:
+            secret = _require_object(
+                json.loads(row["secret_json"]),
+                "stored credential secret",
+            )
+            summaries.append(
+                {
+                    "credentialId": row["id"],
+                    "credentialVersionId": row["credential_version_id"],
+                    "domain": self.scope.public_domain(row["domain"]),
+                    "provider": row["provider"],
+                    # 读取路径永不回传明文：字段名保留、值一律清空，客户端据此判断
+                    # 「留空即沿用已保存的密钥」。真正的密钥只在服务端经
+                    # resolve_secret / resolve_provider_secret 解析。
+                    "secret": _mask_secret(secret),
+                    "hasKey": any(secret.values()),
+                    "currentVersion": row["version"],
+                    "revision": row["revision"],
+                }
+            )
+        return summaries
 
     def resolve_secret(self, credential_version_id: str) -> dict[str, Any]:
         browser_secret = resolve_credential_reference(

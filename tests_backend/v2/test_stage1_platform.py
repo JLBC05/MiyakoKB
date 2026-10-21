@@ -695,9 +695,10 @@ def test_settings_store_and_load_empty_credential_fields(platform, domain, provi
         providers=(ProviderSettingMutation(domain=domain, provider=provider, payload=payload,
                                           base_revision=1, credential_edit_ref="key"),),
     )["credentials"][0]
-    assert saved["secret"] == empty_secret
+    masked_secret = {key: "" for key in empty_secret}
+    assert saved["secret"] == masked_secret
     assert saved["hasKey"] is any(empty_secret.values())
-    assert repository.load(domains=(domain,))["credentials"][0]["secret"] == empty_secret
+    assert repository.load(domains=(domain,))["credentials"][0]["secret"] == masked_secret
     assert repository.resolve_provider_secret(domain=domain, provider=provider) == empty_secret
 
 
@@ -1735,10 +1736,8 @@ def test_settings_credentials_plugins_fonts_and_shared_limiter(platform) -> None
     )
     credential_summary = result["credentials"][0]
     assert credential_summary["hasKey"] is True
-    assert credential_summary["secret"] == {"api_key": "never-return-me"}
-    assert settings.credential_summaries()[0]["secret"] == {
-        "api_key": "never-return-me"
-    }
+    assert credential_summary["secret"] == {"api_key": ""}
+    assert settings.credential_summaries()[0]["secret"] == {"api_key": ""}
 
     credential_id = str(credential_summary["credentialId"])
     with engine.connect() as connection:
@@ -2699,7 +2698,7 @@ def test_provider_diagnostics_reject_retired_credential_id(platform) -> None:
         )
 
 
-def test_settings_http_transaction_returns_the_saved_secret_to_the_settings_ui(
+def test_settings_http_transaction_never_returns_the_saved_secret(
     platform,
 ) -> None:
     data_root, engine = platform
@@ -2733,7 +2732,7 @@ def test_settings_http_transaction_returns_the_saved_secret_to_the_settings_ui(
         },
     )
     assert saved.status_code == 200
-    assert saved.get_json()["credentials"][0]["secret"] == {"api_key": secret}
+    assert saved.get_json()["credentials"][0]["secret"] == {"api_key": ""}
 
     loaded = client.get("/api/v2/settings?domains=translation")
     assert loaded.status_code == 200
@@ -2749,7 +2748,7 @@ def test_settings_http_transaction_returns_the_saved_secret_to_the_settings_ui(
             "hasKey": True,
             "provider": "deepseek",
             "revision": 1,
-            "secret": {"api_key": secret},
+            "secret": {"api_key": ""},
         }
     ]
     assert document["providerSettings"][0]["credentialVersionId"] == (

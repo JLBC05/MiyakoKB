@@ -28,11 +28,13 @@ export function fetchModels(
   domain = 'translation'
 ): Promise<FetchModelsResponse> {
   const secretField = providerKeyField(domain)
+  const trimmed = apiKey.trim()
   return fetchV2ModelCatalog({
     provider: normalizeProviderId(provider),
     baseUrl: baseUrl || undefined,
     domain,
-    secret: { [secretField]: apiKey },
+    // 读取路径不回传明文密钥：留空表示沿用已保存的密钥，由后端按 domain 解析。
+    ...(trimmed ? { secret: { [secretField]: trimmed } } : {}),
   })
 }
 
@@ -58,9 +60,9 @@ export function testAiVisionOcrConnection(
     baseUrl: params.customBaseUrl || undefined,
     prompt: params.prompt || undefined,
     domain: params.domain || 'ai_vision_ocr',
-    secret: {
-      ai_vision_api_key: params.apiKey,
-    },
+    ...(params.apiKey.trim()
+      ? { secret: { ai_vision_api_key: params.apiKey.trim() } }
+      : {}),
   })
 }
 
@@ -72,6 +74,6 @@ export function testAiTranslateConnection(
     model: params.modelName || undefined,
     baseUrl: params.baseUrl || undefined,
     domain: params.domain || 'translation',
-    secret: { api_key: params.apiKey },
+    ...(params.apiKey.trim() ? { secret: { api_key: params.apiKey.trim() } } : {}),
   })
 }

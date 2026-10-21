@@ -1895,12 +1895,14 @@ function diagnosticRequest(
   domain: string,
   config: { provider: string; api_key: string; model: string; base_url?: string }
 ) {
+  const apiKey = config.api_key.trim()
   return runV2ConnectionTest(kind, {
     provider: config.provider,
     model: config.model,
     baseUrl: config.base_url,
     domain,
-    secret: { api_key: config.api_key },
+    // 读取路径不回传明文密钥：留空表示沿用已保存的密钥，由后端按 domain 解析。
+    ...(apiKey ? { secret: { api_key: apiKey } } : {}),
   })
 }
 
@@ -1941,11 +1943,12 @@ export function fetchModels(
   baseUrl?: string,
   domain = 'insight_chat'
 ): Promise<FetchModelsResponse> {
+  const trimmed = apiKey.trim()
   return fetchV2ModelCatalog({
     provider,
     baseUrl,
     domain,
-    secret: { api_key: apiKey },
+    ...(trimmed ? { secret: { api_key: trimmed } } : {}),
   })
 }
 

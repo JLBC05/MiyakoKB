@@ -2286,6 +2286,7 @@ export interface components {
             credentialVersionId: components["schemas"]["Uuid"];
             domain: string;
             provider: string;
+            /** @description 密钥字段名保留、值一律为空串；读取路径永不回传明文，留空表示沿用已保存的密钥。 */
             readonly secret: {
                 [key: string]: unknown;
             };

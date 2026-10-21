@@ -66,7 +66,6 @@ describe('v2 diagnostics api', () => {
         model: 'chat-model',
         baseUrl: undefined,
         domain: 'hq',
-        secret: { api_key: '' },
       },
     )
     expect(postMock).toHaveBeenNthCalledWith(

@@ -3468,6 +3468,7 @@ components:
           type: object
           additionalProperties: true
           readOnly: true
+          description: 密钥字段名保留、值一律为空串；读取路径永不回传明文，留空表示沿用已保存的密钥。
         hasKey: {type: boolean}
         currentVersion: {type: integer, minimum: 1}
         revision: {type: integer, minimum: 1}

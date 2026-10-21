@@ -26,7 +26,7 @@ withDefaults(defineProps<{
   includeApiKey: true,
   includeBaseUrl: true,
   apiKeyLabel: 'API Key',
-  apiKeyPlaceholder: '输入 API Key',
+  apiKeyPlaceholder: '留空则沿用已保存的密钥',
   apiKeyShowLabel: '显示 API Key',
   apiKeyHideLabel: '隐藏 API Key',
   baseUrlLabel: 'Base URL',

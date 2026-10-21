@@ -75,7 +75,7 @@ const settingsDocument = {
       hasKey: true,
       provider: 'gemini',
       revision: 5,
-      secret: { api_key: 'stored-gemini-key' },
+      secret: { api_key: '' },
     },
   ],
 }
@@ -121,7 +121,8 @@ describe('insight v2 settings ownership', () => {
     expect(config.config.vlm).toMatchObject({
       provider: 'gemini',
       model: 'old-model',
-      apiKey: 'stored-gemini-key',
+      // 读取路径不回传明文密钥：留空代表沿用已保存的密钥。
+      apiKey: '',
     })
     expect(config.providerDrafts.vlm.gemini).toMatchObject({
       model: 'old-model',
