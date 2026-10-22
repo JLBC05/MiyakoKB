@@ -455,6 +455,7 @@
   - *现象*：`npm error command C:\windows\system32\cmd.exe /d /s /c node install.js` + `'node' is not recognized`；`registry.npmjs.org` 还会 `EIDLETIMEOUT`。
   - *解法*：`$env:PATH="C:\Users\Administrator\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin;$env:PATH"`，用绝对路径的 node 跑 `npm-cli.js`，并加 `--registry=https://registry.npmmirror.com --fetch-timeout=180000 --fetch-retries=5`。
 
+- **坑 39：G6 力导布局有三个不写在文档里的坑（关系网络节点重叠 + 持续抽搐）**（2026-10-22）：① 布局动画由**图级** `animation` 决定——`GraphLayout.graphLayout()` 读的是 `options.animation`，`layout.animate` 完全无效；默认 `animation: true` 会以 `setInterval(…, 0)` 连跑最多 300 轮，实测画布出现后节点连续移动约 **30 秒**才停，看起来就是「一直抽搐」。② 碰撞半径默认取固定 `nodeSize: 30`，而本项目节点直径是 18~52，大节点必然盖住邻居；要让碰撞按真实尺寸工作，得给 `nodeSize` 传函数或让数据带 `size`。③ `nodeStrength` 的语义是**相连节点之间**的力（正=引力），不是全局斥力；把它写成负数等于让相连节点互相推开，再被 gravity 压回，实测重叠对从 6 涨到 313。全局斥力应该调 `factor` / `coulombDisScale`。另：关闭动画后 G6 走「同步跑固定轮数」分支，轮数来自 `layout.iterations`（默认 300，边密集时不够）。最终可用配置：图级 `animation: false` + 布局 `nodeSize` 按真实直径、`nodeSpacing: 6`、`getMass: () => 1`、`collideStrength: 1`、`factor: 3`、`iterations: 1500`、`animate: false`，其余力沿用 @antv/layout 默认值（默认 `linkDistance = 1 + r(源) + r(目标)` 本身尺寸感知）。验证方法：无头浏览器里逐帧读节点层位图算质心（40 秒 80 帧移动 0 次），并按真实坐标与直径算重叠对（60 节点 0 对）。
 ## 6. 新会话先读
 
 1. `AGENTS.md`：核心数据库脚本防手写约束与行为规范。

@@ -131,18 +131,21 @@ const selectedEdgeDetail = computed(() => {
 
 const hasGraph = computed(() => rawNodes.value.length > 0)
 
+function nodeDiameter(frequency: number | undefined, maxFrequency: number): number {
+  const normalized = Math.min(1, Math.max(0, Math.log2((frequency ?? 1) + 1) / Math.log2(maxFrequency + 1)))
+  return Math.round(18 + normalized * 34)
+}
+
 function buildGraphData(): { nodes: unknown[]; edges: unknown[] } {
   const maxFrequency = Math.max(...rawNodes.value.map(node => node.frequency ?? 1), 1)
   const nodes = activeNodes.value.map(node => {
-    const normalized = Math.min(
-      1,
-      Math.max(0, Math.log2((node.frequency ?? 1) + 1) / Math.log2(maxFrequency + 1)),
-    )
+    const size = nodeDiameter(node.frequency, maxFrequency)
     return {
       id: node.id,
-      data: node,
+      // 直径同时写进 data.size（碰撞检测用）与 style.size（渲染用）。
+      data: { ...node, size },
       style: {
-        size: Math.round(18 + normalized * 34),
+        size,
         fill: getCategoryColor(node.category),
         labelText: showLabels.value ? node.name : '',
       },
@@ -189,16 +192,31 @@ async function renderGraph(): Promise<void> {
           cursor: 'pointer',
         },
       },
+      // 关掉图级动画：G6 的 graphLayout() 用 options.animation 决定是「动画迭代」
+      // 还是「一次算完再落位」，只设 layout.animate 不起作用（实测节点会连动 30 秒）。
+      animation: false,
       layout: {
         type: 'force',
         preventOverlap: true,
-        nodeSize: 40,
-        linkDistance: 110,
-        nodeStrength: -260,
-        edgeStrength: 0.4,
-        collideStrength: 0.9,
-        alphaDecay: 0.06,
-        animation: true,
+        // 碰撞半径必须与真实节点尺寸一致：布局默认按固定 nodeSize(30) 做碰撞检测，
+        // 而这里的节点直径是 18~52，所以大节点会盖住邻居。
+        nodeSize: (node: { style?: { size?: number }; data?: { size?: number } }) =>
+          Math.max(16, Number(node?.style?.size ?? node?.data?.size ?? 24)),
+        // 再加一点间距，让标签不至于贴到别人身上。
+        nodeSpacing: 6,
+        // 默认质量按度数放大（degree*5），中心节点会重到碰撞力推不动（碰撞位移乘 1/mass），
+        // 于是高热节点互相压在一起。这里统一质量，让碰撞对所有节点同等有效。
+        getMass: () => 1,
+        collideStrength: 1,
+        // 库仑斥力系数：默认 1 时高连接度的中心区还会剩几对贴在一起，3 倍即可完全铺开（实测重叠 5 → 1）。
+        factor: 3,
+        // 关掉动画时 G6 走的是「同步跑固定轮数」分支，轮数取自这里的 iterations（默认仅 300）。
+        // 边密集时 300 轮不足以把碰撞解开，会留下重叠节点。
+        iterations: 1500,
+        animate: false,
+        // 其余（linkDistance / nodeStrength / edgeStrength / gravity / damping）一律沿用
+        // @antv/layout 的默认值：默认 linkDistance = 1 + r(源) + r(目标) 本身就是尺寸感知的，
+        // 手工覆盖反而会把图压成一团（实测 nodeStrength 取负值把相连节点互相推开，重叠从 6 对涨到 313 对）。
       },
       behaviors: ['zoom-canvas', 'drag-canvas', 'drag-element', 'hover-activate'],
     })

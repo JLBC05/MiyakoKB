@@ -1,6 +1,6 @@
 # MiyakoKB 验收点6 压测报告
 
-> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #49。
+> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #50。
 > 目标：生产环境大体量漫画（50+ 话）端到端压力测试与跨章节实体消歧观察。
 
 ## 1. 测试范围与环境
@@ -410,6 +410,7 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 
 | 48 | 中 | **设置页是唯一的运维面，却把凭据明文回传、留着翻译时代死面，四种失败都只说“保存失败”**：`GET /api/v2/settings` 的 8 条 credentials 全部回传 `secret.api_key` 明文；前端仍有 `translation` 设置域与任务中心 `translation` 任务类型（后端 `APP_SETTING_DOMAINS` 与库里的 `translation` 行仍在）；422 只弹一句全局提示，用户不知道去哪个页签改哪个字段；四条模型通道分散在四个页签，没有一处能回答「是否都配好了」。已按 P0→P2 全部处理：凭据读出恒为掩码（写入才传真值，留空表示沿用已保存值，连接测试按 domain 由后端解析）、摘除前端翻译设置死面、修订冲突改为停止保存并提示重新加载、新增「模型通道总览」页签（供应商/模型/Base URL/密钥状态 + 逐通道测试 + 跳转）、校验错误按 `provider_settings.<domain>.<field>` 解析成页签与字段中文名并跳转就地说明、设置项关键词搜索、每域恢复默认、整库导出/导入（备份**永不包含**凭据，导入按当前修订号构造事务并跳过本机没有的域）、分析页补性能与成本换算说明。 |
 | 49 | 中 | **连接测试先查静态能力清单，会把能用的模型判成“不支持视觉”**：`src/backend_v2/settings/diagnostics.py` 的 `_test_vision` 在发请求前用 `provider_supports_capability` 拦截，而清单是**供应商级**快照——`deepseek` 只登记了文字能力，但 `deepseek-flash` 实际接受图片，于是一个能用的配置被直接判死（早期 DeepSeek 试用期就撞过）。改为：OpenAI 兼容通道直接发一次真实单图请求，由服务端给结论；本地/适配器通道（`sakura`/`caiyun` 等）协议不同仍按清单拦截。回归用例 `tests_backend/v2/test_stage1_platform.py::test_vision_connection_test_asks_the_provider_instead_of_a_stale_capability_list`。 |
+| 50 | 中 | **知识图谱「关系网络」节点长在一起且持续抽搐**：G6 力导布局的动画由**图级** `animation` 决定（`graphLayout()` 读的是 `options.animation`，`layout.animate` 无效），默认开启会连续重画约 30 秒；碰撞半径用的是固定 `nodeSize: 40`，而节点直径实测 18~52，大节点互相覆盖；另外手工覆盖的 `nodeStrength: -260` 语义是「相连节点之间的力」，负值等于把相连节点互相推开，再被 gravity 压回，实测重叠对从 6 涨到 313。修法：图级 `animation: false` + `nodeSize` 按真实直径 + `iterations: 1500` + `factor: 3`，其余力沿用 @antv/layout 默认值。（`vue-frontend/src/components/insight/KnowledgeGraphPanel.vue`） |
 
 
 
