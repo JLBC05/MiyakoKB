@@ -19,7 +19,7 @@
 
 MiyakoKB 处理的对象是**漫画的图片页**，产出的是**结构化的知识**：
 
-```
+```text
 导入（Venera 库 / 本地目录）
   → 逐页多模态分析（概要、关键事件、连续性、实体）
   → 跨章节实体对齐（别名合并与消歧）
@@ -33,47 +33,81 @@ MiyakoKB 处理的对象是**漫画的图片页**，产出的是**结构化的�
 
 ## 🖼️ 界面
 
+> **图片待补充。** 原先的界面截图取自翻译时代的旧版界面，已全部删除。下表是预留的槽位——
+> 截图后按下表的文件名放进 `pic/` 目录即可；把下方对应的 `<img>` 注释取消，图片就会出现在本节。
+
+| 槽位文件 | 应截取的界面 | 建议内容 |
+| --- | --- | --- |
+| `pic/ui-bookshelf.png` | 书架（漫画库） | 书籍封面网格 + 导入入口 |
+| `pic/ui-book-detail.png` | 书籍详情 | 章节列表与「构建知识库」入口 |
+| `pic/ui-analysis.png` | 知识库分析结果 | 实体列表 / 页级分析详情 |
+| `pic/ui-graph.png` | 知识图谱 | 关系网络（可含类别筛选） |
+| `pic/ui-timeline.png` | 剧情时间线 | 事件与角色出场 |
+| `pic/ui-qa.png` | 智能问答 | 带「第 X 话 第 Y 页」引用的回答 |
+| `pic/ui-character-skill.png` | 蒸馏角色 | 角色档案（事实层 + 人格层） |
+| `pic/ui-settings.png` | 设置中心 | 模型通道总览 |
+
+<!-- 截图完成后，逐条取消下面的注释即可渲染：
+
 <p align="center">
-  <img src="pic/bookshelf-display.png" width="85%" alt="书架">
+  <img src="pic/ui-bookshelf.png" width="85%" alt="书架">
   <br><em>书架</em>
 </p>
 
 <p align="center">
-  <img src="pic/book-details.png" width="85%" alt="书籍详情">
+  <img src="pic/ui-book-detail.png" width="85%" alt="书籍详情">
   <br><em>书籍详情与章节</em>
 </p>
 
 <p align="center">
-  <img src="pic/analysis-overview.png" width="85%" alt="分析总览">
-  <br><em>知识库分析总览</em>
+  <img src="pic/ui-analysis.png" width="85%" alt="分析结果">
+  <br><em>知识库分析结果</em>
 </p>
 
 <p align="center">
-  <img src="pic/analysis-display.png" width="85%" alt="分析结果">
-  <br><em>分析结果与实体</em>
+  <img src="pic/ui-graph.png" width="85%" alt="知识图谱">
+  <br><em>知识图谱（关系网络）</em>
 </p>
 
 <p align="center">
-  <img src="pic/timeline.png" width="85%" alt="剧情时间线">
+  <img src="pic/ui-timeline.png" width="85%" alt="剧情时间线">
   <br><em>剧情时间线</em>
 </p>
+
+<p align="center">
+  <img src="pic/ui-qa.png" width="85%" alt="智能问答">
+  <br><em>智能问答（带页码引用）</em>
+</p>
+
+<p align="center">
+  <img src="pic/ui-character-skill.png" width="85%" alt="蒸馏角色">
+  <br><em>角色 Skill 蒸馏</em>
+</p>
+
+<p align="center">
+  <img src="pic/ui-settings.png" width="85%" alt="设置中心">
+  <br><em>设置中心</em>
+</p>
+
+-->
 
 ## ✨ 主要功能
 
 | 模块 | 说明 |
 | --- | --- |
-| **漫画导入** | 从 [Venera](https://github.com/wgh136/venera) 本地库导入，或从本地目录导入（先预览再确认）；按章落库为页与页面资产 |
+| **漫画导入** | 从 [Venera](https://github.com/wgh136/venera) 本地库导入，或从本地目录导入（先预览再确认）；按章落库为页与页面资产；Venera 数据目录可在设置里改 |
 | **逐页结构化分析** | 视觉模型逐页抽取页面概要、关键事件、连续性备注，以及角色 / 地点 / 物品 / 能力 / 概念五类实体 |
-| **实体对齐** | 跨章节消歧与别名合并：硬性规则（泛词与从属过滤、简称包含、同音与异体字、日期与编号区分）+ 整图批量语义裁决；裁决缓存按书隔离 |
-| **分层聚合** | 页 → 分组 → 章 → 全书的多层汇总，可按范围触发（全书 / 增量 / 指定章节 / 指定页） |
+| **实体对齐** | 跨章节消歧与别名合并：硬性规则（泛词与从属过滤、简称包含、同音与异体字、日期与编号区分）+ 按候选图分批的语义裁决；裁决缓存按书隔离，失败不写缓存 |
+| **分层聚合** | 页 → 分组 → 章 → 全书的多层汇总，可按范围触发（全书 / 增量 / 指定章节 / 指定页）；聚合粒度与每批页数可分别配置 |
 | **概述与压缩上下文** | 无剧透概览、剧情总结、压缩上下文，作为问答的全库资料 |
 | **剧情时间线** | 由分析结果生成事件与角色时间线 |
-| **知识图谱** | 实体共现关系图，支持类别过滤与最小权重调节 |
-| **智能问答** | 单一「通用」检索：页面向量 + 全库产物 + 实体知识网络自动融合，回答带页码引用可溯源 |
-| **向量检索** | ChromaDB 持久化索引 + 嵌入模型，可随时重建；索引过期会提示重建 |
+| **知识图谱** | 实体共现关系图，支持类别筛选、最小共现权重、搜索与节点详情 |
+| **智能问答** | 单一「通用」检索：页面向量 + 全库产物 + 实体知识网络自动融合，回答带「第 X 话 第 Y 页」引用可溯源；检索降级会显式提示而不是静默兜底 |
+| **向量检索** | ChromaDB 持久化索引 + 嵌入模型，可随时重建；索引过期或不可用会提示重建 |
 | **角色 Skill 蒸馏** | 从实体知识网络与页面证据蒸馏单个角色的档案：事实层（身份、关系、出场）＋人格层（性格、说话方式、逐字台词），人格层由视觉模型查看原画提炼；可在线查看或导出 `.zip` |
+| **世界书蒸馏** | 按「最少出场页数」筛选后蒸馏世界书条目，同样可导出 `.zip` |
 | **书架与阅读器** | 书架、书籍详情、章节列表、阅读器（翻页 / 连续滚动 / 沉浸模式）、问答笔记 |
-| **设置中心** | VLM / LLM / 嵌入 / 重排 / 提示词 / 批量参数，含连接测试与自定义模型档案 |
+| **设置中心** | 模型通道总览 + VLM / LLM / 嵌入 / 重排 / 分析 / 提示词分页，含连接测试、每域恢复默认、整库导入导出（备份不含密钥）、设置搜索与字段级错误定位 |
 | **管理后台** | 用户与状态、邀请码、恢复码、资产配额、公网功能与模型策略、任务调度参数 |
 | **任务中心** | 持久任务队列：进度、暂停 / 继续 / 取消、失败项补跑（`retry-failed`） |
 
@@ -91,42 +125,64 @@ MiyakoKB 处理的对象是**漫画的图片页**，产出的是**结构化的�
 └── Worker 进程 ──────────────────── 持久任务队列（分析 / 衍生构建 / 向量 / 导入）
 ```
 
-- **存储契约**：SQLite 结构由 `src/storage_migrator/schemas/<版本>.sql` 冻结契约 + 迁移脚本管理，启动时自动校验；结构不匹配会拒绝启动，而不是带着脏结构运行。当前存储版本见 [`version.json`](version.json)。
+- **存储契约**：SQLite 结构由 `src/storage_migrator/schemas/<版本>.sql` 冻结契约 + 迁移脚本管理，启动时自动校验；结构不匹配会拒绝启动，而不是带着脏结构运行。当前版本见 [`version.json`](version.json)。
 - **任务模型**：所有重活都是持久任务（job / item / step），支持中断续跑与失败项补跑；进程崩溃后由启动器重启并回收在途工作。
 - **前端**：构建产物随包分发（`src/backend_v2/static/vue`），由 API 直接托管；开发时用 Vite 热更新。
 - **模型**：分析用的模型配置在任务启动时冻结，运行中改设置只影响下一个任务。
+
+### 数据根目录
+
+数据库、页面资产、日志与向量索引都在数据根下（默认是程序目录旁的 `data-v2/`）：
+
+```text
+data-v2/
+├── saber.sqlite3        # 主库（书籍 / 页面 / 分析结果 / 产物 / 任务）
+├── objects/             # 页面图片与封面等二进制资产
+├── chroma/              # 向量索引（ChromaDB 持久化目录）
+├── logs/                # API / Worker 日志（含诊断日志）
+├── plugins/  runtime/   # 插件与运行期状态
+└── temp/                # 导入暂存与中间文件（可安全清理）
+```
+
+公网 profile 必须显式指定 `--data-dir`，不会与本地实例共用数据根。
 
 ## 🚀 快速上手
 
 ### 1. 获取程序
 
-- **发行包**：到 [Releases](https://github.com/JLBC05/MiyakoKB/releases) 下载 `MiyakoKB-<版本>-*.7z.001` 及其后续分卷，全部放在同一目录后用 [7-Zip](https://www.7-zip.org/) 或 [Bandizip](https://www.bandisoft.com/bandizip/) 解压（Windows 自带解压与部分工具无法正确识别分卷 7z）。
+- **发行包**：到 [Releases](https://github.com/JLBC05/MiyakoKB/releases) 下载 `MiyakoKB-<版本>-cpu.7z.001`（或 `-gpu`）及其后续分卷，全部放在同一目录后用 [7-Zip](https://www.7-zip.org/) 或 [Bandizip](https://www.bandisoft.com/bandizip/) 解压 `.7z.001`（Windows 内置解压与部分工具无法正确识别分卷 7z）。
 - **源码运行**：见下方[源码开发](#-源码开发)。
-- 发行包不含本地模型运行时：视觉 / 语言 / 嵌入 / 重排全部通过 API 接入，首次启动后在「设置」中填写。
+- 发行包**不含**本地模型运行时：视觉 / 语言 / 嵌入 / 重排全部通过 API 接入，首次启动后在「设置」中填写。
 
 ### 2. 配置模型与凭据
 
-启动后进入「设置」：
+启动后进入「设置」，先在**模型通道总览**里看清四条通道的状态，再逐个配置：
 
-1. **凭据**：填写各家服务的 API Key（落库后仅以密文保存，界面只显示指纹）。
-2. **视觉模型（VLM）**：逐页分析用，必须支持图片输入。
-3. **语言模型（LLM）**：实体对齐的语义裁决、概览等衍生步骤用，可与 VLM 复用同一提供商。
+1. **凭据**：填写各家服务的 API Key。落库后只以密文保存，界面回读时只给出指纹与「已保存」标记，**永不回传明文**；输入框留空表示沿用已保存的密钥。
+2. **视觉模型（VLM）**：逐页分析用，必须支持图片输入；「批内并发数」与「最大图片边长」在这里配。
+3. **语言模型（LLM）**：实体对齐的语义裁决、概览等衍生步骤用，可与 VLM 复用同一提供商（「与视觉模型相同」开关）。
 4. **嵌入 / 重排**：问答检索用；填好后点「连接测试」验证。
 
-> 提示：Base URL 填到兼容层（通常以 `/v1` 结尾）即可。多数服务对图片体积敏感，建议把「图片最长边」压到 1024 再送模型，既稳又快。
+内置的 OpenAI 兼容提供商档案：SiliconFlow、DeepSeek、火山引擎、Google Gemini、通义千问、OpenAI、Ollama（本地）、自定义（任意兼容端点）；重排另有 Jina AI、Cohere。
+
+> 提示：Base URL 填到兼容层（通常以 `/v1` 结尾）即可。多数服务对图片体积敏感，建议把「最大图片边长」压到 1024 再送模型，既稳又快。
+>
+> 视觉连接测试会**真实发一次单图请求**，而不是查供应商能力清单——清单是快照，会把实际可用的模型误判成不支持。
 
 ### 3. 导入漫画并构建知识库
 
 1. **导入**：书架页 → 导入 → 选择 Venera 本地库或本地目录（先预览，再确认）。
-2. **分析**：书籍详情页 → 选择范围（全书 / 指定章节 / 指定页）→ 启动分析，进度在任务中心查看。
-3. **看结果**：分析完成后查看概览、时间线、知识图谱、实体浏览与角色 Skill。
+2. **分析**：书籍详情页 → 选择范围（全书 / 增量 / 指定章节 / 指定页）→ 启动分析，进度在任务中心查看。
+3. **看结果**：分析完成后查看概览、时间线、知识图谱、实体浏览、角色 Skill 与世界书。
 4. **提问**：问答页选书提问，回答会给出「第 X 话 第 Y 页」的引用，可点开原图核对。
 
-### 4. 数据保存在哪里
+### 4. 备份与升级
 
-数据库、页面资产、日志、向量索引都在数据根目录下（默认是程序目录旁的 `data-v2/`，可用 `--data-dir` 指定；公网 profile 使用独立目录）。升级前请自行备份该目录。
+升级前请自行备份整个数据根目录。存储结构变更由启动器按 `src/storage_migrator/schemas/` 下的契约自动迁移；跨版本升级细节见 [`docs/storage-migrations.md`](docs/storage-migrations.md)。
 
 ## 🛠️ 源码开发
+
+环境：**Python 3.11+**（CI 使用 3.12）、**Node 22+**。
 
 ```bash
 # 后端
@@ -134,7 +190,7 @@ python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -r requirements-cpu.txt
 
-# 前端（Node 22+）
+# 前端
 cd vue-frontend
 npm ci
 npm run build                     # 产物写入 ../src/backend_v2/static/vue
@@ -149,6 +205,9 @@ python run.py --no-browser
 # 正式栈：受管启动器（存储准备 + API + Worker 监督，推荐）
 python saber_v2.py --role launcher
 
+# 公网部署：必须显式指定数据根
+python saber_v2.py --role launcher --profile public --data-dir <目录>
+
 # 也可单独起某个角色
 python saber_v2.py --role api
 python saber_v2.py --role worker
@@ -159,37 +218,41 @@ python saber_v2.py --role storage-migrator --data-dir <目录>
 
 ```bash
 python -m pytest tests_backend -q          # 后端全量
+
 cd vue-frontend
-npm run test                               # vitest（含 property 用例）
+npm test                                   # vitest（含 property 用例）
 npm run typecheck                          # vue-tsc
 npm run lint && npm run lint:css           # eslint / stylelint
-npm run lint:ui:audit                      # UI 架构审计（token、裸控件、层级、媒体查询）
+npm run lint:ui && npm run lint:ui:audit   # UI 架构检查与审计（token、裸控件、层级、媒体查询）
+npm run check:api                          # 契约与生成类型是否一致
 ```
 
 > 跑后端全量前先停掉开发栈（它占用 5000 端口，会让启动器与端口类用例超时），也别设 `PYTHONIOENCODING=utf-8`（会被角色子进程继承，导致按 locale 解码的探针用例假失败）。
 
-打包：
+打包与发布：
 
 ```bash
 python -m PyInstaller app.spec --clean     # 产物在 dist/MiyakoKB/
 python .github/scripts/probe_package.py dist/MiyakoKB/MiyakoKB.exe   # 逐角色启动探测
 ```
 
-发布：推送 `v*` tag 或手动触发 `.github/workflows/release.yml`；工作流会跑后端测试 + 前端门禁 + 打包探测，然后上传分卷发行资产。`version.json` 的 `version` 必须与 tag 一致。
+推送 `v*` tag 或手动触发 `.github/workflows/release.yml`：工作流会跑后端测试 + 前端门禁（含 `check:api`）+ 打包探测，再产出 CPU / GPU 两套 7z 分卷资产。`version.json` 的 `version` 必须与 tag 一致。
 
 ## ❓ 常见问题
 
 - **全新目录启动后 API 起不来？** 先看同目录的 `saber-api-diagnostic.log`；启动器只在受管模式下做存储准备，`run.py` 不做，所以开发栈不适合验证全新安装。
 - **分析或衍生构建报 502 / 超时？** 多半是模型服务侧的限流或网关故障。失败项不会丢：到任务中心用「重跑失败项」补跑即可。
 - **问答按钮是灰的？** 页面提示会给出缺失项（没有分析结果 / 向量索引过期 / 全库产物过期），点提示里的按钮重建即可。
+- **问答回答里出现「语义索引读取失败」之类的告警？** 说明向量索引不可用、本次只用了关键词与实体证据；按提示重建向量索引即可恢复。
 - **想换模型提供商？** 任务的模型配置在启动时冻结，改设置只影响下一个任务；换完请重新触发分析（已发布的页结果可用「增量」范围复用）。
-- **实体对齐很慢？** 它是把整张候选图分批送模型裁决，规模取决于书的大小与概念类实体数量；`INSIGHT_ALIGN_*` 环境变量可调批大小、并发与概念最小页数。
+- **实体对齐很慢？** 它是把整张候选图分批送模型裁决，规模取决于书的大小与概念类实体数量；`INSIGHT_ALIGN_*` 环境变量可调批大小、并发、候选面与概念最小页数，`INSIGHT_ANALYZE_PARALLEL` 控制页分析的批内并发。
+- **设置里某页签「恢复默认」会动到密钥吗？** 不会，只恢复该页签的非凭据字段；换机器搬配置用「导出备份 / 导入备份」，备份**不含**密钥，导入后需重新填写。
 - **存储版本升级？** 见 [`docs/storage-migrations.md`](docs/storage-migrations.md)。
 
 ## ❤️ 贡献与反馈
 
 - 问题反馈 / 功能建议：[Issues](https://github.com/JLBC05/MiyakoKB/issues)
-- 提交前请确保后端 `pytest` 与前端 `test / typecheck / lint / lint:css / lint:ui:audit` 全绿，且重建后的前端产物已一并提交。
+- 提交前请确保后端 `pytest` 与前端 `test / typecheck / lint / lint:css / lint:ui:audit / check:api` 全绿，且重建后的前端产物（`src/backend_v2/static/vue`）已一并提交。
 - 第三方组件与字体许可清单见 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)；本版本变更见 [`RELEASE_NOTES.md`](RELEASE_NOTES.md)。
 
 ## ⚠️ 免责声明

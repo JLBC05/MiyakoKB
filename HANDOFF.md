@@ -93,6 +93,17 @@
 - **实体浏览加搜索**（名称 + 别名、去空白小写归一、清空按钮、无命中态）与**时间线预览改大图**（`BaseModal` 内容 90vw、`img` `max-height: 85vh; object-fit: contain`）。
 - **门禁**：后端全量 **809 passed / 2 warnings / 42 subtests**（另 1 条 `test_real_launcher_confirms_candidate_and_cleans_backup` 在全量并发下 30s 健康检查超时，单跑 **17.12s 通过**，属负载相关的抖动）；前端 `vitest` **89 files / 647 tests**、`vue-tsc -b` 0、`eslint` 0 errors / 71 warnings、`stylelint` 0、`check-ui-architecture.mjs` 与 `--audit` 0、`vite build` 成功。
 - **第 7 项（系统设置可优化点）只给方案，未动代码**：方案要点＝①凭据回传改掩码（`GET /settings` 现在明文回传 `credentials[].secret.api_key`）；②自动保存与「立即保存全部更改」双写路径收敛为单一提交；③四个模型通道（VLM/Chat/Embedding/Reranker）合并成一张「通道表」，角色级覆盖而非四份重复表单；④补「恢复默认」与整库导入导出（目前只有提示词有）；⑤`vlm` 连接测试对自定义供应商误报（复用 `vision_ocr` 能力位）；⑥把 `analyzeConcurrency`/`imageMaxSize`/`RPM` 归入「性能与成本」分组并给等价换算；⑦加设置项搜索与 422 校验的就地提示。
+### 2.11 README 完善 + 界面图占位 + 临时文件清理（2026-10-22）
+
+- **删除翻译时代的界面截图**：`pic/bookshelf-display.png`、`pic/book-details.png`、`pic/analysis-overview.png`、`pic/analysis-display.png`、`pic/timeline.png` 五张全部 `git rm`。它们来自初始导入提交 `5777d36`（Saber-Translator 翻译工具时代），其中四张在该提交里根本没有被 README 引用；同批被删的还有作者个人赞赏码等文件（见 `docs/legacy-cleanup-report.md`）。
+- **README 的「界面」小节改为占位**：给出 8 个槽位文件名与应截取的界面（`pic/ui-bookshelf.png`、`ui-book-detail.png`、`ui-analysis.png`、`ui-graph.png`、`ui-timeline.png`、`ui-qa.png`、`ui-character-skill.png`、`ui-settings.png`），渲染用的 `<img>` 块整体放在 HTML 注释里——截图放进 `pic/` 后逐条取消注释即可。未截图时小节只显示槽位说明表，不会出现裂图。
+- **保留 `pic/logo.png` 与 `pic/miyako-logo.png`**：前者被前端运行时引用（`AuthView.vue`、`ProductPageHeader.vue`、`QAMessageItem.vue` 的 `/pic/logo.png`），后者是品牌 logo（README 顶部与导航栏）。
+- **README 其余部分按当前实现校订**：新增「数据根目录」小节（`saber.sqlite3` / `objects` / `chroma` / `logs` / `plugins` / `runtime` / `temp`）、世界书蒸馏、设置中心的通道总览与恢复默认/导入导出/搜索/字段级错误定位、`--profile public --data-dir` 公网启动、`npm run check:api` 门禁；FAQ 增补「向量索引降级提示」「恢复默认不动密钥」「备份不含密钥」三条；实体对齐 FAQ 补上 `INSIGHT_ALIGN_*` 与 `INSIGHT_ANALYZE_PARALLEL`。
+- **环境声明**：README 写 **Python 3.11+**（CI 用 3.12）——`src/` 下无 PEP 695 等 3.12 专有语法，本机 3.11.0 可照常运行；Node 22+（CI 一致）。
+- **临时文件清理**（用户要求「删掉项目文件夹里面的 temp、测试等临时文件」）：删除项目根 **613** 个 `tmp_*`/`_tmp_*` 脚本与输出（约 9.8 MB）、`temp/` 下除 `db-backup-20261019-200610/`（55.5 MB 存储迁移前的整库备份，坑 21 的凭据）与 `npm-boot/`（无 `npm` 二进制时的自举安装器，坑 38 的解法）之外的全部内容（含 `edge-cdp`/`edge-prof` 共 368 MB 浏览器 profile、`esbuild-tmp` 73.5 MB）、`build/`（146.5 MB）、`dist/`（966.9 MB）、`.pytest_cache/`、`.archify/`（架构图生成过程目录）与全部 **26** 个 `__pycache__`。清理后重建了 `temp/esbuild-tmp`（`vite build` 需要可写 TEMP，坑 34/37）。
+- **同批删除的两个入库垃圾**：`vue-frontend/tmp_build_err.txt`、`vue-frontend/tmp_build_out.txt`（历史构建日志，无任何引用，且不符合 `.gitignore` 里 `/tmp_*` 的命名约定才漏进来）。
+- 清理前已核对：上述删除目标**全部为未跟踪/被忽略文件**（`git ls-files` 在这些目录下为 0），仓库内容未受影响。
+- 校验：README 本地引用全部存在（`LICENSE`、`version.json`、`docs/storage-migrations.md`、`docs/assets/architecture.{png,svg}`、`pic/miyako-logo.png`、`THIRD_PARTY_LICENSES.md`、`RELEASE_NOTES.md`），7 个目录锚点全部命中，代码围栏配平。
 ## 3. 当前状态（精确到下一步）
 - [x] 验收点 1：漫画导入（Venera + 本地 ZIP/目录）及进度条实时反馈。
 - [x] 验收点 2：书架卡片精准展示构建状态（已构建/部分构建/未构建）。
