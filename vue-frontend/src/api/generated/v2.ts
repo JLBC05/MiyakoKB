@@ -1754,6 +1754,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/insight/books/{book_id}/knowledge-archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["exportInsightKnowledgeArchive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/insight/books/{book_id}/exports": {
         parameters: {
             query?: never;
@@ -3285,6 +3301,9 @@ export interface components {
             characterPage: components["schemas"]["StringCursorPage"];
             pageCount: number;
             pageThumbnails: {
+                [key: string]: string;
+            };
+            pageSources: {
                 [key: string]: string;
             };
             dependencyFingerprint: string;
@@ -7459,6 +7478,29 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Current deterministic Insight export. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    exportInsightKnowledgeArchive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whole knowledge base of the book as a zip archive. */
             200: {
                 headers: {
                     [name: string]: unknown;

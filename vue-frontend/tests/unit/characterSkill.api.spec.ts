@@ -20,6 +20,7 @@ import {
   characterSkillArchiveUrl,
   getInsightCharacterSkill,
   getInsightCharacterSkillStatus,
+  insightKnowledgeArchiveUrl,
   listInsightCharacterSkills,
 } from '@/api/v2/insight'
 
@@ -96,6 +97,12 @@ describe('character skill API', () => {
   it('points the archive download at the encoded archive route', () => {
     expect(characterSkillArchiveUrl(bookId, entityId)).toBe(
       '/api/v2/insight/books/book%2Fone%20two/character-skills/character_hu_zhang_you_ren/archive'
+    )
+  })
+
+  it('points the knowledge archive at the encoded book route', () => {
+    expect(insightKnowledgeArchiveUrl(bookId)).toBe(
+      '/api/v2/insight/books/book%2Fone%20two/knowledge-archive'
     )
   })
 })

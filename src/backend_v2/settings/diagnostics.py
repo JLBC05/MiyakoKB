@@ -320,8 +320,17 @@ class ProviderDiagnostics:
             raise DiagnosticRequestError("API key is required")
         if manifest.requires_base_url and not base_url:
             raise DiagnosticRequestError("baseUrl is required")
+        # 请求要按「本次实际在测的能力」解析：UnifiedVisionRequest 默认是 vision_ocr，
+        # 拿它去查清单会把清单里没登记 visionOcr 的供应商（如 DeepSeek）误判成
+        # 「不支持 vision_ocr」。走 OpenAI 兼容通道而清单里没有该能力时，退到 vlm 解析，
+        # 由服务端对真实请求给出结论。
+        request_capability = (
+            capability
+            if provider_supports_capability(provider, capability)
+            else VLM_CAPABILITY
+        )
         with Image.new("RGB", (320, 96), "white") as image:
-            ImageDraw.Draw(image).text((16, 32), "Saber OCR test 123", fill="black")
+            ImageDraw.Draw(image).text((16, 32), "MiyakoKB 123", fill="black")
             with BytesIO() as buffer:
                 image.save(buffer, "PNG")
                 image_base64 = base64.b64encode(buffer.getvalue()).decode("ascii")
@@ -334,6 +343,7 @@ class ProviderDiagnostics:
                 or "Read the text in this image.",
                 image_base64=image_base64,
                 base_url=base_url,
+                capability=request_capability,
             )
         )
         if not isinstance(result, str) or not result.strip():

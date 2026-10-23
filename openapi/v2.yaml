@@ -1,4 +1,4 @@
-﻿openapi: 3.1.0
+openapi: 3.1.0
 info:
   title: Saber Translator Backend-First API
   version: 2.0.0-dev
@@ -2354,6 +2354,19 @@ paths:
       responses:
         "200":
           description: Current deterministic Insight export.
+          content:
+            application/zip:
+              schema: {type: string, format: binary}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /insight/books/{book_id}/knowledge-archive:
+    get:
+      tags: [insight]
+      operationId: exportInsightKnowledgeArchive
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+      responses:
+        "200":
+          description: Whole knowledge base of the book as a zip archive.
           content:
             application/zip:
               schema: {type: string, format: binary}
@@ -5462,6 +5475,7 @@ components:
         - characterPage
         - pageCount
         - pageThumbnails
+        - pageSources
         - dependencyFingerprint
       properties:
         timelineVersionId: {$ref: "#/components/schemas/Uuid"}
@@ -5485,6 +5499,9 @@ components:
           $ref: "#/components/schemas/StringCursorPage"
         pageCount: {type: integer, minimum: 0}
         pageThumbnails:
+          type: object
+          additionalProperties: {type: string}
+        pageSources:
           type: object
           additionalProperties: {type: string}
         dependencyFingerprint: {type: string, pattern: "^[0-9a-f]{64}$"}

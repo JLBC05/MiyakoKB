@@ -10,6 +10,8 @@ import BaseModal from '@/components/common/BaseModal.vue'
 import UiSpinner from '@/components/ui/UiSpinner.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import { triggerBlobDownload } from '@/utils/browserDownload'
+import { downloadBlob } from '@/api/download'
+import { insightKnowledgeArchiveUrl } from '@/api/v2/insight'
 import { showToast } from '@/utils/toast'
 
 const emit = defineEmits<{
@@ -21,6 +23,7 @@ const insightStore = useInsightStore()
 
 const isLoading = ref(false)
 const isRegenerating = ref(false)
+const isExportingArchive = ref(false)
 const errorMessage = ref('')
 const pendingMessage = ref('')
 
@@ -200,6 +203,28 @@ function handleExportMarkdown() {
   showToast('故事梗概 Markdown 已导出', 'success')
 }
 
+// 整库导出：把实体网络、时间线、概览、逐页分析与角色资料打成一个 zip。
+async function handleExportKnowledgeArchive(): Promise<void> {
+  if (isExportingArchive.value) return
+  isExportingArchive.value = true
+  try {
+    const result = await downloadBlob({
+      url: insightKnowledgeArchiveUrl(bookId.value),
+      fallbackFilename: 'knowledge-archive.zip',
+      fallbackErrorMessage: '导出知识库失败',
+    })
+    triggerBlobDownload(result.blob, result.filename)
+    showToast('知识库已导出为 zip 压缩包', 'success')
+  } catch (archiveError) {
+    showToast(
+      archiveError instanceof Error ? archiveError.message : '导出知识库失败',
+      'error',
+    )
+  } finally {
+    isExportingArchive.value = false
+  }
+}
+
 function getThumbnail(event: TimelineEvent): string | null {
   if (!timelineData.value?.page_thumbnails) return null
   const pageNum = event.page_numbers?.[0]
@@ -209,7 +234,21 @@ function getThumbnail(event: TimelineEvent): string | null {
   return null
 }
 
-function openThumbnailPreview(url: string) {
+/**
+ * 大图预览地址：优先取该页原图（page_sources），
+ * 缺失时退回缩略图，避免「放大反而更小更糊」。
+ */
+function getPreviewSource(event: TimelineEvent): string | null {
+  const pageNum = event.page_numbers?.[0]
+  if (pageNum !== undefined && timelineData.value?.page_sources?.[pageNum]) {
+    return timelineData.value.page_sources[pageNum]
+  }
+  return getThumbnail(event)
+}
+
+function openThumbnailPreview(event: TimelineEvent) {
+  const url = getPreviewSource(event)
+  if (!url) return
   previewImageUrl.value = url
   previewZoomed.value = false
 }
@@ -270,6 +309,15 @@ onMounted(() => {
           @click="handleExportMarkdown"
         >
           📥 导出 Markdown
+        </UiButton>
+        <UiButton
+          size="sm"
+          variant="secondary"
+          :disabled="isExportingArchive"
+          title="把实体网络、时间线、概览、逐页分析与角色资料打成一个 zip"
+          @click="handleExportKnowledgeArchive"
+        >
+          {{ isExportingArchive ? '导出中…' : '🗂️ 导出知识库' }}
         </UiButton>
         <UiButton
           size="sm"
@@ -488,7 +536,7 @@ onMounted(() => {
                 <div
                   v-if="getThumbnail(event)"
                   class="timeline-card__thumb-wrap"
-                  @click="openThumbnailPreview(getThumbnail(event)!)"
+                  @click="openThumbnailPreview(event)"
                   title="点击查看页面大图"
                 >
                   <img

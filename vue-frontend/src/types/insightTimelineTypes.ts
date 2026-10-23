@@ -61,6 +61,7 @@ export interface TimelineData {
   story_summary: string
   main_characters: TimelineCharacter[]
   page_thumbnails: Record<number, string>
+  page_sources: Record<number, string>
   plot_arcs?: TimelineArc[]
   plot_threads?: PlotThread[]
   next_event_cursor: number | null

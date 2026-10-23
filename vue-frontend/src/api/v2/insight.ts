@@ -318,6 +318,11 @@ export function characterSkillArchiveUrl(
   return `${ROOT}/books/${encodeURIComponent(bookId)}/character-skills/${encodeURIComponent(entityId)}/archive${kindSuffix(kind)}`
 }
 
+/** 整库导出（zip）：实体网络、时间线、概览、逐页分析与已蒸馏角色资料。 */
+export function insightKnowledgeArchiveUrl(bookId: string): string {
+  return `${ROOT}/books/${encodeURIComponent(bookId)}/knowledge-archive`
+}
+
 export function buildInsightLorebook(
   bookId: string,
   command: { maxEntities?: number } = {}

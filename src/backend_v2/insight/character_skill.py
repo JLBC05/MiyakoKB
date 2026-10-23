@@ -1242,6 +1242,8 @@ def _render_card_files(
     facts: _Facts,
     used_vision: Sequence[Mapping[str, Any]],
 ) -> dict[str, str]:
+    # 卡片里的台词来自台版原画，先统一转简体再落文件。
+    data = _simplify_card_data(data)
     v3 = {"spec": "chara_card_v3", "spec_version": "3.0", "data": dict(data)}
     v2_data = {key: value for key, value in data.items() if key not in _CARD_V3_ONLY}
     v2 = {"spec": "chara_card_v2", "spec_version": "2.0", "data": v2_data}
@@ -1783,6 +1785,71 @@ def _task_key(book_id: str, kind: str, entity_id: str) -> str:
 _UNSAFE_FILENAME_CHARS = frozenset('\\/:*?"<>|')
 
 
+def _simplify_chinese(text: str) -> str:
+    """把繁体文本转成简体。
+
+    角色卡里的 ``first_mes`` / ``mes_example`` / ``alternate_greetings`` 是**逐字摘录**
+    的原画台词，台版漫画正文是繁体，所以这几个字段会混进繁体字。用户要求卡片统一简体，
+    因此在渲染时做一次 t2s；opencc 缺失时原样返回（不阻断导出）。
+    """
+    if not isinstance(text, str) or not text:
+        return text if isinstance(text, str) else ""
+    converter = _chinese_converter()
+    if converter is None:
+        return text
+    try:
+        return converter.convert(text)
+    except Exception:  # pragma: no cover - 转换库异常不应阻断导出
+        LOGGER.warning("繁体转简体失败，保留原文", exc_info=True)
+        return text
+
+
+_SIMPLIFIER_CACHE: list[Any] = []
+_SIMPLIFIER_LOCK = threading.Lock()
+
+
+def _chinese_converter():
+    """惰性构造 OpenCC t2s 转换器；依赖缺失时返回 None（导出仍可用）。"""
+    if _SIMPLIFIER_CACHE:
+        return _SIMPLIFIER_CACHE[0]
+    with _SIMPLIFIER_LOCK:
+        if _SIMPLIFIER_CACHE:
+            return _SIMPLIFIER_CACHE[0]
+        try:
+            import opencc  # noqa: PLC0415 - 惰性导入，避免拖慢模块加载
+
+            converter = opencc.OpenCC("t2s")
+        except Exception:
+            LOGGER.warning(
+                "未安装 opencc，角色卡台词保持原文（如需简体请安装 opencc-python-reimplemented）",
+            )
+            converter = None
+        _SIMPLIFIER_CACHE.append(converter)
+        return converter
+
+
+def _simplify_card_data(data: Mapping[str, Any]) -> dict[str, Any]:
+    """对角色卡里可能带繁体台词的字段做 t2s，其余字段原样保留。"""
+    simplified = dict(data)
+    for key in ("first_mes", "mes_example", "creator_notes", "system_prompt",
+                "post_history_instructions", "description", "personality", "scenario"):
+        value = simplified.get(key)
+        if isinstance(value, str) and value:
+            simplified[key] = _simplify_chinese(value)
+    greetings = simplified.get("alternate_greetings")
+    if isinstance(greetings, list):
+        simplified["alternate_greetings"] = [
+            _simplify_chinese(item) if isinstance(item, str) else item for item in greetings
+        ]
+    tags = simplified.get("tags")
+    if isinstance(tags, list):
+        simplified["tags"] = [
+            _simplify_chinese(item) if isinstance(item, str) else item for item in tags
+        ]
+    return simplified
+
+
+
 def _archive_stem(document: Mapping[str, Any], kind: str) -> str:
     book_title = str(document.get("bookTitle") or "").strip()
     character = str(document.get("characterName") or "").strip()
@@ -1810,6 +1877,44 @@ def _archive_filename(document: Mapping[str, Any], kind: str = CHARACTER_SKILL_K
     "\u4e0b\u8f7d\u6587\u4ef6\u540d\uff1a\u4e66\u540d\u89d2\u8272\u540d\u5728 Windows \u8d44\u6e90\u7ba1\u7406\u5668\u91cc\u4e5f\u80fd\u843d\u5730\u3002"
     stem = _archive_stem(document, kind)
     return f"{stem or 'character-skill'}.zip"
+
+
+def _card_filename(document: Mapping[str, Any]) -> str:
+    """角色卡单独导出一个 JSON 文件（不再打包成 zip）。"""
+    stem = _archive_stem(document, CHARACTER_CARD_KIND)
+    return f"{stem or 'character-card'}.json"
+
+
+def build_card_document(document: Mapping[str, Any]) -> tuple[str, bytes]:
+    """把角色卡导出为**单个** SillyTavern V3 JSON 文件。
+
+    用户要求：角色卡只要一个 json 就够了，不要 zip 里塞 V2/V3/Markdown 三份。
+    V3 规范向下兼容（V2 读取器认 ``spec: chara_card_v3`` 的 data 段），因此只给 V3；
+    Markdown 预览仍可在界面上看到，无需再导出。
+    """
+    files = document.get("files")
+    if not isinstance(files, Mapping) or not files:
+        raise InsightNotFound("该角色卡没有可导出的内容")
+    payload = files.get("character-card-v3.json")
+    if payload is None:
+        # 兼容旧产物：只有 V2 时用它拼一个 V3 外壳。
+        v2_text = files.get("character-card-v2.json")
+        if v2_text is None:
+            raise InsightNotFound("该角色卡没有可导出的内容")
+        raw = json.loads(v2_text if isinstance(v2_text, str) else str(v2_text))
+        payload = json.dumps(
+            {
+                "spec": "chara_card_v3",
+                "spec_version": "3.0",
+                "data": raw.get("data") or {},
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False, indent=2)
+    # 兜底：确保落盘内容是简体（正常路径已在 _render_card_files 转过）。
+    text = _simplify_chinese(text)
+    return _card_filename(document), text.encode("utf-8")
 
 
 def build_skill_archive(

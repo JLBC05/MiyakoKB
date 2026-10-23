@@ -119,10 +119,11 @@ def test_character_card_kind_is_served_and_archived_separately(tmp_path) -> None
 
     archive = client.get(f"{base}/character_jiu_liu_mei/archive?kind=card")
     assert archive.status_code == 200
+    assert archive.mimetype == "application/json"
     disposition = archive.headers["Content-Disposition"]
-    assert unquote(disposition.split("filename*=UTF-8''", 1)[1]) == "测试漫画-久留美-card.zip"
-    with zipfile.ZipFile(io.BytesIO(archive.data)) as bundle:
-        assert sorted(bundle.namelist()) == sorted(_card_files())
+    assert unquote(disposition.split("filename*=UTF-8''", 1)[1]) == "测试漫画-久留美-card.json"
+    document = json.loads(archive.data.decode("utf-8"))
+    assert document["spec"] == "chara_card_v3"
 
     unknown_kind = client.get(f"{base}/character_jiu_liu_mei?kind=poster")
     assert unknown_kind.status_code == 422

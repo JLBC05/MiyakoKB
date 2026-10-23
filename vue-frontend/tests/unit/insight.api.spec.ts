@@ -112,6 +112,7 @@ function timelineResponse(plotArcs: unknown[]) {
     characterPage: { nextCursor: null, totalCount: 0 },
     pageCount: 1,
     pageThumbnails: { '1': '/api/v2/assets/thumb-1' },
+    pageSources: { '1': '/api/v2/assets/src-1' },
     dependencyFingerprint: 'd'.repeat(64),
   }
 }
@@ -548,6 +549,7 @@ describe('insight v2 api', () => {
       characterPage: { nextCursor: null, totalCount: 1 },
       pageCount: 2,
       pageThumbnails: { '2': '/api/v2/assets/thumb-2' },
+      pageSources: { '2': '/api/v2/assets/src-2' },
       dependencyFingerprint: 'a'.repeat(64),
     })
     const { getTimeline } = await import('@/api/insight')
@@ -601,6 +603,7 @@ describe('insight v2 api', () => {
       characterPage: { nextCursor: null, totalCount: 0 },
       pageCount: 1,
       pageThumbnails: {},
+      pageSources: {},
       dependencyFingerprint: 'b'.repeat(64),
     })
     const { getTimeline } = await import('@/api/insight')
@@ -781,6 +784,7 @@ describe('insight v2 api', () => {
       characterPage: { nextCursor: null, totalCount: 1 },
       pageCount: 2,
       pageThumbnails: { '1': '/api/v2/assets/thumb-1' },
+      pageSources: { '1': '/api/v2/assets/src-1' },
       dependencyFingerprint: 'c'.repeat(64),
     })
     const { getTimeline } = await import('@/api/insight')

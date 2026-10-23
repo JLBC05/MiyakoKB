@@ -105,6 +105,7 @@ from src.backend_v2.settings.diagnostics import (
 from src.backend_v2.settings.routes import create_settings_blueprint
 from src.backend_v2.worker.maintenance import WorkerMaintenance
 from src.shared import constants as shared_constants
+from src.shared.ai_providers import VLM_CAPABILITY
 
 
 def _stored_job_progress(status: str) -> str:
@@ -2540,6 +2541,39 @@ def test_provider_diagnostics_allow_uncredentialed_local_ai_vision(
     assert "开始测试「视觉 OCR」连接" in messages
     assert "「视觉 OCR」连接测试完成" in messages
     assert "连接成功：Saber OCR test 123" in messages
+
+
+def test_vlm_connection_test_resolves_the_capability_it_is_actually_testing(
+    platform,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VLM 连接测试必须按 vlm 能力解析，而不是按 vision_ocr。
+
+    症状（用户实测）：设置页给 VLM 选 DeepSeek 后点「连接测试」报
+    「DeepSeek不支持 vision_ocr」，但 DeepSeek 能接受图片输入。
+    根因：UnifiedVisionRequest.capability 默认 vision_ocr，_test_vision 未覆盖它。
+    """
+    _data_root, engine = platform
+    diagnostics = ProviderDiagnostics(SettingsRepository(engine))
+    captured: dict[str, object] = {}
+
+    def complete_vision(request):
+        captured["capability"] = request.capability
+        return "ok"
+
+    monkeypatch.setattr(diagnostics.chat, "complete_vision", complete_vision)
+    # deepseek 的清单没登记 visionOcr，但 VLM 这一项测试应当按 vlm 能力走通。
+    result = diagnostics.connection_test(
+        "vlm",
+        {
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "secret": {"api_key": "fixture-key"},
+        },
+    )
+
+    assert result == {"success": True, "message": "连接成功：ok"}
+    assert captured["capability"] == VLM_CAPABILITY
 
 
 def test_vision_connection_test_asks_the_provider_instead_of_a_stale_capability_list(

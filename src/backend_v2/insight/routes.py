@@ -37,6 +37,7 @@ from src.backend_v2.insight.character_skill import (
     MAX_LOREBOOK_ENTITIES,
     MAX_VISION_PAGES,
     CharacterSkillService,
+    build_card_document,
     build_skill_archive,
 )
 from src.backend_v2.content.image_import import ImageImportService
@@ -50,6 +51,7 @@ from src.backend_v2.insight.derived import (
     InsightDerivedRepository,
 )
 from src.backend_v2.insight.entity_resolver import resolve_entities_in_question
+from src.backend_v2.insight.knowledge_export import build_knowledge_archive
 from src.backend_v2.insight.exports import (
     InsightExportCommandService,
     build_current_export,
@@ -445,12 +447,21 @@ def create_insight_blueprint(
     def character_skill_archive(book_id: str, entity_id: str) -> Response:
         kind = _distill_kind()
         document = character_skills.get(book_id=book_id, entity_id=entity_id, kind=kind)
-        filename, payload = build_skill_archive(document, kind)
-        response = Response(payload, mimetype="application/zip")
-        response.headers["Content-Disposition"] = (
-            'attachment; filename="character-skill.zip"; '
-            f"filename*=UTF-8''{quote(filename)}"
-        )
+        if kind == CHARACTER_CARD_KIND:
+            # 角色卡只导出一个 JSON 文件（用户要求），不再是三件套 zip。
+            filename, payload = build_card_document(document)
+            response = Response(payload, mimetype="application/json")
+            response.headers["Content-Disposition"] = (
+                'attachment; filename="character-card.json"; '
+                f"filename*=UTF-8''{quote(filename)}"
+            )
+        else:
+            filename, payload = build_skill_archive(document, kind)
+            response = Response(payload, mimetype="application/zip")
+            response.headers["Content-Disposition"] = (
+                'attachment; filename="character-skill.zip"; '
+                f"filename*=UTF-8''{quote(filename)}"
+            )
         response.headers["Content-Length"] = str(len(payload))
         return response
 
@@ -847,6 +858,18 @@ def create_insight_blueprint(
         response.headers["Content-Disposition"] = (
             f'attachment; filename="{filename}"'
         )
+        return response
+
+    @blueprint.get("/books/<book_id>/knowledge-archive")
+    def knowledge_archive(book_id: str) -> Response:
+        """整库导出：实体网络、时间线、概览、逐页分析与已蒸馏的角色资料。"""
+        filename, payload = build_knowledge_archive(engine, book_id)
+        response = Response(payload, mimetype="application/zip")
+        response.headers["Content-Disposition"] = (
+            'attachment; filename="knowledge-archive.zip"; '
+            f"filename*=UTF-8''{quote(filename)}"
+        )
+        response.headers["Content-Length"] = str(len(payload))
         return response
 
     @blueprint.post("/books/<book_id>/exports")

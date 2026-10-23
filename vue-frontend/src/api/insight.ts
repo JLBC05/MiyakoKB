@@ -623,16 +623,19 @@ function requireTimelineThreads(value: unknown): TimelineData['plot_threads'] {
   })
 }
 
-function requireTimelineThumbnails(value: unknown): Record<number, string> {
-  if (!isRecord(value)) throw new Error('时间线 pageThumbnails 格式无效')
-  const thumbnails: Record<number, string> = {}
+function requireTimelinePageUrls(
+  value: unknown,
+  field: 'pageThumbnails' | 'pageSources'
+): Record<number, string> {
+  if (!isRecord(value)) throw new Error(`时间线 ${field} 格式无效`)
+  const urls: Record<number, string> = {}
   for (const [pageNumber, url] of Object.entries(value)) {
     if (!/^[1-9][0-9]*$/.test(pageNumber) || typeof url !== 'string' || !url.trim()) {
-      throw new Error('时间线 pageThumbnails 格式无效')
+      throw new Error(`时间线 ${field} 格式无效`)
     }
-    thumbnails[Number(pageNumber)] = url
+    urls[Number(pageNumber)] = url
   }
-  return thumbnails
+  return urls
 }
 
 function requireTimelinePayload(value: unknown, expectedBookId: string): TimelineData {
@@ -651,6 +654,7 @@ function requireTimelinePayload(value: unknown, expectedBookId: string): Timelin
       'characterPage',
       'pageCount',
       'pageThumbnails',
+      'pageSources',
       'dependencyFingerprint',
     ])
   ) {
@@ -771,7 +775,8 @@ function requireTimelinePayload(value: unknown, expectedBookId: string): Timelin
     value.characterPage.totalCount,
     'characterPage.totalCount'
   )
-  const pageThumbnails = requireTimelineThumbnails(value.pageThumbnails)
+  const pageThumbnails = requireTimelinePageUrls(value.pageThumbnails, 'pageThumbnails')
+  const pageSources = requireTimelinePageUrls(value.pageSources, 'pageSources')
   const groups = events.map(event => {
     const start = Math.min(...event.page_numbers)
     const end = Math.max(...event.page_numbers)
@@ -793,6 +798,7 @@ function requireTimelinePayload(value: unknown, expectedBookId: string): Timelin
     story_summary: content.story_summary,
     main_characters: characters,
     page_thumbnails: pageThumbnails,
+    page_sources: pageSources,
     stats: {
       total_events: totalEvents,
       total_pages: pageCount,

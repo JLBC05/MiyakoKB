@@ -5067,10 +5067,12 @@ class InsightDerivedRepository:
                 characters=character_payloads,
             )
             page_thumbnails: dict[str, str] = {}
+            page_sources: dict[str, str] = {}
             if referenced_page_ids or referenced_page_numbers:
                 thumbnail_pointer = page_assets.alias(
                     "timeline_thumbnail_pointer"
                 )
+                source_pointer = page_assets.alias("timeline_source_pointer")
                 numbered_pages = (
                     select(
                         pages.c.id.label("page_id"),
@@ -5080,6 +5082,7 @@ class InsightDerivedRepository:
                         thumbnail_pointer.c.asset_id.label(
                             "thumbnail_asset_id"
                         ),
+                        source_pointer.c.asset_id.label("source_asset_id"),
                     )
                     .join(chapters, chapters.c.id == pages.c.chapter_id)
                     .outerjoin(
@@ -5090,6 +5093,11 @@ class InsightDerivedRepository:
                         & (
                             thumbnail_pointer.c.role == "thumbnail_source"
                         ),
+                    )
+                    .outerjoin(
+                        source_pointer,
+                        (source_pointer.c.page_id == pages.c.id)
+                        & (source_pointer.c.role == "source"),
                     )
                     .where(chapters.c.book_id == book_id)
                     .subquery()
@@ -5111,11 +5119,13 @@ class InsightDerivedRepository:
                             numbered_pages.c.page_id,
                             numbered_pages.c.page_number,
                             numbered_pages.c.thumbnail_asset_id,
+                            numbered_pages.c.source_asset_id,
                         ).where(page_filter)
                     ).mappings()
                 )
                 page_numbers_by_id: dict[str, int] = {}
                 page_thumbnails = {}
+                page_sources = {}
                 for page in page_rows:
                     page_id = _required_string(
                         page["page_id"],
@@ -5138,6 +5148,15 @@ class InsightDerivedRepository:
                             + _required_string(
                                 thumbnail_asset_id,
                                 "stored timeline thumbnail asset id",
+                            )
+                        )
+                    source_asset_id = page["source_asset_id"]
+                    if source_asset_id is not None:
+                        page_sources[f"{page_number}"] = (
+                            "/api/v2/assets/"
+                            + _required_string(
+                                source_asset_id,
+                                "stored timeline source asset id",
                             )
                         )
                 for payload in event_payloads:
@@ -5182,6 +5201,7 @@ class InsightDerivedRepository:
             },
             "pageCount": page_count,
             "pageThumbnails": page_thumbnails,
+            "pageSources": page_sources,
             "dependencyFingerprint": _required_sha256(
                 row["dependency_fingerprint"],
                 "stored timeline dependency fingerprint",
