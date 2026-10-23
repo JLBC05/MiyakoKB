@@ -1,6 +1,6 @@
 # MiyakoKB 验收点6 压测报告
 
-> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #54。
+> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #57。
 > 目标：生产环境大体量漫画（50+ 话）端到端压力测试与跨章节实体消歧观察。
 
 ## 1. 测试范围与环境
@@ -415,6 +415,9 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 | 52 | 低 | **角色卡导出的不是单文件，也不保证简体**：`GET .../character-skills/<id>/archive?kind=card` 原先和 `skill` 一样打 zip，导入 SillyTavern 还要解包；且卡内 `first_mes`/`mes_example`/`alternate_greetings` 直接沿用台版原画逐字摘录，混着繁体。修法：`kind=card` 改为返回**单个 JSON**（`application/json`，文件名 `<书名>-<角色>-card.json`）；渲染期对文本字段做 t2s（`opencc-python-reimplemented`，缺包则原样返回不阻断）。实测久留美卡 8259 B、`spec=chara_card_v3`、繁体残留 0。 |
 | 53 | 中 | **故事梗概的图片预览「放大」反而更糊**：预览用的是 `pageThumbnails`（缩略图，实测 223×320 / 19 KB），而原图是 1115×1600 / 400 KB——点开放大后确实变大，但看到的是缩略图重采样的产物。修法：时间线响应新增 `pageSources`（`page_assets.role="source"` 的资产 URL），前端预览优先用它，缩略图仅作内联小图。附带修 `InsightTimeline` 契约、`insightTimelineTypes.ts`、`insight.api.spec.ts` 的四处 fixture。 |
 | 54 | 低 | **知识库无法整体带走**：所有知识都只存在服务端库与产物表里，用户换机器或做备份只能逐页导出 Markdown。新增 `GET /api/v2/insight/books/<book_id>/knowledge-archive`（`src/backend_v2/insight/knowledge_export.py`）：一个 zip 内打包 `README.md` + `manifest.json`（含 stats）+ `book.json` + `entities.json`（实体/别名/归并日志）+ `timeline.json` + `overviews/*.json` + `compressed_context.json` + `pages/chapter-NNN.json`（逐页分析结果）+ `character_skills/**`。实测呪術廻戦 189 KB/24 项、久留美 1.57 MB/69 项、无分析数据的书 2.6 KB/6 项。**踩坑**：时间线不在 `analysis_artifacts` 表里，而在 `timeline_versions` + `timeline_events` + `timeline_characters` 三张表，漏读会得到 `eventCount: 0`。 |
+| 55 | 低 | **SKILL.md 的「资料规模」把出场页和有证据页混成一回事**：角色 entities 的 `pages` 是「这里有这个角色的名字出现」，而 references 里的证据页是「这一页有可引用的分析结果」，两者差几十页时读起来像自相矛盾（久留美 955 页出场 / 952 页有证据）。修法：`src/backend_v2/insight/character_skill.py` 的 `_render_files` 与 `_render_card_files` 改写成「出场：N 页，其中 M 页有分析证据 / K 个章节单元」。回归用例 `tests_backend/v2/test_character_skill.py::test_skill_scale_line_separates_appearances_from_pages_with_evidence`。 |
+| 56 | 中 | **存储契约里躺着三张从没写过的 operation 表**：`operation_credential_snapshots` / `operation_plugin_snapshots` / `operation_asset_inputs` 在 75 张表里始终 0 行，代码里只有 schema 定义引用它们。退役后存储契约升到 **3.5.4**（`src/storage_migrator/schemas/3.5.4.sql`、`src/storage_migrator/v3_5_4.py`），并同时把 `jobs.kind` 的 CHECK 收窄（去掉 `plugin_agent`）。**关键约束**：`operations` / `operation_events` / `operation_artifacts` 三张表不是死表（`jobs/repository.py`、`storage/epochs.py`、`worker/maintenance.py` 都在写），必须保留；转换脚本对退役表「有行即拒绝」而不是静默丢弃。 |
+| 57 | 低 | **cpu / gpu 两份依赖清单会悄悄漂移**：`opencc-python-reimplemented` 只加进了 `requirements-cpu.txt`，`requirements-gpu.txt` 漏掉，打包出的 gpu 版会在导出简体角色卡时静默跳过转换。已补齐并新增回归 `tests_backend/v2/test_packaging_contract.py::test_both_requirements_files_declare_the_same_packages`（逐条比较两份清单，差异只许来自注释）。 |
 
 
 
