@@ -26,6 +26,8 @@ from src.shared.user_logging import (
 
 LOG_LEVEL_ENV: Final = "SABER_V2_LOG_LEVEL"
 STREAM_FRAME_ENV: Final = "SABER_V2_STREAM_FRAMES"
+# 产品日志文件名前缀（用户排障时会直接看到这些文件，见 README 的排障指引）。
+LOG_FILE_PREFIX: Final = "miyako"
 _HANDLER_MARKER: Final = "_saber_v2_handler"
 _NOISY_LOGGERS: Final = {
     "PIL": logging.WARNING,
@@ -293,8 +295,8 @@ def configure_backend_logging(
 
     logs_root = data_root / "logs"
     logs_root.mkdir(parents=True, exist_ok=True)
-    log_path = logs_root / f"saber-{normalized_role}.log"
-    diagnostic_path = logs_root / f"saber-{normalized_role}-diagnostic.log"
+    log_path = logs_root / f"{LOG_FILE_PREFIX}-{normalized_role}.log"
+    diagnostic_path = logs_root / f"{LOG_FILE_PREFIX}-{normalized_role}-diagnostic.log"
     role_label = normalized_role.upper()
     stream_frames = os.environ.get(STREAM_FRAME_ENV) == "1"
     console_formatter = ProductLogFormatter(

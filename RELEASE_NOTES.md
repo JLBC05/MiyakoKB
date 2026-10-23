@@ -34,7 +34,7 @@
 - **修复打包缺陷：产物此前缺少存储契约 SQL**（`app.spec` 未收集 `src/storage_migrator/schemas`），打包版在全新数据目录上无法初始化存储；现已补入，并把 `LICENSE`、`THIRD_PARTY_LICENSES.md`、`RELEASE_NOTES.md` 一并打进产物。
 - 依赖清单移除 torch / torchvision / onnxruntime / 本地模型推理栈；CI 不再安装这些包，并移除已失效的模型搬运开关。
 - 打包字体目录只保留三款自由许可字体（思源黑体、NotoSans-Medium、ChisugaShotai），其余 25 个无自由再分发许可的字体不再随仓库分发；第三方许可清单见 `THIRD_PARTY_LICENSES.md`。
-- README 重写为 MiyakoKB 定位（导入 / 分析 / 实体对齐 / 图谱 / 问答 / 部署），移除作者个人赞赏码图片与翻译时代的过时截图、重复 logo；品牌名在对外可见层（启动横幅、打包产物名与入口 `MiyakoKB.exe`、发行资产名、README 与前端文案）统一为 MiyakoKB。内部标识保持不变以免牵动数据与运维接口：数据根 `data-v2/`、数据库文件 `saber.sqlite3`、`SABER_*` 环境变量、`saber_yolo` 模型键、`saber_v2.py` 入口与 `saber-*.log` 日志名。
+- README 重写为 MiyakoKB 定位（导入 / 分析 / 实体对齐 / 图谱 / 问答 / 部署），移除作者个人赞赏码图片与翻译时代的过时截图、重复 logo；品牌名在对外可见层（启动横幅、打包产物名与入口 `MiyakoKB.exe`、发行资产名、README 与前端文案）统一为 MiyakoKB。内部标识保持不变以免牵动数据与运维接口：数据根 `data-v2/`、数据库文件 `saber.sqlite3`、`SABER_*` 环境变量、`saber_yolo` 模型键与 `saber_v2.py` 入口。**例外**：产品日志名已改为 `miyako-<role>.log` / `miyako-<role>-diagnostic.log`，旧的 `saber-*.log` 不会自动重命名（历史日志可自行删除）；README 补齐「来源与致谢」（派生自 Saber-Translator，GPL-3.0）与排障指引。
 - 后端测试套件 **937 passed**；前端 `vitest` / `vue-tsc` / `eslint` / `stylelint` / UI 架构审计全部通过；打包后按 `probe_package.py` 逐角色（launcher / api / worker / storage-migrator）验证通过。
 - 前端单测清理：随翻译/OCR 域退休而失效的用例（`promptMode.property.ts`、`settings.defaults.test.ts`、`settings.current-schema.test.ts`）已删除，`router.property.ts`、`settingsStore.property.ts` 按当前路由与 store 面重写，新增 `settings.backend-loading.test.ts` 覆盖后端优先加载与事务保存；全量 vitest **88 files / 642 tests** 全绿（此前的分目录运行掩盖了这批失败）。
 

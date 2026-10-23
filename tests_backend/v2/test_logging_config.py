@@ -110,7 +110,7 @@ def test_backend_logging_keeps_product_and_diagnostics_in_separate_files(
         console = capsys.readouterr().out
         product_text = log_path.read_text(encoding="utf-8")
         diagnostic_text = log_path.with_name(
-            "saber-worker-diagnostic.log"
+            "miyako-worker-diagnostic.log"
         ).read_text(encoding="utf-8")
         assert "[工作进程]" in console
         assert "[结果]" in console

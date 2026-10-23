@@ -104,6 +104,17 @@
 - **同批删除的两个入库垃圾**：`vue-frontend/tmp_build_err.txt`、`vue-frontend/tmp_build_out.txt`（历史构建日志，无任何引用，且不符合 `.gitignore` 里 `/tmp_*` 的命名约定才漏进来）。
 - 清理前已核对：上述删除目标**全部为未跟踪/被忽略文件**（`git ls-files` 在这些目录下为 0），仓库内容未受影响。
 - 校验：README 本地引用全部存在（`LICENSE`、`version.json`、`docs/storage-migrations.md`、`docs/assets/architecture.{png,svg}`、`pic/miyako-logo.png`、`THIRD_PARTY_LICENSES.md`、`RELEASE_NOTES.md`），7 个目录锚点全部命中，代码围栏配平。
+
+### 2.12 品牌收口：日志名改 miyako-*、清死常量、补上游归属（2026-10-23）
+
+用户提问「要不要把 saber.sqlite3 这些内部 saber 都改成 miyako」，核对后的结论是**面子改、里子不改、归属必须补**：
+
+- **改：产品日志名** `saber-<role>.log` → `miyako-<role>.log`（含 `-diagnostic` 变体）。全仓只有一处定义，集中到 `src/backend_v2/logging_config.py` 的 `LOG_FILE_PREFIX: Final = "miyako"`；同步改 `tests_backend/v2/test_dispatch.py`（2 处）与 `tests_backend/v2/test_logging_config.py`（1 处）、README 排障指引 1 处。**旧 `saber-*.log` 不会自动改名**，历史日志留着不影响（日志为追加写，新名从下次启动开始）。
+- **删：6 个死常量**（`src/shared/constants.py` 的 `SABER_YOLO_MODEL_DIR` / `SABER_YOLO_MODEL_NAME` / `SABER_YOLO_CONF_THRESH` / `SABER_YOLO_IOU_THRESH` / `ENABLE_SABER_YOLO_REFINE` / `SABER_YOLO_REFINE_OVERLAP_THRESHOLD`）。删除前核对：除定义处外全仓 **0** 引用，是翻译时代 YOLO 二阶段纠错的残留。
+- **补：上游归属（GPL-3.0 §5 的显著修改声明）**：README 新增「来源与致谢」小节——派生自 [Saber-Translator](https://github.com/MashiroSaber03/Saber-Translator)（GPL-3.0），列明本项目已移除翻译域、改为漫画知识库管线，并说明与原项目功能/库结构/接口均不兼容。`THIRD_PARTY_LICENSES.md` 新增「0. 上游项目（派生来源）」表格。此前 README 里**一次都没有提到上游项目**，属于合规缺口，这次一并补上。
+- **不改（有意保留）**：`saber.sqlite3`（81 处引用 + `storage_migrator` 里 11 处文件名硬编码 + 旧数据根兼容风险）、`saber_v2.py` 入口、`SABER_*` 环境变量（`SABER_STREAM` 协议前缀、`SABER_BROWSER_EXTENSION_*` 等属于对外接口约定）、`app.extensions["saber_v2_runtime"]` 内部键、`saber_yolo` 模型键（还在 `openapi/v2.yaml` 与 `public_policy.py` 的能力清单里）。理由：这些改名收益是装饰性的，代价是数据迁移风险与部署/CI 配置失效。
+- **验证**：`pytest tests_backend/v2/test_logging_config.py -q` → 24 passed；`test_dispatch.py` → 19 passed；**后端全量 811 passed / 0 failed（752.08s）**；实跑 `configure_backend_logging(role="worker", ...)` 产出 `miyako-worker.log` + `miyako-worker-diagnostic.log`。
+- 另注：`runtime_identity.py` 里的 `name="saber-launcher-parent-monitor"` 是**线程名**（只在 py-spy/诊断栈里可见），不属于日志文件名，未动。
 ## 3. 当前状态（精确到下一步）
 - [x] 验收点 1：漫画导入（Venera + 本地 ZIP/目录）及进度条实时反馈。
 - [x] 验收点 2：书架卡片精准展示构建状态（已构建/部分构建/未构建）。

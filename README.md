@@ -223,7 +223,7 @@ python .github/scripts/probe_package.py dist/MiyakoKB/MiyakoKB.exe   # 逐角色
 
 ## ❓ 常见问题
 
-- **全新目录启动后 API 起不来？** 先看同目录的 `saber-api-diagnostic.log`；启动器只在受管模式下做存储准备，`run.py` 不做，所以开发栈不适合验证全新安装。
+- **全新目录启动后 API 起不来？** 先看同目录的 `miyako-api-diagnostic.log`（产品日志是 `miyako-api.log`，只记摘要）；启动器只在受管模式下做存储准备，`run.py` 不做，所以开发栈不适合验证全新安装。
 - **分析或衍生构建报 502 / 超时？** 多半是模型服务侧的限流或网关故障。失败项不会丢：到任务中心用「重跑失败项」补跑即可。
 - **问答按钮是灰的？** 页面提示会给出缺失项（没有分析结果 / 向量索引过期 / 全库产物过期），点提示里的按钮重建即可。
 - **问答回答里出现「语义索引读取失败」之类的告警？** 说明向量索引不可用、本次只用了关键词与实体证据；按提示重建向量索引即可恢复。
@@ -245,3 +245,13 @@ python .github/scripts/probe_package.py dist/MiyakoKB/MiyakoKB.exe   # 逐角色
 ## 📄 许可证
 
 [GPL-3.0](LICENSE)
+
+## 🙏 来源与致谢
+
+MiyakoKB **派生自 [Saber-Translator](https://github.com/MashiroSaber03/Saber-Translator)**（原作者 MashiroSaber03，GPL-3.0），最初是作为漫画翻译工具开始的。
+
+本项目在其基础上做了**大规模改造**：移除全部翻译专属的表、配置、提示词与代码目录，把管线从「翻译」改写为「漫画知识库」——逐页多模态结构化分析、跨章节实体对齐、分层聚合、概览与压缩上下文、剧情时间线、共现知识图谱、向量检索问答、角色 Skill 与世界书蒸馏；同时重做了前端（Vue 3 + 设计令牌）与发布链路。
+
+因为这些改动，本仓库与原项目在功能、数据库结构与接口上均已不兼容；**原项目的翻译功能在本项目中不存在**。原始版权与 GPL-3.0 许可保持不变，上游的历史贡献应归其作者所有。
+
+如果你要的是「把漫画翻成中文」，请使用上游的 [Saber-Translator](https://github.com/MashiroSaber03/Saber-Translator)。

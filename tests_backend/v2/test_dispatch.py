@@ -92,8 +92,8 @@ def test_api_port_conflict_exits_and_keeps_product_and_diagnostic_logs(tmp_path,
     assert result.returncode == API_BIND_FAILED_EXIT_CODE
     assert "无法监听" in result.stdout
     assert "API 服务已就绪" not in result.stdout
-    assert "无法监听" in (root / "logs/saber-api.log").read_text("utf-8")
-    diagnostics = (root / "logs/saber-api-diagnostic.log").read_text("utf-8")
+    assert "无法监听" in (root / "logs/miyako-api.log").read_text("utf-8")
+    diagnostics = (root / "logs/miyako-api-diagnostic.log").read_text("utf-8")
     assert "Traceback (most recent call last)" in diagnostics
     assert "OSError" in diagnostics
 

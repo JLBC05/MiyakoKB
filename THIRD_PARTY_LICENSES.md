@@ -4,6 +4,14 @@
 
 > 说明：本文件是发布合规清单，不改变任何第三方组件的许可条件。若某组件同时提供多种许可（双许可），本仓库按其开源许可使用。
 
+## 0. 上游项目（派生来源）
+
+| 项目 | 地址 | 许可 | 关系 |
+| --- | --- | --- | --- |
+| Saber-Translator | https://github.com/MashiroSaber03/Saber-Translator | GNU GPL-3.0 | 本仓库派生自该项目并做了大规模改造；原始版权归其作者所有，本仓库整体继续以 GPL-3.0 发布 |
+
+改动范围见 `README.md` 的「来源与致谢」与 `docs/legacy-cleanup-report.md`。
+
 ## 1. 随包分发的字体（`src/backend_v2/resources/fonts/`）
 
 | 文件 | 上游项目 | 许可 |
