@@ -298,6 +298,16 @@
   - *理由*：运维面的三类错误——**看不见状态**（密钥是否就绪、哪条通道没配）、**找不到位置**（422 只说保存失败）、**改坏了回不去**（没有分域恢复/迁移手段）——都不是靠加开关能解决的，必须让「当前状态」和「出错位置」成为页面结构的一部分。
   - *验证*：后端全量 **811 passed**（新增视觉探测与能力门禁用例后）；前端每轮 `vitest`（89→93 files，644→664 tests）、`vue-tsc` 0、`eslint` 0 errors、`stylelint` 0、`check-ui-architecture.mjs` 与 `--audit` 均 0、`vite build` 成功；实栈复核 8 条凭据 `plaintextKeys=0 / hasKeyTrue=8`、`GET /` 引用新 bundle、导入事务 `manga_import` revision 2→3 成功。
   - *未做（建议）*：后端 `APP_SETTING_DOMAINS` 仍含 `translation`、库里也仍有该行（前端已不读），随 3.5.4 悬空表清理一起退；导入导出暂不含提示词与书籍级设置；每域恢复默认没有二次确认。
+- **决策 26：知识要能「带走」，也要能「喂给别人」——整库 zip 导出 + 角色卡单文件化**（2026-10-23，用户 `m24465` 四项）
+  - *背景*：四项缺陷同源——**生成出来的知识只对 MiyakoKB 自己的界面友好**：整库知识散在库表与产物表里，备份/换机只能逐页导出 Markdown；角色卡导出是 zip（导入 SillyTavern 还得解包），且卡内文本沿用台版原画逐字摘录混着繁体；故事梗概点开预览拿的是 223×320 缩略图，放大反而更糊；连接测试把能看图的 DeepSeek 判成不支持视觉（详见压测报告发现 #51–#54）。
+  - *做法*：
+    - **整库导出**：`src/backend_v2/insight/knowledge_export.py` 的 `build_knowledge_archive(engine, book_id)` 同步纯读取（不走 job 队列），把 `README.md` + `manifest.json`（含 `stats`）+ `book.json` + `entities.json` + `timeline.json` + `overviews/*.json` + `compressed_context.json` + `pages/chapter-NNN.json` + `character_skills/**` 打成一个 zip；路由 `GET /insight/books/<book_id>/knowledge-archive`，文件名 `<书名>-知识库-YYYYMMDD.zip`。前端入口在故事梗概面板「📥 导出 Markdown」旁边（「🗂️ 导出知识库」）。
+    - **角色卡单文件**：`kind == CHARACTER_CARD_KIND` 时 archive 端点直接返回 `application/json`（`build_card_document()` 取 V3 文件，缺失时用 V2 拼 V3 外壳），文件名 `<书名>-<角色>-card.json`；`_simplify_card_data()` 在渲染期对 `first_mes`/`mes_example`/`alternate_greetings`/`creator_notes`/`description`/`personality`/`scenario`/`system_prompt`/`post_history_instructions` 与 `tags` 列表做 t2s（`opencc` 惰性加载 + 缓存，缺包则原样返回不阻断）。`skill`/`lorebook` 仍走 zip。
+    - **预览用原图**：时间线响应加 `pageSources`（`page_assets.role="source"`），前端 `getPreviewSource()` 优先它，`pageThumbnails` 只给内联小图。
+    - **视觉探测按真实能力**：`_test_vision` 不再依赖 `UnifiedVisionRequest` 的默认 `capability`（曾是 `vision_ocr`），改为按 `VLM_CAPABILITY` 解析与校验。
+  - *理由*：蒸馏产物的形态应当由**下游消费方**决定（决策 23 的延伸）——给聊天前端的就是单文件卡，给备份/迁移的就是一个 zip，给人看的就是全分辨率原图；把「形如翻译器」的历史遗留（zip 里塞一堆文件）当成默认反而是负担。
+  - *验证*：后端全量 **815 passed**（新增 `tests_backend/v2/test_knowledge_export.py` 4 条）；前端 `vitest` 93 files / **665 tests**、`vue-tsc` 0、`eslint` 0 errors、`stylelint` 0、`lint:ui` 与 `--audit` 均 0；真实数据实测——久留美整库 1,571,552 B / 69 项（1507 页、1457 已析、3254 实体、10 事件）、呪術廻戦 189,579 B / 24 项、空书 2,639 B；久留美卡 `FX战士久留美-久留美-card.json` 8259 B、`spec=chara_card_v3`、繁体残留 0；时间线 `pageSources` 62 条且原图 1115×1600 vs 缩略图 223×320。
+  - *未做（建议）*：整库导出暂不含原始页面图片与 Chroma 向量库（体积原因）；导出是同步请求，超大书（3000+ 页）会让 HTTP 连接挂得比较久，值得后续改成 job + 下载凭据。
 
 ## 5. 踩过的坑 / 阻塞
 - **坑 1：Windows SQLite 嵌套锁（Database is locked）**
@@ -478,6 +488,9 @@
   - *解法*：`$env:PATH="C:\Users\Administrator\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin;$env:PATH"`，用绝对路径的 node 跑 `npm-cli.js`，并加 `--registry=https://registry.npmmirror.com --fetch-timeout=180000 --fetch-retries=5`。
 
 - **坑 39：G6 力导布局有三个不写在文档里的坑（关系网络节点重叠 + 持续抽搐）**（2026-10-22）：① 布局动画由**图级** `animation` 决定——`GraphLayout.graphLayout()` 读的是 `options.animation`，`layout.animate` 完全无效；默认 `animation: true` 会以 `setInterval(…, 0)` 连跑最多 300 轮，实测画布出现后节点连续移动约 **30 秒**才停，看起来就是「一直抽搐」。② 碰撞半径默认取固定 `nodeSize: 30`，而本项目节点直径是 18~52，大节点必然盖住邻居；要让碰撞按真实尺寸工作，得给 `nodeSize` 传函数或让数据带 `size`。③ `nodeStrength` 的语义是**相连节点之间**的力（正=引力），不是全局斥力；把它写成负数等于让相连节点互相推开，再被 gravity 压回，实测重叠对从 6 涨到 313。全局斥力应该调 `factor` / `coulombDisScale`。另：关闭动画后 G6 走「同步跑固定轮数」分支，轮数来自 `layout.iterations`（默认 300，边密集时不够）。最终可用配置：图级 `animation: false` + 布局 `nodeSize` 按真实直径、`nodeSpacing: 6`、`getMass: () => 1`、`collideStrength: 1`、`factor: 3`、`iterations: 1500`、`animate: false`，其余力沿用 @antv/layout 默认值（默认 `linkDistance = 1 + r(源) + r(目标)` 本身尺寸感知）。验证方法：无头浏览器里逐帧读节点层位图算质心（40 秒 80 帧移动 0 次），并按真实坐标与直径算重叠对（60 节点 0 对）。
+- **坑 40：时间线（story summary / events / characters）不在 `analysis_artifacts` 里**（2026-10-23，决策 26）：做整库导出时按「artifact kind 枚举」去收内容，`timeline` 一路收成空——因为时间线是三张表：`timeline_versions`（`content_json`/`mode`/`status`/`is_active`/`dependency_fingerprint`）+ `timeline_events`（`ordinal` + `payload_json`）+ `timeline_characters`（`name` + `payload_json`），只在 `analysis_artifacts` 里留了个 `entity_alignment`。正确取法见 `src/backend_v2/insight/knowledge_export.py::_active_timeline`。教训：**导出器的「数据源清单」要照 schema 逐表核一遍，别假设一切都走 artifacts 表**。
+
+- **坑 41：pytest 夹具里的 NOT NULL / CHECK 约束会让「只想插一行」变成连环报错**（2026-10-23）：写 `tests_backend/v2/test_knowledge_export.py` 时依次撞了四处——`chapters.settings_memory_json` NOT NULL 且 `settings_memory_revision >= 1`（传 0 直接 CHECK 失败）；`pages.document_revision >= 1`、`rendered_revision` 可空但非空时 `>= 1`、`render_status IN ('not_rendered','ready',…)`、`detection_state IN ('unprocessed','processed')`、`page_style_defaults_json`/`warnings_json` NOT NULL；`analysis_runs` 需要 `owner_user_id`/`missing_page_ids_json`/`target_count`/`success_count`/`failed_count`；`analysis_page_results.source_asset_id` NOT NULL，所以**必须先在 `assets` 插一行**（`id`/`owner_user_id`/`relative_path`/`mime_type`/`checksum`/`byte_size`/`integrity_status='ok'`，且 `width`/`height` 要么都空要么都 `>= 1`）。教训：AGENTS.md 要求「从 schema import 真实表对象」不只是为了不写错列名——**写夹具前要连约束一起读**，否则每跑一次只暴露一条。
 ## 6. 新会话先读
 
 1. `AGENTS.md`：核心数据库脚本防手写约束与行为规范。
