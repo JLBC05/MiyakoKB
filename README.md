@@ -133,7 +133,7 @@ data-v2/
 
 ### 1. 获取程序
 
-- **发行包**：到 [Releases](https://github.com/JLBC05/MiyakoKB/releases) 下载 `MiyakoKB-<版本>-cpu.7z.001`（或 `-gpu`）及其后续分卷，全部放在同一目录后用 [7-Zip](https://www.7-zip.org/) 或 [Bandizip](https://www.bandisoft.com/bandizip/) 解压 `.7z.001`（Windows 内置解压与部分工具无法正确识别分卷 7z）。
+- **发行包**：到 [Releases](https://github.com/JLBC05/MiyakoKB/releases) 下载 `MiyakoKB-<版本>.7z.001` 及其后续分卷（只有一个发行包，不再区分 CPU / GPU），全部放在同一目录后用 [7-Zip](https://www.7-zip.org/) 或 [Bandizip](https://www.bandisoft.com/bandizip/) 解压 `.7z.001`（Windows 内置解压与部分工具无法正确识别分卷 7z）。
 - **源码运行**：见下方[源码开发](#-源码开发)。
 - 发行包**不含**本地模型运行时：视觉 / 语言 / 嵌入 / 重排全部通过 API 接入，首次启动后在「设置」中填写。
 
@@ -171,7 +171,7 @@ data-v2/
 # 后端
 python -m venv .venv
 .venv\Scripts\activate            # Windows
-pip install -r requirements-cpu.txt
+pip install -r requirements.txt
 
 # 前端
 cd vue-frontend
@@ -219,7 +219,7 @@ python -m PyInstaller app.spec --clean     # 产物在 dist/MiyakoKB/
 python .github/scripts/probe_package.py dist/MiyakoKB/MiyakoKB.exe   # 逐角色启动探测
 ```
 
-推送 `v*` tag 或手动触发 `.github/workflows/release.yml`：工作流会跑后端测试 + 前端门禁（含 `check:api`）+ 打包探测，再产出 CPU / GPU 两套 7z 分卷资产。`version.json` 的 `version` 必须与 tag 一致。
+推送 `v*` tag 或手动触发 `.github/workflows/release.yml`：工作流会跑后端测试 + 前端门禁（含 `check:api`）+ 打包探测，再产出单一发行包的 7z 分卷资产（`MiyakoKB-<version>.7z*`）。`version.json` 的 `version` 必须与 tag 一致。
 
 ## ❓ 常见问题
 

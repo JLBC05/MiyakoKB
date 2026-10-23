@@ -134,7 +134,7 @@ def test_direct_runtime_dependencies_are_declared() -> None:
         "packaging": "packaging",
         "reportlab": "reportlab",
     }
-    for filename in ("requirements-cpu.txt", "requirements-gpu.txt"):
+    for filename in ("requirements.txt",):
         requirements = set()
         for line in (PROJECT_ROOT / filename).read_text(encoding="utf-8").splitlines():
             entry = line.split("#", 1)[0].strip()
@@ -146,20 +146,13 @@ def test_direct_runtime_dependencies_are_declared() -> None:
         assert importlib.util.find_spec(import_name) is not None
 
 
-def test_both_requirements_files_declare_the_same_packages() -> None:
-    """cpu 与 gpu 两份清单一字不差；差异只许来自注释行。"""
-    requirement_lines = {}
-    for filename in ("requirements-cpu.txt", "requirements-gpu.txt"):
-        lines = [
-            line.split("#", 1)[0].strip()
-            for line in (PROJECT_ROOT / filename).read_text(encoding="utf-8").splitlines()
-        ]
-        requirement_lines[filename] = [line for line in lines if line]
+def test_release_ships_one_package_from_one_dependency_manifest() -> None:
+    """发行包只有一种形态：一份依赖清单、一次构建、一个不带变体后缀的包名。"""
+    assert not (PROJECT_ROOT / "requirements-cpu.txt").exists()
+    assert not (PROJECT_ROOT / "requirements-gpu.txt").exists()
 
-    cpu = requirement_lines["requirements-cpu.txt"]
-    gpu = requirement_lines["requirements-gpu.txt"]
-
-    assert cpu == gpu, (
-        "requirements-cpu.txt 与 requirements-gpu.txt 的依赖必须逐条一致，"
-        f"仅在 cpu 中有：{sorted(set(cpu) - set(gpu))}，仅 gpu 中有：{sorted(set(gpu) - set(cpu))}"
-    )
+    workflow = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "python -m pip install -r requirements.txt" in workflow
+    assert "matrix" not in workflow
+    assert '"MiyakoKB-$version"' in workflow
+    assert "MiyakoKB-${{ needs.prepare.outputs.version }}.7z*" in workflow

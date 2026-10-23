@@ -32,7 +32,7 @@ OFL-1.1 允许随软件一同再分发，但要求：
 
 字体查找顺序见 `src/backend_v2/content/rendering.py` 与 `src/backend_v2/storage/font_files.py`：默认字体为思源黑体，缺失时回退到系统字体（`msyh`/`msgothic`/`Arial Unicode MS` 等由**使用者本机**提供）。
 
-## 2. Python 运行时依赖（`requirements-cpu.txt` / `requirements-gpu.txt`）
+## 2. Python 运行时依赖（`requirements.txt`）
 
 两份清单内容相同（打包变体共用同一依赖集）。
 

@@ -1,9 +1,8 @@
 # Saber-Translator / MiyakoKB runtime dependencies
-# Install: python -m pip install -r requirements-<cpu|gpu>.txt
+# Install: python -m pip install -r requirements.txt
 #
-# The CPU and GPU dependency sets are IDENTICAL: this file and its counterpart
-# (requirements-cpu.txt / requirements-gpu.txt) are byte-identical, because the
-# knowledge-base runtime no longer imports any accelerator-specific package.
+# There is a single dependency set: the knowledge-base runtime does not import any
+# accelerator-specific package, so the former cpu / gpu split carried no information.
 # The translation-era stack (torch, torchvision, manga-ocr, rapidocr, onnxruntime,
 # transformers, ultralytics, litelama, kornia, einops, seaborn, sentencepiece,
 # dill, shapely, pyclipper, pandas, networkx, packaging, requests) is not imported
