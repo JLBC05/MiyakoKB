@@ -1241,6 +1241,7 @@ def _render_card_files(
     character: Mapping[str, Any],
     facts: _Facts,
     used_vision: Sequence[Mapping[str, Any]],
+    evidence_pages: int,
 ) -> dict[str, str]:
     # 卡片里的台词来自台版原画，先统一转简体再落文件。
     data = _simplify_card_data(data)
@@ -1253,7 +1254,8 @@ def _render_card_files(
         f"# {name} · 角色卡",
         "",
         f"- 规格：SillyTavern Character Card V3（同目录另有 V2 版本）",
-        f"- 出场：{len(character.get('pages') or [])} 页 / {len(facts.chapter_distribution)} 个章节单元",
+        f"- 出场：{len(character.get('pages') or [])} 页，其中 {evidence_pages} 页有分析证据"
+        f" / {len(facts.chapter_distribution)} 个章节单元",
         f"- 原画观察：{len(used_vision)} 页",
         "",
         "## 描述",
@@ -1328,6 +1330,7 @@ def _build_card_payload(
         character=character,
         facts=facts,
         used_vision=observations,
+        evidence_pages=len(evidence),
     )
     generated = utcnow()
     pages = len(character.get("pages") or [])
@@ -1588,7 +1591,8 @@ def _render_files(
             "",
             "## 资料规模",
             "",
-            f"- 出场：{len(character.get('pages') or [])} 页 / {len(facts.chapter_distribution)} 个章节单元",
+            f"- 出场：{len(character.get('pages') or [])} 页，其中 {len(evidence)} 页有分析证据"
+            f" / {len(facts.chapter_distribution)} 个章节单元",
             f"- 事件：{len(facts.events)} 条（high {facts.importance.get('high', 0)} 条）",
             f"- 画面观察：{len(used_vision)} 页原画（模型：{vlm_model or 'unknown'}）",
             "",

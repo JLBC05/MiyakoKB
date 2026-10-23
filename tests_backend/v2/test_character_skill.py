@@ -17,6 +17,9 @@ from sqlalchemy import insert, update
 from src.backend_v2.insight.character_skill import (
     CHARACTER_SKILL_KIND,
     CharacterSkillService,
+    PageEvidence,
+    _Facts,
+    _render_files,
     build_skill_archive,
 )
 from src.backend_v2.insight.repository import InsightNotFound
@@ -318,6 +321,55 @@ def _insert_generated_skill(platform, *, files: dict[str, str]) -> None:
             ),
             revision=1,
         )
+
+
+def test_skill_scale_line_separates_appearances_from_pages_with_evidence() -> None:
+    """出场页来自实体知识网络，证据页来自已发布的页面分析；两者数量不同时必须分开写。"""
+
+    entity = {
+        "entity_id": "character-test",
+        "canonical_name": "虎杖悠仁",
+        "category": "characters",
+        "aliases": ["虎杖"],
+        "pages": [3, 4, 9, 12],
+    }
+    evidence = [
+        PageEvidence(
+            global_page=global_page,
+            chapter_title="第1话",
+            chapter_ordinal=1,
+            page_ordinal=global_page,
+            page_id=f"page-{global_page}",
+            page_summary="",
+            key_events=[],
+            characters=["虎杖悠仁"],
+            other_entities={},
+            asset_id=f"asset-{global_page}",
+            asset_path=Path("unused"),
+        )
+        for global_page in (3, 9, 12)
+    ]
+    facts = _Facts(
+        chapter_distribution={"第1话": 3},
+        co_occurrence=[],
+        concepts=[],
+        events=[],
+        solo_pages=[],
+        importance={},
+    )
+
+    files = _render_files(
+        book_title="测试漫画",
+        character=entity,
+        facts=facts,
+        evidence=evidence,
+        content={"identity": {"full_name": "虎杖悠仁"}, "one_liner": "一句话"},
+        used_vision=[],
+        vlm_model="",
+    )
+
+    assert "- 出场：4 页，其中 3 页有分析证据 / 1 个章节单元" in files["SKILL.md"]
+    assert "- 出场：4 页 / " not in files["SKILL.md"]
 
 
 def test_character_skill_archive_zips_every_generated_file(skill_platform) -> None:
