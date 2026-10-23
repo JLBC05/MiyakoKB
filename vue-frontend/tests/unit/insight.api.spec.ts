@@ -574,6 +574,7 @@ describe('insight v2 api', () => {
       ],
       stats: { total_events: 1, total_pages: 2, total_characters: 1 },
       page_thumbnails: { 2: '/api/v2/assets/thumb-2' },
+      page_sources: { 2: '/api/v2/assets/src-2' },
     })
   })
 

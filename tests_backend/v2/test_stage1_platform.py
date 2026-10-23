@@ -2587,6 +2587,7 @@ def test_vision_connection_test_asks_the_provider_instead_of_a_stale_capability_
     def complete_vision(request):
         captured["model"] = request.model
         captured["base_url"] = request.base_url
+        captured["capability"] = request.capability
         return "Saber OCR test 123"
 
     monkeypatch.setattr(diagnostics.chat, "complete_vision", complete_vision)
@@ -2604,7 +2605,12 @@ def test_vision_connection_test_asks_the_provider_instead_of_a_stale_capability_
     )
 
     assert result == {"success": True, "message": "连接成功：Saber OCR test 123"}
-    assert captured == {"model": "deepseek-flash", "base_url": "https://api.deepseek.com/v1"}
+    assert captured == {
+        "model": "deepseek-flash",
+        "base_url": "https://api.deepseek.com/v1",
+        # 关键：不能用 UnifiedVisionRequest 的默认 capability（vision_ocr）。
+        "capability": "vlm",
+    }
 
     with pytest.raises(ValueError, match="does not support vision"):
         diagnostics.connection_test(
