@@ -1787,12 +1787,12 @@ def test_control_race_converges_without_a_transition_state(
         display_name="checkpoint logging",
         specs=[
             JobSpec(
-                kind="plugin_agent",
+                kind="export",
                 config={"executionMode": execution_mode},
                 items=(
                     JobItemSpec(
                         page_id=None,
-                        step_kinds=("plugin_agent_execute",),
+                        step_kinds=("export_execute",),
                     ),
                 ),
             )
@@ -1816,7 +1816,7 @@ def test_control_race_converges_without_a_transition_state(
     loop = JobWorkerLoop(
         repository,
         worker_epoch_id=worker_epoch_id,
-        handlers={"plugin_agent_execute": handler},
+        handlers={"export_execute": handler},
         idle_poll_seconds=0.01,
     )
     with caplog.at_level(logging.INFO, logger="saber.user"):

@@ -15,11 +15,11 @@ from src.backend_v2.storage.defaults import (
     DEFAULT_WEB_IMPORT_SETTINGS,
 )
 from src.shared.ai_providers import (
+    PLUGIN_AGENT_CAPABILITY,
     CHAT_CAPABILITY,
     EMBEDDING_CAPABILITY,
     HQ_TRANSLATION_CAPABILITY,
     IMAGE_GEN_CAPABILITY,
-    PLUGIN_AGENT_CAPABILITY,
     RERANK_CAPABILITY,
     TRANSLATION_CAPABILITY,
     VISION_OCR_CAPABILITY,
@@ -40,7 +40,6 @@ APP_SETTING_DOMAINS = frozenset({
 PROVIDER_CAPABILITIES = {
     "translation": TRANSLATION_CAPABILITY,
     "hq": HQ_TRANSLATION_CAPABILITY,
-    "plugin_agent": PLUGIN_AGENT_CAPABILITY,
     "browser_dom_agent": PLUGIN_AGENT_CAPABILITY,
     "ai_vision_ocr": VISION_OCR_CAPABILITY,
     "web_import_agent": WEB_IMPORT_AGENT_CAPABILITY,
@@ -95,9 +94,6 @@ _PROVIDER_PAYLOAD_FIELDS_BY_DOMAIN = {
     "hq": frozenset(
         {"modelName", "customBaseUrl", "openaiOptions", "batchSize", "prompt"}
     ),
-    "plugin_agent": frozenset(
-        {"modelName", "customBaseUrl", "openaiOptions"}
-    ),
     "browser_dom_agent": frozenset(
         {"modelName", "customBaseUrl", "openaiOptions"}
     ),
@@ -118,7 +114,6 @@ _PROOFREADING_PROVIDER_PAYLOAD_FIELDS = frozenset(
 TRANSLATION_PROVIDER_SECTIONS = {
     "translation": "translation",
     "hqTranslation": "hq",
-    "pluginAgent": "plugin_agent",
     "aiVisionOcr": "ai_vision_ocr",
     "baiduOcr": "ocr",
 }

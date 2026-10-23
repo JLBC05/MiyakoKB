@@ -18,13 +18,13 @@ from src.backend_v2.paths import project_root
 from src.backend_v2.redaction import redact_sensitive_text
 from src.backend_v2.storage.platform_repositories import SettingsRepository
 from src.shared.ai_providers import (
+    PLUGIN_AGENT_CAPABILITY,
     CHAT_CAPABILITY,
     CONNECTION_TEST_CAPABILITY,
     EMBEDDING_CAPABILITY,
     HQ_TRANSLATION_CAPABILITY,
     IMAGE_GEN_CAPABILITY,
     MODEL_FETCH_CAPABILITY,
-    PLUGIN_AGENT_CAPABILITY,
     RERANK_CAPABILITY,
     TRANSLATION_CAPABILITY,
     VLM_CAPABILITY,
@@ -715,7 +715,6 @@ class ProviderDiagnostics:
             return HQ_TRANSLATION_CAPABILITY
         capability = {
             "ai_vision_ocr": VISION_OCR_CAPABILITY,
-            "plugin_agent": PLUGIN_AGENT_CAPABILITY,
             "browser_dom_agent": PLUGIN_AGENT_CAPABILITY,
             "web_import_agent": WEB_IMPORT_AGENT_CAPABILITY,
             "insight_vlm": VLM_CAPABILITY,

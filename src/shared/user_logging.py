@@ -45,7 +45,6 @@ JOB_LABELS: Final = {
     "continuation": "漫画续写",
     # Retained durable kind (existing databases still carry the CHECK value),
     # so it keeps a product label even though no surface submits it anymore.
-    "plugin_agent": "插件任务",
 }
 
 STEP_LABELS: Final = {
