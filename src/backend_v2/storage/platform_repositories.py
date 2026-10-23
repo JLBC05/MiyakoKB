@@ -14,7 +14,7 @@ import time
 import uuid
 from typing import Any, cast
 
-from sqlalchemy import Engine, and_, delete, func, insert, or_, select, update
+from sqlalchemy import Engine, and_, delete, func, insert, or_, select, true, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
@@ -536,11 +536,11 @@ class SettingsRepository:
     ) -> dict[str, object]:
         setting_condition = (
             app_settings.c.domain.in_([storage_domain(d) for d in domains])
-            if domains else app_settings.c.domain.not_like('browser_extension:%')
+            if domains else true()
         )
         provider_condition = (
             provider_settings.c.domain.in_([storage_domain(d) for d in domains])
-            if domains else provider_settings.c.domain.not_like('browser_extension:%')
+            if domains else true()
         )
         with read_transaction(self.engine) as connection:
             if book_id and connection.execute(
@@ -564,8 +564,7 @@ class SettingsRepository:
                 connection.execute(
                     select(provider_settings)
                     .where(
-                        provider_condition if not {"translation", "web_import"}.intersection(row["domain"] for row in setting_rows)
-                        else provider_settings.c.domain.not_like('browser_extension:%'),
+                        provider_condition,
                         provider_settings.c.owner_user_id == effective_owner_id(),
                     )
                     .order_by(
@@ -1013,7 +1012,6 @@ class SettingsRepository:
                 credential_versions.c.credential_id == credentials.c.id,
             )
             .where(credentials.c.owner_user_id == effective_owner_id(),
-                   credentials.c.domain.not_like('browser_extension:%'),
                    or_(
                        credential_versions.c.id == credential_current_versions.c.credential_version_id,
                        credential_versions.c.id.in_(include_versions),
@@ -1227,7 +1225,6 @@ class SettingsRepository:
         removed = connection.execute(
             delete(credentials).where(
                 credentials.c.id == credential_id,
-                credentials.c.domain.not_like('browser_extension:%'),
                 credentials.c.owner_user_id == effective_owner_id(),
             )
         )
