@@ -46,8 +46,6 @@ class ApiSettings:
     port: int = 5000
     profile: RuntimeProfile = resolve_runtime_profile("local")
     public_host: str | None = None
-    browser_extension_enabled: bool = False
-    browser_extension_token: str = field(default="", repr=False)
 
 
 @dataclass(slots=True)

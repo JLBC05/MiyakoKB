@@ -18,7 +18,6 @@ from src.backend_v2.paths import project_root
 from src.backend_v2.redaction import redact_sensitive_text
 from src.backend_v2.storage.platform_repositories import SettingsRepository
 from src.shared.ai_providers import (
-    PLUGIN_AGENT_CAPABILITY,
     CHAT_CAPABILITY,
     CONNECTION_TEST_CAPABILITY,
     EMBEDDING_CAPABILITY,
@@ -715,8 +714,7 @@ class ProviderDiagnostics:
             return HQ_TRANSLATION_CAPABILITY
         capability = {
             "ai_vision_ocr": VISION_OCR_CAPABILITY,
-            "browser_dom_agent": PLUGIN_AGENT_CAPABILITY,
-            "web_import_agent": WEB_IMPORT_AGENT_CAPABILITY,
+                    "web_import_agent": WEB_IMPORT_AGENT_CAPABILITY,
             "insight_vlm": VLM_CAPABILITY,
             "insight_chat": CHAT_CAPABILITY,
             "insight_embedding": EMBEDDING_CAPABILITY,

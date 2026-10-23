@@ -29,7 +29,6 @@ from src.backend_v2.storage.database import (
     immediate_transaction,
 )
 from src.backend_v2.storage.defaults import (
-    DEFAULT_BROWSER_DOM_AGENT,
     DEFAULT_INSIGHT_SETTINGS,
     DEFAULT_WEB_IMPORT_SETTINGS,
 )
@@ -137,7 +136,6 @@ def platform(tmp_path: Path):
 
 
 @pytest.mark.parametrize("domain,editable,section,provider_domain", [
-    ("browser_dom_agent", DEFAULT_BROWSER_DOM_AGENT, None, "browser_dom_agent"),
     ("web_import", DEFAULT_WEB_IMPORT_SETTINGS, "agent", "web_import_agent"),
 ])
 def test_provider_parameters_are_read_only_from_the_provider_source(
@@ -2622,28 +2620,6 @@ def test_vision_connection_test_asks_the_provider_instead_of_a_stale_capability_
                 "secret": {"api_key": "fixture-key"},
             },
         )
-
-
-def test_browser_dom_agent_model_catalog(platform, monkeypatch: pytest.MonkeyPatch) -> None:
-    _data_root, engine = platform
-    diagnostics = ProviderDiagnostics(SettingsRepository(engine))
-    captured = []
-
-    def list_models(request):
-        captured.append(request)
-        return [{"id": "browser-vision", "name": "browser-vision"}]
-
-    monkeypatch.setattr(diagnostics.chat, "list_models", list_models)
-    result = diagnostics.model_catalog({
-        "domain": "browser_dom_agent",
-        "provider": "custom",
-        "baseUrl": "http://localhost:8000/v1",
-        "secret": {"api_key": "fixture-key"},
-    })
-    assert result == {"models": [{"id": "browser-vision", "name": "browser-vision"}]}
-    assert len(captured) == 1
-    assert captured[0].api_key == "fixture-key"
-    assert captured[0].base_url == "http://localhost:8000/v1"
 
 
 def test_model_catalog_reports_provider_transport_failure(

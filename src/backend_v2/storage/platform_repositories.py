@@ -38,7 +38,7 @@ from src.backend_v2.settings.validation import (
 )
 from src.backend_v2.storage.defaults import FACTORY_PROMPTS, DEFAULT_FONT_ID
 from src.backend_v2.storage.font_files import DISPLAY_NAMES, FONT_NAMESPACE, font_path, scan_font_files
-from src.backend_v2.settings.scope import SettingsScope
+from src.backend_v2.settings.scope import public_domain, storage_domain
 from src.backend_v2.storage.schema import (
     PROMPT_TYPES,
     app_settings,
@@ -255,9 +255,8 @@ def _update_prompt(
 
 
 class SettingsRepository:
-    def __init__(self, engine: Engine, *, browser_extension: bool = False) -> None:
+    def __init__(self, engine: Engine) -> None:
         self.engine = engine
-        self.scope = SettingsScope(browser_extension)
 
     def save_transaction(
         self,
@@ -290,7 +289,7 @@ class SettingsRepository:
         prompt_edits: tuple[PromptMutation, ...] = (),
     ) -> tuple[dict[str, list[dict[str, object]]], bool]:
         now = _utcnow()
-        scope = self.scope.prefix + "settings-transaction"
+        scope = "settings-transaction"
         with immediate_transaction(self.engine) as connection:
             request_hash, replay = _idempotency_replay(
                 connection,
@@ -331,7 +330,7 @@ class SettingsRepository:
         with immediate_transaction(self.engine) as connection:
             _request_hash, replay = _idempotency_replay(
                 connection,
-                scope=self.scope.prefix + scope,
+                scope=scope,
                 key=idempotency_key,
                 request_body=request_body,
                 now=_utcnow(),
@@ -351,7 +350,7 @@ class SettingsRepository:
         with immediate_transaction(self.engine) as connection:
             request_hash, replay = _idempotency_replay(
                 connection,
-                scope=self.scope.prefix + scope,
+                scope=scope,
                 key=idempotency_key,
                 request_body=request_body,
                 now=now,
@@ -360,7 +359,7 @@ class SettingsRepository:
                 return replay, True
             _record_idempotency(
                 connection,
-                scope=self.scope.prefix + scope,
+                scope=scope,
                 key=idempotency_key,
                 request_hash=request_hash,
                 response=response,
@@ -380,8 +379,6 @@ class SettingsRepository:
         credentials_edits: tuple[CredentialEdit, ...],
         prompt_edits: tuple[PromptMutation, ...],
     ) -> dict[str, list[dict[str, object]]]:
-        if self.scope.browser_extension and (book_settings_edits or prompt_edits):
-            raise ValueError("插件配置不支持修改书籍设置或公共提示词库")
         self._validate_transaction_keys(
             settings=settings,
             book_settings_edits=book_settings_edits,
@@ -396,7 +393,7 @@ class SettingsRepository:
             (mutation for mutation in settings if mutation.domain == "translation"),
             None,
         )
-        if translation_mutation is not None and not self.scope.browser_extension:
+        if translation_mutation is not None:
             self._prune_proofreading_provider_settings(
                 connection,
                 translation_payload=translation_mutation.payload,
@@ -537,15 +534,13 @@ class SettingsRepository:
         domains: tuple[str, ...] = (),
         book_id: str | None = None,
     ) -> dict[str, object]:
-        if self.scope.browser_extension and book_id:
-            raise ValueError("插件配置不包含书籍设置")
         setting_condition = (
-            app_settings.c.domain.in_([self.scope.storage_domain(d) for d in domains])
-            if domains else self.scope.condition(app_settings.c.domain)
+            app_settings.c.domain.in_([storage_domain(d) for d in domains])
+            if domains else app_settings.c.domain.not_like('browser_extension:%')
         )
         provider_condition = (
-            provider_settings.c.domain.in_([self.scope.storage_domain(d) for d in domains])
-            if domains else self.scope.condition(provider_settings.c.domain)
+            provider_settings.c.domain.in_([storage_domain(d) for d in domains])
+            if domains else provider_settings.c.domain.not_like('browser_extension:%')
         )
         with read_transaction(self.engine) as connection:
             if book_id and connection.execute(
@@ -570,7 +565,7 @@ class SettingsRepository:
                     select(provider_settings)
                     .where(
                         provider_condition if not {"translation", "web_import"}.intersection(row["domain"] for row in setting_rows)
-                        else self.scope.condition(provider_settings.c.domain),
+                        else provider_settings.c.domain.not_like('browser_extension:%'),
                         provider_settings.c.owner_user_id == effective_owner_id(),
                     )
                     .order_by(
@@ -608,7 +603,7 @@ class SettingsRepository:
         document = {
             "settings": [
                 {
-                    "domain": self.scope.public_domain(row["domain"]),
+                    "domain": public_domain(row["domain"]),
                     "revision": row["revision"],
                     "payload": _require_object(
                         json.loads(row["payload_json"]),
@@ -620,10 +615,10 @@ class SettingsRepository:
             "bookSettings": [
                 {
                     "bookId": row["book_id"],
-                    "domain": self.scope.public_domain(row["domain"]),
+                    "domain": public_domain(row["domain"]),
                     "revision": row["revision"],
                     "payload": validate_book_setting_payload(
-                        self.scope.public_domain(str(row["domain"])),
+                        public_domain(str(row["domain"])),
                         _require_object(
                             json.loads(row["payload_json"]),
                             f"book {row['domain']} setting",
@@ -634,12 +629,12 @@ class SettingsRepository:
             ],
             "providerSettings": [
                 {
-                    "domain": self.scope.public_domain(row["domain"]),
+                    "domain": public_domain(row["domain"]),
                     "provider": row["provider"],
                     "revision": row["revision"],
                     "credentialVersionId": row["credential_version_id"],
                     "payload": validate_provider_setting_payload(
-                        self.scope.public_domain(str(row["domain"])),
+                        public_domain(str(row["domain"])),
                         str(row["provider"]),
                         _require_object(
                             json.loads(row["payload_json"]),
@@ -655,7 +650,6 @@ class SettingsRepository:
             "credentials": credential_rows,
         }
 
-        self.scope.add_factory_defaults(document, domains)
         provider_payloads = {
             (row["domain"], row["provider"]): row["payload"]
             for row in document["providerSettings"]
@@ -669,7 +663,7 @@ class SettingsRepository:
         return document
 
     def _save_setting(self, connection: object, mutation: SettingMutation) -> dict[str, object]:
-        storage_domain = self.scope.storage_domain(mutation.domain)
+        stored_domain = storage_domain(mutation.domain)
         if mutation.base_revision < 0:
             raise ValueError("setting revisions must be non-negative")
         payload = validate_setting_payload(
@@ -687,7 +681,7 @@ class SettingsRepository:
         )
         current = connection.execute(  # type: ignore[attr-defined]
             select(app_settings.c.revision).where(
-                app_settings.c.domain == storage_domain,
+                app_settings.c.domain == stored_domain,
                 app_settings.c.owner_user_id == effective_owner_id(),
             )
         ).scalar_one_or_none()
@@ -697,7 +691,7 @@ class SettingsRepository:
             connection.execute(  # type: ignore[attr-defined]
                 insert(app_settings).values(
                     owner_user_id=effective_owner_id(),
-                    domain=storage_domain,
+                    domain=stored_domain,
                     revision=1,
                     payload_json=payload_json,
                 )
@@ -708,7 +702,7 @@ class SettingsRepository:
         changed = connection.execute(  # type: ignore[attr-defined]
             update(app_settings)
             .where(
-                app_settings.c.domain == storage_domain,
+                app_settings.c.domain == stored_domain,
                 app_settings.c.revision == mutation.base_revision,
                 app_settings.c.owner_user_id == effective_owner_id(),
             )
@@ -729,7 +723,7 @@ class SettingsRepository:
         *,
         credential_version_id: str | None = None,
     ) -> dict[str, object]:
-        storage_domain = self.scope.storage_domain(mutation.domain)
+        stored_domain = storage_domain(mutation.domain)
         if mutation.base_revision < 0:
             raise ValueError("provider setting revisions must be non-negative")
         payload_json = _canonical_json(
@@ -740,7 +734,7 @@ class SettingsRepository:
             )
         )
         key = and_(
-            provider_settings.c.domain == storage_domain,
+            provider_settings.c.domain == stored_domain,
             provider_settings.c.provider == mutation.provider,
             provider_settings.c.owner_user_id == effective_owner_id(),
         )
@@ -760,7 +754,7 @@ class SettingsRepository:
             if owner is None:
                 raise ValueError("credential version does not exist")
             if (
-                owner["domain"] != storage_domain
+                owner["domain"] != stored_domain
                 or owner["provider"] != mutation.provider
             ):
                 raise ValueError(
@@ -776,7 +770,7 @@ class SettingsRepository:
             connection.execute(  # type: ignore[attr-defined]
                 insert(provider_settings).values(
                     owner_user_id=effective_owner_id(),
-                    domain=storage_domain,
+                    domain=stored_domain,
                     provider=mutation.provider,
                     revision=1,
                     **values,
@@ -867,7 +861,7 @@ class SettingsRepository:
         }
 
     def _save_credential(self, connection: object, edit: CredentialEdit) -> dict[str, object]:
-        storage_domain = self.scope.storage_domain(edit.domain)
+        stored_domain = storage_domain(edit.domain)
         secret = validate_credential_secret(
             edit.domain,
             edit.provider,
@@ -881,7 +875,7 @@ class SettingsRepository:
                 raise RevisionConflict("credential does not exist at requested revision")
             existing_id = connection.execute(  # type: ignore[attr-defined]
                 select(credentials.c.id).where(
-                    credentials.c.domain == storage_domain,
+                    credentials.c.domain == stored_domain,
                     credentials.c.provider == edit.provider,
                     credentials.c.owner_user_id == effective_owner_id(),
                 )
@@ -896,7 +890,7 @@ class SettingsRepository:
                 insert(credentials).values(
                     id=credential_id,
                     owner_user_id=effective_owner_id(),
-                    domain=storage_domain,
+                    domain=stored_domain,
                     provider=edit.provider,
                 )
             )
@@ -950,7 +944,7 @@ class SettingsRepository:
         ).mappings().one_or_none()
         if current is None or current["revision"] != edit.base_revision:
             raise RevisionConflict("credential revision changed")
-        if current["domain"] != storage_domain or current["provider"] != edit.provider:
+        if current["domain"] != stored_domain or current["provider"] != edit.provider:
             raise ValueError("credential identity domain/provider cannot change")
 
         version = int(current["version"]) + 1
@@ -1019,7 +1013,7 @@ class SettingsRepository:
                 credential_versions.c.credential_id == credentials.c.id,
             )
             .where(credentials.c.owner_user_id == effective_owner_id(),
-                   self.scope.condition(credentials.c.domain),
+                   credentials.c.domain.not_like('browser_extension:%'),
                    or_(
                        credential_versions.c.id == credential_current_versions.c.credential_version_id,
                        credential_versions.c.id.in_(include_versions),
@@ -1027,7 +1021,7 @@ class SettingsRepository:
             .order_by(credentials.c.domain, credentials.c.provider, credential_versions.c.version.desc())
         )
         if domains:
-            statement = statement.where(credentials.c.domain.in_([self.scope.storage_domain(d) for d in domains]))
+            statement = statement.where(credentials.c.domain.in_([storage_domain(d) for d in domains]))
         rows = connection.execute(statement).mappings()
         summaries: list[dict[str, object]] = []
         for row in rows:
@@ -1039,7 +1033,7 @@ class SettingsRepository:
                 {
                     "credentialId": row["id"],
                     "credentialVersionId": row["credential_version_id"],
-                    "domain": self.scope.public_domain(row["domain"]),
+                    "domain": public_domain(row["domain"]),
                     "provider": row["provider"],
                     # 读取路径永不回传明文：字段名保留、值一律清空，客户端据此判断
                     # 「留空即沿用已保存的密钥」。真正的密钥只在服务端经
@@ -1160,7 +1154,7 @@ class SettingsRepository:
                     )
                 )
                 .where(
-                    provider_settings.c.domain == self.scope.storage_domain(domain),
+                    provider_settings.c.domain == storage_domain(domain),
                     provider_settings.c.provider == provider,
                     provider_settings.c.owner_user_id == effective_owner_id(),
                 )
@@ -1193,7 +1187,7 @@ class SettingsRepository:
         idempotency_key: str,
         credential_id: str,
     ) -> tuple[dict[str, object], bool]:
-        scope = self.scope.prefix + f"DELETE:deleteCredential:{credential_id}"
+        scope = f"DELETE:deleteCredential:{credential_id}"
         now = _utcnow()
         try:
             with immediate_transaction(self.engine) as connection:
@@ -1233,7 +1227,7 @@ class SettingsRepository:
         removed = connection.execute(
             delete(credentials).where(
                 credentials.c.id == credential_id,
-                self.scope.condition(credentials.c.domain),
+                credentials.c.domain.not_like('browser_extension:%'),
                 credentials.c.owner_user_id == effective_owner_id(),
             )
         )

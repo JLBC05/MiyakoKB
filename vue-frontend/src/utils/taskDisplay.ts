@@ -16,7 +16,6 @@ const JOB_KIND_LABELS = {
   vector_rebuild: '重建向量索引',
   continuation: '漫画续写',
   derived_rebuild: '重建分析内容',
-  plugin_agent: '插件助手',
 } satisfies Readonly<Record<V2Job['kind'], string>>
 
 const STEP_KIND_LABELS: Readonly<Record<string, string>> = {

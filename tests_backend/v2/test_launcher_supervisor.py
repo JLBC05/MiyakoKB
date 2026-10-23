@@ -9,8 +9,6 @@ import pytest
 from sqlalchemy import select, update
 
 from src.backend_v2.launcher.entrypoint import (
-    BROWSER_EXTENSION_ENABLED_ENV,
-    BROWSER_EXTENSION_TOKEN_ENV,
     LauncherConfig,
     LauncherState,
     LauncherSupervisor,
@@ -76,33 +74,6 @@ def test_captured_backend_process_has_no_console() -> None:
     output, _ = process.communicate(timeout=10)
     assert process.returncode == 0
     assert output.strip() == "0"
-
-
-def test_browser_extension_secret_is_passed_only_to_the_api() -> None:
-    token = "browser-extension-secret"
-    api = _child_environment(
-        "api",
-        _new_registration("api"),
-        browser_extension_enabled=True,
-        browser_extension_token=token,
-    )
-    worker = _child_environment(
-        "worker",
-        _new_registration("worker"),
-        browser_extension_enabled=True,
-        browser_extension_token=token,
-    )
-
-    assert api[BROWSER_EXTENSION_ENABLED_ENV] == "1"
-    assert api[BROWSER_EXTENSION_TOKEN_ENV] == token
-    assert BROWSER_EXTENSION_ENABLED_ENV not in worker
-    assert BROWSER_EXTENSION_TOKEN_ENV not in worker
-    with pytest.raises(ValueError, match="requires a token"):
-        _child_environment(
-            "api",
-            _new_registration("api"),
-            browser_extension_enabled=True,
-        )
 
 
 def test_launcher_authenticates_its_internal_api_health_request(

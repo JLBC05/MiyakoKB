@@ -11,11 +11,9 @@ from urllib.parse import urlsplit
 from src.backend_v2.content.page_style import validate_text_style_payload
 from src.backend_v2.jobs import MAX_DEEP_LEARNING_CONCURRENCY
 from src.backend_v2.storage.defaults import (
-    DEFAULT_BROWSER_DOM_AGENT,
     DEFAULT_WEB_IMPORT_SETTINGS,
 )
 from src.shared.ai_providers import (
-    PLUGIN_AGENT_CAPABILITY,
     CHAT_CAPABILITY,
     EMBEDDING_CAPABILITY,
     HQ_TRANSLATION_CAPABILITY,
@@ -32,7 +30,7 @@ from src.shared.constants import PADDLEOCR_VL_LANGUAGE_NAMES
 
 
 APP_SETTING_DOMAINS = frozenset({
-    "browser_dom_agent", "translation", "text_style_defaults",
+    "translation", "text_style_defaults",
     "workflow_preferences", "export_preferences", "custom_ai_profiles",
     "manga_import",
     "web_import", "insight",
@@ -40,7 +38,6 @@ APP_SETTING_DOMAINS = frozenset({
 PROVIDER_CAPABILITIES = {
     "translation": TRANSLATION_CAPABILITY,
     "hq": HQ_TRANSLATION_CAPABILITY,
-    "browser_dom_agent": PLUGIN_AGENT_CAPABILITY,
     "ai_vision_ocr": VISION_OCR_CAPABILITY,
     "web_import_agent": WEB_IMPORT_AGENT_CAPABILITY,
     "insight_vlm": VLM_CAPABILITY,
@@ -93,9 +90,6 @@ _PROVIDER_PAYLOAD_FIELDS_BY_DOMAIN = {
     ),
     "hq": frozenset(
         {"modelName", "customBaseUrl", "openaiOptions", "batchSize", "prompt"}
-    ),
-    "browser_dom_agent": frozenset(
-        {"modelName", "customBaseUrl", "openaiOptions"}
     ),
     "ai_vision_ocr": frozenset(
         {
@@ -657,12 +651,6 @@ def validate_setting_payload(
     _reject_secret_fields(result, domain)
     if domain == "translation":
         _validate_translation(result)
-    elif domain == "browser_dom_agent":
-        provider = result.get("provider")
-        _require_provider(provider, PLUGIN_AGENT_CAPABILITY, "browser_dom_agent.provider")
-        validate_provider_setting_payload(
-            domain, provider, {key: value for key, value in result.items() if key != "provider"},
-        )
     elif domain == "workflow_preferences":
         _validate_workflow_preferences(result)
     elif domain == "export_preferences":
@@ -906,8 +894,6 @@ def validate_book_setting_payload(
 def setting_storage_payload(domain: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Keep provider parameters in provider_settings only."""
     result = deepcopy(dict(payload))
-    if domain == "browser_dom_agent":
-        return {"provider": result["provider"]}
     if domain == "web_import":
         result["agent"] = {
             k: v for k, v in result["agent"].items()
@@ -924,12 +910,6 @@ def compose_editable_settings(
     """Compose the UI document from stored selections and provider parameters."""
     result = deepcopy(_object(payload, "setting payload"))
     providers = providers or {}
-    if domain == "browser_dom_agent":
-        _exact_keys(result, {"provider"}, "browser_dom_agent")
-        result = {
-            **deepcopy(DEFAULT_BROWSER_DOM_AGENT), **result,
-            **deepcopy(dict(providers.get((domain, result["provider"]), {}))),
-        }
     if domain == "web_import":
         agent = _object(result["agent"], "web_import.agent")
         _exact_keys(

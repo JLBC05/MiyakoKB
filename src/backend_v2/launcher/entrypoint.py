@@ -36,8 +36,6 @@ from src.backend_v2.logging_config import (
     STREAM_FRAME_ENV,
     configure_backend_logging,
 )
-BROWSER_EXTENSION_ENABLED_ENV = "SABER_BROWSER_EXTENSION_ENABLED"
-BROWSER_EXTENSION_TOKEN_ENV = "SABER_BROWSER_EXTENSION_TOKEN"
 from src.backend_v2.paths import (
     data_root_fingerprint,
     ensure_data_root,
@@ -111,8 +109,6 @@ class LauncherConfig:
     profile: str = "local"
     log_level: str | None = None
     open_browser: bool = False
-    browser_extension_enabled: bool = False
-    browser_extension_token: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,8 +180,6 @@ def _child_environment(
     credential_broker_url: str | None = None,
     credential_broker_token: str | None = None,
     stream_frames: bool = False,
-    browser_extension_enabled: bool = False,
-    browser_extension_token: str = "",
 ) -> dict[str, str]:
     environment = os.environ.copy()
     # The desktop supervisor decodes the captured pipe as UTF-8.  Windows can
@@ -209,14 +203,6 @@ def _child_environment(
         environment.pop(BROKER_TOKEN_ENV, None)
     if registration.role != role:
         raise ValueError("child role and epoch registration role differ")
-    if role == "api" and browser_extension_enabled:
-        if not browser_extension_token:
-            raise ValueError("enabled browser extension integration requires a token")
-        environment[BROWSER_EXTENSION_ENABLED_ENV] = "1"
-        environment[BROWSER_EXTENSION_TOKEN_ENV] = browser_extension_token
-    else:
-        environment.pop(BROWSER_EXTENSION_ENABLED_ENV, None)
-        environment.pop(BROWSER_EXTENSION_TOKEN_ENV, None)
     if role == "api":
         environment.update(
             {
@@ -531,8 +517,6 @@ def _start_child(
     credential_broker_token: str | None = None,
     output_callback: ChildOutputCallback | None = None,
     stop_event: threading.Event | None = None,
-    browser_extension_enabled: bool = False,
-    browser_extension_token: str = "",
 ) -> ManagedChild:
     _raise_if_stop_requested(stop_event)
     registration = _new_registration(role)
@@ -562,8 +546,6 @@ def _start_child(
                 credential_broker_url=credential_broker_url,
                 credential_broker_token=credential_broker_token,
                 stream_frames=output_callback is not None,
-                browser_extension_enabled=browser_extension_enabled,
-                browser_extension_token=browser_extension_token,
             ),
             capture_output=output_callback is not None,
         )
@@ -645,8 +627,6 @@ def _start_child_with_retries(
     credential_broker_token: str | None = None,
     output_callback: ChildOutputCallback | None = None,
     stop_event: threading.Event | None = None,
-    browser_extension_enabled: bool = False,
-    browser_extension_token: str = "",
 ) -> ManagedChild:
     current_restart_count = restart_count
     while current_restart_count <= MAX_CONSECUTIVE_RESTARTS:
@@ -666,8 +646,6 @@ def _start_child_with_retries(
                 credential_broker_token=credential_broker_token,
                 output_callback=output_callback,
                 stop_event=stop_event,
-                browser_extension_enabled=browser_extension_enabled,
-                browser_extension_token=browser_extension_token,
             )
         except (_LauncherStopRequested, _ApiBindFailed):
             raise
@@ -810,12 +788,6 @@ class LauncherSupervisor:
                                     ),
                                     output_callback=self._output_callback,
                                     stop_event=self._stop_event,
-                                    browser_extension_enabled=(
-                                        config.browser_extension_enabled
-                                    ),
-                                    browser_extension_token=(
-                                        config.browser_extension_token
-                                    ),
                                 )
 
                             _raise_if_stop_requested(self._stop_event)
@@ -931,12 +903,6 @@ class LauncherSupervisor:
                                         ),
                                         output_callback=self._output_callback,
                                         stop_event=self._stop_event,
-                                        browser_extension_enabled=(
-                                            config.browser_extension_enabled
-                                        ),
-                                        browser_extension_token=(
-                                            config.browser_extension_token
-                                        ),
                                     )
                                     self._publish(
                                         LauncherState.RUNNING,

@@ -76,10 +76,9 @@ def create_settings_blueprint(
     data_root: Path,
     engine: Engine,
     profile: RuntimeProfile,
-    browser_extension: bool = False,
 ) -> Blueprint:
     blueprint = Blueprint("settings_v2", __name__, url_prefix="/api/v2")
-    settings = SettingsRepository(engine, browser_extension=browser_extension)
+    settings = SettingsRepository(engine)
     prompt_repository = PromptRepository(engine)
     font_repository = FontRepository(engine)
     storage = AssetStorageService(data_root, engine)
@@ -87,20 +86,12 @@ def create_settings_blueprint(
 
     def settings_repository() -> SettingsRepository:
         scope = request.args.get("scope")
-        if scope not in (None, "global", "browser_extension"):
+        if scope not in (None, "global"):
             raise ValueError("unsupported settings scope")
-        if scope == "global":
-            return SettingsRepository(engine)
-        if scope == "browser_extension":
-            if profile.name != "local":
-                raise ValueError("浏览器插件设置仅支持本地模式")
-            return SettingsRepository(engine, browser_extension=True)
         return settings
 
     def provider_diagnostics(body: dict) -> ProviderDiagnostics:
         repository = settings_repository()
-        if repository.scope.browser_extension and body.get("domain") != "browser_dom_agent":
-            raise ValueError("插件配置仅支持网页识别助手的服务商诊断")
         return ProviderDiagnostics(repository)
 
     @blueprint.errorhandler(RevisionConflict)

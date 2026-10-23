@@ -2436,7 +2436,7 @@ export interface components {
         /** @enum {string} */
         JobStatus: "queued" | "running" | "paused" | "cancelled" | "completed" | "completed_with_errors" | "failed" | "interrupted";
         /** @enum {string} */
-        JobKind: "translation" | "remove_text" | "detect" | "style_apply" | "text_import" | "container_import" | "web_extract" | "web_import_commit" | "export" | "insight_analysis" | "insight_export" | "vector_rebuild" | "continuation" | "derived_rebuild" | "plugin_agent";
+        JobKind: "translation" | "remove_text" | "detect" | "style_apply" | "text_import" | "container_import" | "web_extract" | "web_import_commit" | "export" | "insight_analysis" | "insight_export" | "vector_rebuild" | "continuation" | "derived_rebuild";
         JobProgressCurrentStep: {
             kind: string;
             itemId: components["schemas"]["Uuid"];
@@ -3958,7 +3958,7 @@ export interface components {
         };
     };
     responses: {
-        /** @description Browser extension pairing token is missing or invalid. */
+        /** @description The pairing token for the current session is missing or invalid. */
         Unauthorized: {
             headers: {
                 [name: string]: unknown;
@@ -3967,7 +3967,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorEnvelope"];
             };
         };
-        /** @description Browser extension capability or loopback policy failed. */
+        /** @description The account policy denied this capability, or the loopback rule failed. */
         Forbidden: {
             headers: {
                 [name: string]: unknown;
@@ -3976,7 +3976,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorEnvelope"];
             };
         };
-        /** @description The browser integration or selected DOM Agent is unavailable. */
+        /** @description The selected model provider or integration is unavailable. */
         ServiceUnavailable: {
             headers: {
                 [name: string]: unknown;
@@ -4642,8 +4642,8 @@ export interface operations {
     getSettings: {
         parameters: {
             query?: {
-                /** @description Select global translator settings (the default), or independent plugin text_style_defaults and browser_dom_agent settings (local profile only). */
-                scope?: "global" | "browser_extension";
+                /** @description Select the settings scope. Only the global scope exists; any other value is rejected. */
+                scope?: "global";
                 domains?: string;
                 book_id?: string;
             };
@@ -4667,8 +4667,8 @@ export interface operations {
     deleteCredential: {
         parameters: {
             query?: {
-                /** @description Select global translator settings (the default), or independent plugin text_style_defaults and browser_dom_agent settings (local profile only). */
-                scope?: "global" | "browser_extension";
+                /** @description Select the settings scope. Only the global scope exists; any other value is rejected. */
+                scope?: "global";
             };
             header: {
                 /** @description Stable key for this normalized command and target scope. */
@@ -4697,8 +4697,8 @@ export interface operations {
     saveSettingsTransaction: {
         parameters: {
             query?: {
-                /** @description Select global translator settings (the default), or independent plugin text_style_defaults and browser_dom_agent settings (local profile only). */
-                scope?: "global" | "browser_extension";
+                /** @description Select the settings scope. Only the global scope exists; any other value is rejected. */
+                scope?: "global";
             };
             header: {
                 /** @description Stable key for this normalized command and target scope. */
@@ -4905,8 +4905,8 @@ export interface operations {
     fetchModelCatalog: {
         parameters: {
             query?: {
-                /** @description Select global translator settings (the default), or independent plugin text_style_defaults and browser_dom_agent settings (local profile only). */
-                scope?: "global" | "browser_extension";
+                /** @description Select the settings scope. Only the global scope exists; any other value is rejected. */
+                scope?: "global";
             };
             header?: never;
             path?: never;
@@ -4934,8 +4934,8 @@ export interface operations {
     runConnectionTest: {
         parameters: {
             query?: {
-                /** @description Select global translator settings (the default), or independent plugin text_style_defaults and browser_dom_agent settings (local profile only). */
-                scope?: "global" | "browser_extension";
+                /** @description Select the settings scope. Only the global scope exists; any other value is rejected. */
+                scope?: "global";
             };
             header?: never;
             path: {

@@ -375,8 +375,8 @@ paths:
         - in: query
           name: scope
           required: false
-          description: Select global translator settings (the default), or independent plugin text_style_defaults and browser_dom_agent settings (local profile only).
-          schema: {type: string, enum: [global, browser_extension]}
+          description: Select the settings scope. Only the global scope exists; any other value is rejected.
+          schema: {type: string, enum: [global]}
         - name: domains
           in: query
           schema: {type: string}
@@ -397,8 +397,8 @@ paths:
         - in: query
           name: scope
           required: false
-          description: Select global translator settings (the default), or independent plugin text_style_defaults and browser_dom_agent settings (local profile only).
-          schema: {type: string, enum: [global, browser_extension]}
+          description: Select the settings scope. Only the global scope exists; any other value is rejected.
+          schema: {type: string, enum: [global]}
         - name: credential_id
           in: path
           required: true
@@ -420,8 +420,8 @@ paths:
         - in: query
           name: scope
           required: false
-          description: Select global translator settings (the default), or independent plugin text_style_defaults and browser_dom_agent settings (local profile only).
-          schema: {type: string, enum: [global, browser_extension]}
+          description: Select the settings scope. Only the global scope exists; any other value is rejected.
+          schema: {type: string, enum: [global]}
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
@@ -566,8 +566,8 @@ paths:
         - in: query
           name: scope
           required: false
-          description: Select global translator settings (the default), or independent plugin text_style_defaults and browser_dom_agent settings (local profile only).
-          schema: {type: string, enum: [global, browser_extension]}
+          description: Select the settings scope. Only the global scope exists; any other value is rejected.
+          schema: {type: string, enum: [global]}
       tags: [settings]
       operationId: fetchModelCatalog
       x-command-mode: transient
@@ -593,8 +593,8 @@ paths:
         - in: query
           name: scope
           required: false
-          description: Select global translator settings (the default), or independent plugin text_style_defaults and browser_dom_agent settings (local profile only).
-          schema: {type: string, enum: [global, browser_extension]}
+          description: Select the settings scope. Only the global scope exists; any other value is rejected.
+          schema: {type: string, enum: [global]}
         - name: kind
           in: path
           required: true
@@ -2991,19 +2991,19 @@ components:
         maxLength: 200
   responses:
     Unauthorized:
-      description: Browser extension pairing token is missing or invalid.
+      description: The pairing token for the current session is missing or invalid.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
     Forbidden:
-      description: Browser extension capability or loopback policy failed.
+      description: The account policy denied this capability, or the loopback rule failed.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
     ServiceUnavailable:
-      description: The browser integration or selected DOM Agent is unavailable.
+      description: The selected model provider or integration is unavailable.
       content:
         application/json:
           schema:
@@ -3739,7 +3739,6 @@ components:
         - vector_rebuild
         - continuation
         - derived_rebuild
-        - plugin_agent
     JobProgressCurrentStep:
       type: object
       additionalProperties: false

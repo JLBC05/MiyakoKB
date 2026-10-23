@@ -43,19 +43,6 @@ DEFAULT_MANGA_IMPORT_SETTINGS: dict[str, object] = {
     # 空串表示「用系统默认位置」（%APPDATA%/com.github.wgh136/venera）。
     "veneraBaseDir": "",
 }
-DEFAULT_BROWSER_DOM_AGENT = {
-    "provider": "siliconflow",
-    "modelName": "",
-    "customBaseUrl": "",
-    "openaiOptions": {
-        "request": {"forceJsonOutput": True},
-        "execution": {
-            "useStream": False, "rpmLimit": 0,
-            "transportRetries": 3, "businessRetries": 3,
-        },
-    },
-}
-
 DEFAULT_WEB_IMPORT_SETTINGS: dict[str, object] = {
     "firecrawl": {},
     "agent": {
