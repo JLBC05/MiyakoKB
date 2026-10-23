@@ -423,13 +423,6 @@ function createFixtureSettings() {
       batchSize: 3,
       prompt: '高质量翻译漫画文本。',
     },
-    pluginAgent: {
-      provider: 'siliconflow',
-      apiKey: '',
-      modelName: '',
-      customBaseUrl: '',
-      openaiOptions: fixtureOpenAiOptions(true),
-    },
     proofreading: {
       enabled: false,
       rounds: [],
@@ -2531,22 +2524,6 @@ test('web import result and logs keep modal layout contract', async ({ page }) =
   await expect(webImportModal.locator('.product-selectable-image-grid')).toBeVisible()
   await expect(webImportModal.getByLabel('网页导入结果元信息')).toContainText('共 2 张')
   await expect(webImportModal).toHaveScreenshot('web-import-result-logs.png', {
-    animations: 'disabled',
-  })
-})
-
-test('plugin agent modal keeps three-column settings layout contract', async ({ page }) => {
-  await page.goto('/translate')
-  await page.getByRole('button', { name: '设置', exact: true }).click()
-  const settingsModal = page.locator('.settings-modal-wrapper')
-  await expect(settingsModal).toBeVisible()
-  await settingsModal.getByRole('tab', { name: '插件管理' }).click()
-  await settingsModal.getByRole('button', { name: '自动生成插件' }).click()
-
-  const pluginAgentModal = page.locator('.plugin-agent-modal')
-  await expect(pluginAgentModal).toBeVisible()
-  await expect(pluginAgentModal.locator('.plugin-agent-column')).toHaveCount(3)
-  await expect(pluginAgentModal).toHaveScreenshot('plugin-agent-modal.png', {
     animations: 'disabled',
   })
 })

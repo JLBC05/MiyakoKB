@@ -1013,7 +1013,7 @@ describe('UI architecture style ownership lint', () => {
   })
 
   it('rejects raw visual values inside BaseModal customStyle maps', () => {
-    const result = runUiArchitectureSourceFixture('src/components/settings/PluginAgentModal.vue', `
+    const result = runUiArchitectureSourceFixture('src/components/settings/insight/StorySynopsisPanel.vue', `
       <template>
         <BaseModal
           custom-class="plugin-agent-modal"
@@ -1036,7 +1036,7 @@ describe('UI architecture style ownership lint', () => {
   })
 
   it('rejects business BaseModal customStyle maps even when values are layout-only', () => {
-    const result = runUiArchitectureSourceFixture('src/components/settings/PluginAgentModal.vue', `
+    const result = runUiArchitectureSourceFixture('src/components/settings/insight/StorySynopsisPanel.vue', `
       <template>
         <BaseModal
           custom-class="plugin-agent-modal"
