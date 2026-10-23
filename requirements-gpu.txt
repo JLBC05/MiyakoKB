@@ -30,6 +30,8 @@ colorama>=0.4.6,<1
 # imported by src/backend_v2/logging_config.py (not installed here)
 loguru
 pypinyin>=0.55,<1
+# 角色卡台词是台版原画逐字摘录，导出时做一次繁体→简体（opencc 缺失时退化为保留原文）
+opencc-python-reimplemented>=0.1.7,<1
 fonttools>=4.60
 # imported by src/core/rendering.py (not installed here)
 freetype-py
