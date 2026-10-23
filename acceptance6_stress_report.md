@@ -1,6 +1,6 @@
 # MiyakoKB 验收点6 压测报告
 
-> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #59。
+> 状态：阶段0-4 的事实均已定稿（阶段3/4 见 §4/§5）；发现表滚动至 #60。
 > 目标：生产环境大体量漫画（50+ 话）端到端压力测试与跨章节实体消歧观察。
 
 ## 1. 测试范围与环境
@@ -420,6 +420,7 @@ job `39c2c48f-3e56-4c43-a14f-e93e7d44a6e5`：**completed_with_errors**（14:34:0
 | 57 | 低 | **cpu / gpu 两份依赖清单会悄悄漂移**：`opencc-python-reimplemented` 只加进了 `requirements-cpu.txt`，`requirements-gpu.txt` 漏掉，打包出的 gpu 版会在导出简体角色卡时静默跳过转换。已补齐并新增回归 `tests_backend/v2/test_packaging_contract.py::test_both_requirements_files_declare_the_same_packages`（逐条比较两份清单，差异只许来自注释）。 |
 | 58 | 中 | **`browser_extension` 作用域从入口起就是死代码，却一直拖着整条扩展支线**：`create_settings_blueprint` 在 `src/backend_v2/api/app.py` 被调用时从不传 `browser_extension`，`SettingsRepository` 的 `scope` 参数恒为默认的「全局」，于是 `settings/scope.py` 的 `SettingsScope` 类、`browser_extension:<domain>` 前缀、5 处 `self.scope.condition(...)` 守卫、`browser_dom_agent` 设置域与 `PLUGIN_AGENT_CAPABILITY`、启动器为 API 子进程注入的两个扩展环境变量、`ApiSettings` 的两个字段、契约里的 `scope` 枚举值与 `plugin_agent` 任务种类、以及一条整测用例，全都在为一个不存在的客户端服务。已整体退役：`settings/scope.py` 简化为直通函数（`storage_domain`/`public_domain`），`SettingsRepository(engine)` 去掉 `browser_extension` 参数，契约 `scope` 只剩 `global`、`JobKind` 从 15 项减到 14 项。**踩坑**：局部变量 `storage_domain = storage_domain(...)` 遮蔽了同名的导入函数，18 条用例同时报 `UnboundLocalError`——改名 `stored_domain`。（`text_style_defaults` 不在此列，它被页面样式、入库、导出等多处消费，保留。） |
 | 59 | 低 | **发行包长期按 cpu / gpu 两个变体各出一份，但两份依赖清单逐字节相同**：`requirements-cpu.txt` 与 `requirements-gpu.txt` 在移除本地模型域后已经没有任何差异（发现 #57 就是漏同步的一次实证），矩阵化的 `release.yml` 却把整条打包流水线跑两遍——多一倍 CI 时长、多一份 1900 MB 级分卷，用户还要在一堆 `-cpu` / `-gpu` 文件名里选。已收敛为**单一发行包**：去掉 `strategy.matrix`、包名去掉变体后缀（`MiyakoKB-<version>.7z*`），原先「只在 cpu 变体跑」的 5 项校验不再是条件步骤；两份逐字节相同的依赖清单也合并为一份 `requirements.txt`（`requirements-cpu.txt` / `requirements-gpu.txt` 删除），回归用例 `test_packaging_contract.py::test_release_ships_one_package_from_one_dependency_manifest` 钉住「一份清单、一次构建、包名不带变体」。 |
+| 60 | 低 | **退役一个域时，「符号」能 grep 干净，「名字」会漏三层**：上一轮按符号名清掉了 `PLUGIN_AGENT_CAPABILITY`、`DEFAULT_BROWSER_DOM_AGENT`、manifest 的 `pluginAgent` 能力项与 `JOB_KINDS` 取值，但①前端 `vue-frontend/src/config/aiProviders.ts` 的 `ProviderCapability` 联合类型是手写的、与 manifest 无约束，仍列着 `'pluginAgent'`；②`vue-frontend/tests/visual/ui-regression.spec.ts` 里一条用例断言 `PluginAgentModal.vue`（组件早已删除）并访问 `/translate`（页面早已删除），而 `tests/visual` 不在任何 `tsconfig` 的 `include` 里，`vue-tsc -b` 根本看不到它——这条必败用例能一路「绿」到真跑 Playwright 才炸；③lint 规则的内联源码夹具仍指向该已删组件路径。已全部清理（能力联合类型删项、必败用例删除、夹具改挂现存组件），全仓 `git grep -i "pluginAgent|PluginAgentModal|plugin-agent-modal"` 零命中。**教训**：退役域时要同时 grep「域名本身」在联合类型、字符串字面量、内联夹具、e2e/可视化用例与快照基线里的出现，并核对不在 tsconfig 范围内的测试目录。 | 退役域时同时清「符号」与「名字」；`tests/visual` / `tests/e2e` 需要独立的存在性校验（见 HANDOFF 坑 44） |
 
 
 
