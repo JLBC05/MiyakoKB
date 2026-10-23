@@ -9,6 +9,9 @@ from .contracts import StorageError
 from .v3_5_0 import stop_unfinished, validate
 from .v3_5_1 import convert as directory_fonts, validate as validate_directory_fonts
 from .v3_5_3 import convert as retire_legacy_domains, stop_unfinished as stop_unfinished_retired_domains, validate as validate_retired_domains
+from .v3_5_4 import convert as drop_operation_snapshots
+from .v3_5_4 import stop_unfinished as stop_unfinished_operation_snapshots
+from .v3_5_4 import validate as validate_operation_snapshots
 
 
 @dataclass(frozen=True)
@@ -23,18 +26,21 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration("3.5.0", "3.5.1", directory_fonts),
     Migration("3.5.1", "3.5.2"),
     Migration("3.5.2", "3.5.3", retire_legacy_domains),
+    Migration("3.5.3", "3.5.4", drop_operation_snapshots),
 )
 SOURCE_PREPARERS = {
     "3.5.0": stop_unfinished,
     "3.5.1": stop_unfinished,
     "3.5.2": stop_unfinished,
     "3.5.3": stop_unfinished_retired_domains,
+    "3.5.4": stop_unfinished_operation_snapshots,
 }
 VERSION_VALIDATORS = {
     "3.5.0": validate,
     "3.5.1": validate_directory_fonts,
     "3.5.2": validate_directory_fonts,
     "3.5.3": validate_retired_domains,
+    "3.5.4": validate_operation_snapshots,
 }
 
 

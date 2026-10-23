@@ -66,15 +66,15 @@ def manager(root, **kwargs):
 
 
 def test_version_numeric_and_registry():
-    assert STORAGE_VERSION == "3.5.3"
+    assert STORAGE_VERSION == STORAGE_VERSION
     assert parse_version("3.5.10") > parse_version("3.5.9")
     for value in ("3.5", "3.05.0", "3.6.0-rc1", "v3.5.1"):
         with pytest.raises(ValueError):
             parse_version(value)
     with pytest.raises(StorageError, match="降级"):
-        migration_chain("3.6.0", "3.5.3")
+        migration_chain("3.6.0", STORAGE_VERSION)
     with pytest.raises(StorageError, match="缺少"):
-        migration_chain("3.5.3", "3.6.1", [Migration("3.5.3", "3.6.0")])
+        migration_chain(STORAGE_VERSION, "3.6.1", [Migration(STORAGE_VERSION, "3.6.0")])
 
 
 def test_current_check_and_readonly_cli(root):
@@ -218,8 +218,8 @@ def test_352_upgrade_retires_legacy_domains_and_narrows_prompt_types(tmp_path):
 
 def test_noop_chain_preserves_files_and_does_not_backup(root):
     before = (root / "objects" / "saved.txt").read_bytes()
-    steps = (Migration("3.5.3", "3.6.0"), Migration("3.6.0", "3.6.1"))
-    with StorageManager(root, "local", target="3.6.1", steps=steps, sql_for=lambda _: contract_sql("3.5.3")) as migration:
+    steps = (Migration(STORAGE_VERSION, "3.6.0"), Migration("3.6.0", "3.6.1"))
+    with StorageManager(root, "local", target="3.6.1", steps=steps, sql_for=lambda _: contract_sql(STORAGE_VERSION)) as migration:
         assert migration.prepare(initialize_database)["status"] == "updated"
         assert read_identity(root)[0] == "3.6.1"
         assert not list(migration._operations())
@@ -230,10 +230,10 @@ def test_noop_chain_preserves_files_and_does_not_backup(root):
 def test_noop_failure_keeps_version(root):
     def fail(_):
         raise StorageError("bad target")
-    with StorageManager(root, "local", target="3.6.0", steps=(Migration("3.5.3", "3.6.0", validate=fail),), sql_for=lambda _: contract_sql("3.5.3")) as migration:
+    with StorageManager(root, "local", target="3.6.0", steps=(Migration(STORAGE_VERSION, "3.6.0", validate=fail),), sql_for=lambda _: contract_sql(STORAGE_VERSION)) as migration:
         with pytest.raises(StorageError, match="bad target"):
             migration.prepare(initialize_database)
-    assert read_identity(root)[0] == "3.5.3"
+    assert read_identity(root)[0] == STORAGE_VERSION
 
 
 def test_real_upgrade_commit_cleanup_and_user_backup(root):
@@ -243,7 +243,7 @@ def test_real_upgrade_commit_cleanup_and_user_backup(root):
     with manager(root) as migration:
         assert migration.prepare(initialize_database)["status"] == "awaiting_health"
         op, state = list(migration._operations())[0]
-        assert read_identity(op / "backup")[0] == "3.5.3"
+        assert read_identity(op / "backup")[0] == STORAGE_VERSION
         assert read_identity(root)[0] == "3.6.0"
         assert not business_ready(root)
         with pytest.raises(StorageError, match="尚未开始"):
@@ -282,7 +282,7 @@ def test_recovery_at_persisted_boundaries(root, stage):
         else:
             with pytest.raises(StorageError, match="已恢复旧数据"):
                 recovered.prepare(initialize_database)
-            assert read_identity(root)[0] == "3.5.3"
+            assert read_identity(root)[0] == STORAGE_VERSION
             assert (root / "objects" / "saved.txt").read_text(encoding="utf-8") == "用户已保存的成果"
 
 
@@ -292,7 +292,7 @@ def test_startup_failure_rolls_back(root):
         migration.before_start()
         migration.startup_failed()
         assert migration.rolled_back
-        assert read_identity(root)[0] == "3.5.3"
+        assert read_identity(root)[0] == STORAGE_VERSION
         assert business_ready(root)
 
 
@@ -411,7 +411,7 @@ def test_crash_between_directory_rename_and_journal_write(root, monkeypatch, aft
     with manager(root) as migration:
         with pytest.raises(StorageError, match="已恢复旧数据"):
             migration.prepare(initialize_database)
-    assert read_identity(root)[0] == "3.5.3"
+    assert read_identity(root)[0] == STORAGE_VERSION
 
 
 def test_insufficient_space_and_failed_target_leave_original(root, monkeypatch):
@@ -421,12 +421,12 @@ def test_insufficient_space_and_failed_target_leave_original(root, monkeypatch):
         patch.setattr(runner.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
         with pytest.raises(StorageError, match="空间不足"):
             migration.prepare(initialize_database)
-    assert read_identity(root)[0] == "3.5.3"
+    assert read_identity(root)[0] == STORAGE_VERSION
     with manager(root) as migration:
-        migration.sql_for = lambda _: contract_sql("3.5.3")
+        migration.sql_for = lambda _: contract_sql(STORAGE_VERSION)
         with pytest.raises(StorageError, match="结构不匹配"):
             migration.prepare(initialize_database)
-    assert read_identity(root)[0] == "3.5.3"
+    assert read_identity(root)[0] == STORAGE_VERSION
 
 
 def test_unknown_backup_marker_never_deleted(root):
@@ -453,7 +453,7 @@ def test_launcher_setup_failure_restores_candidate(root, monkeypatch):
         supervisor = entrypoint.LauncherSupervisor(entrypoint.LauncherConfig(root, host="127.0.0.1", port=5000), storage_manager=migration)
         with pytest.raises(OSError, match="open failed"):
             supervisor.run()
-        assert migration.rolled_back and read_identity(root)[0] == "3.5.3"
+        assert migration.rolled_back and read_identity(root)[0] == STORAGE_VERSION
 
 
 def test_real_launcher_confirms_candidate_and_cleans_backup(root):
@@ -509,7 +509,7 @@ def test_installed_candidate_corruption_rolls_back_on_next_prepare(root):
         with pytest.raises(StorageError, match="结构不匹配"):
             migration.prepare(initialize_database)
         assert migration.rolled_back
-        assert read_identity(root)[0] == "3.5.3"
+        assert read_identity(root)[0] == STORAGE_VERSION
         schema_smoke_test(root / "saber.sqlite3")
 
 
@@ -518,7 +518,7 @@ def test_desktop_setup_error_before_backend_restores_installed_data(root):
         with pytest.raises(ValueError, match="desktop"), migration.startup_guard():
             migration.prepare(initialize_database)
             raise ValueError("desktop settings construction failed")
-        assert read_identity(root)[0] == "3.5.3"
+        assert read_identity(root)[0] == STORAGE_VERSION
 
 
 @pytest.mark.parametrize("filename", [OWNER_FILE, "upgrade-pending.json"])
@@ -553,7 +553,7 @@ def test_lost_operation_journal_never_initializes_empty_root(root):
         with pytest.raises(StorageError, match="记录缺失"):
             migration.prepare(initialize_database)
     assert not root.exists()
-    assert read_identity(op / "backup")[0] == "3.5.3"
+    assert read_identity(op / "backup")[0] == STORAGE_VERSION
 
 
 def test_orphan_pending_gate_never_initializes_empty_root(tmp_path):
@@ -632,13 +632,13 @@ def test_mixed_chain_uses_one_copy_and_orders_version_markers(root):
     def second_step(work):
         assert read_identity(work)[0] == '3.6.0'
         convert(work)
-    steps = (Migration('3.5.3', '3.6.0'), Migration('3.6.0', '3.6.1', second_step))
+    steps = (Migration(STORAGE_VERSION, '3.6.0'), Migration('3.6.0', '3.6.1', second_step))
     with StorageManager(root, 'local', target='3.6.1', steps=steps,
-                        sql_for=lambda v: sql_for('3.5.3' if v == '3.6.0' else v)) as migration:
+                        sql_for=lambda v: sql_for(STORAGE_VERSION if v == '3.6.0' else v)) as migration:
         migration.prepare(initialize_database)
         operations = list(migration._operations())
         assert len(operations) == 1
-        assert read_identity(operations[0][0] / 'backup')[0] == '3.5.3'
+        assert read_identity(operations[0][0] / 'backup')[0] == STORAGE_VERSION
         assert read_identity(root)[0] == '3.6.1'
 
 
@@ -658,7 +658,7 @@ def test_long_work_and_backup_paths_preserve_identity_and_can_be_removed(root, r
         migration.before_start()
         if rollback:
             migration.startup_failed()
-            assert read_identity(root)[0] == '3.5.3'
+            assert read_identity(root)[0] == STORAGE_VERSION
             assert saved.read_bytes() == b'old long-path content'
             assert not (op / 'discarded').exists()
         else:
@@ -707,7 +707,7 @@ def test_recovery_of_marker_interrupted_before_atomic_replace(root, valid_identi
     with manager(root) as recovered:
         with pytest.raises(StorageError, match='已恢复旧数据'):
             recovered.prepare(initialize_database)
-        assert read_identity(root)[0] == '3.5.3'
+        assert read_identity(root)[0] == STORAGE_VERSION
         assert (root / 'objects' / 'saved.txt').read_text(encoding='utf-8') == '用户已保存的成果'
         assert (op / 'work').exists() is not valid_identity
         if not valid_identity:

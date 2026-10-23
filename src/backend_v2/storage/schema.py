@@ -90,7 +90,6 @@ JOB_KINDS = (
     "vector_rebuild",
     "continuation",
     "derived_rebuild",
-    "plugin_agent",
 )
 OPERATION_STATUSES = ("pending", "running", "completed", "failed", "cancelled")
 ACTIVE_OPERATION_STATUSES = OPERATION_STATUSES[:2]
@@ -1849,55 +1848,6 @@ Index(
 )
 Index("ix_operations_executor_claim", operations.c.executor_role, operations.c.status, operations.c.created_at)
 
-operation_credential_snapshots = Table(
-    "operation_credential_snapshots",
-    metadata,
-    Column(
-        "operation_id",
-        String(UUID_LENGTH),
-        ForeignKey("operations.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column(
-        "credential_version_id",
-        String(UUID_LENGTH),
-        ForeignKey("credential_versions.id", ondelete="RESTRICT"),
-        primary_key=True,
-    ),
-    Column("role", String(64), primary_key=True),
-)
-
-operation_plugin_snapshots = Table(
-    "operation_plugin_snapshots",
-    metadata,
-    Column(
-        "operation_id",
-        String(UUID_LENGTH),
-        ForeignKey("operations.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column(
-        "plugin_version_id",
-        String(UUID_LENGTH),
-        ForeignKey("plugin_versions.id", ondelete="RESTRICT"),
-        primary_key=True,
-    ),
-    Column("config_json", Text, nullable=False, server_default="{}"),
-)
-
-operation_asset_inputs = Table(
-    "operation_asset_inputs",
-    metadata,
-    Column(
-        "operation_id",
-        String(UUID_LENGTH),
-        ForeignKey("operations.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column("role", String(64), primary_key=True),
-    Column("asset_id", String(UUID_LENGTH), ForeignKey("assets.id", ondelete="RESTRICT"), nullable=False),
-)
-
 operation_events = Table(
     "operation_events",
     metadata,
@@ -2128,7 +2078,6 @@ _FOREIGN_KEY_LOOKUP_INDEXES = (
     ("ix_operations_page_id", operations.c.page_id),
     ("ix_operations_bubble_id", operations.c.bubble_id),
     ("ix_operations_executor_epoch_id", operations.c.executor_epoch_id),
-    ("ix_operation_asset_inputs_asset_id", operation_asset_inputs.c.asset_id),
     ("ix_operation_artifacts_asset_id", operation_artifacts.c.asset_id),
     ("ix_operation_artifacts_page_id", operation_artifacts.c.page_id),
     ("ix_transient_requests_worker_epoch_id", transient_requests.c.worker_epoch_id),
