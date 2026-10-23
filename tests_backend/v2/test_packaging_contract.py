@@ -144,3 +144,22 @@ def test_direct_runtime_dependencies_are_declared() -> None:
 
     for import_name in direct_dependencies.values():
         assert importlib.util.find_spec(import_name) is not None
+
+
+def test_both_requirements_files_declare_the_same_packages() -> None:
+    """cpu 与 gpu 两份清单一字不差；差异只许来自注释行。"""
+    requirement_lines = {}
+    for filename in ("requirements-cpu.txt", "requirements-gpu.txt"):
+        lines = [
+            line.split("#", 1)[0].strip()
+            for line in (PROJECT_ROOT / filename).read_text(encoding="utf-8").splitlines()
+        ]
+        requirement_lines[filename] = [line for line in lines if line]
+
+    cpu = requirement_lines["requirements-cpu.txt"]
+    gpu = requirement_lines["requirements-gpu.txt"]
+
+    assert cpu == gpu, (
+        "requirements-cpu.txt 与 requirements-gpu.txt 的依赖必须逐条一致，"
+        f"仅在 cpu 中有：{sorted(set(cpu) - set(gpu))}，仅 gpu 中有：{sorted(set(gpu) - set(cpu))}"
+    )
