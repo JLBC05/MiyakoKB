@@ -15,9 +15,9 @@ spec.loader.exec_module(release_assets)
 
 
 @pytest.mark.parametrize('pattern,old,other', [
-    ('MiyakoKB-9-cpu.7z*', 'MiyakoKB-9-cpu.7z.003', 'MiyakoKB-9-gpu.7z.003'),
+    ('MiyakoKB-9.7z*', 'MiyakoKB-9.7z.003', 'MiyakoKB-8.7z.003'),
     ('models.z*', 'models.z03', 'README.txt'),
-    ('saber-translator-*.zip*', 'saber-translator-browser-extension-v0.zip', 'models.zip'),
+    ('saber-translator-*.zip*', 'saber-translator-desktop-v0.zip', 'models.zip'),
 ])
 def test_upload_only_cleans_its_own_stale_assets(tmp_path, monkeypatch, pattern, old, other):
     current = old.replace('003', '001').replace('z03', 'zip').replace('v0', 'v1')

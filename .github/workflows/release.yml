@@ -9,7 +9,7 @@
 #
 # 流程:
 #   1. 先创建 Draft Release
-#   2. 并行构建 CPU 和 GPU 版本，每个直接上传到 Release
+#   2. 构建单一发行包（依赖见 requirements-cpu.txt，与 requirements-gpu.txt 逐字节相同）
 #   3. 等待手动编辑更新日志后发布
 # ============================================================================
 
@@ -105,7 +105,7 @@ jobs:
           body: |
             ## MiyakoKB v${{ steps.version.outputs.VERSION }}
             
-            > ⚠️ **构建中...请等待 CPU 和 GPU 版本上传完成后再发布。**
+            > ⚠️ **构建中...请等待单一发行包上传完成后再发布。**
             
             ### 更新日志
             
@@ -116,8 +116,7 @@ jobs:
             ### 下载说明
             
             📦 **普通用户（开箱即用）：**
-            - CPU 版本：下载所有 `MiyakoKB-${{ steps.version.outputs.VERSION }}-cpu.7z*` 文件
-            - GPU 版本：下载所有 `MiyakoKB-${{ steps.version.outputs.VERSION }}-gpu.7z*` 文件
+            - 下载所有 `MiyakoKB-${{ steps.version.outputs.VERSION }}.7z*` 文件
             - 将所有分卷放在同一目录，使用 **7-Zip** 或 **Bandzip** 解压 `.7z.001` 文件即可
             
             🔧 **源码部署用户：**
@@ -130,22 +129,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================================================
-  # 构建 Job - CPU 和 GPU 并行构建，直接上传到 Release
+  # 构建 Job - 单一发行包，直接上传到 Release
   # ============================================================================
   build:
     needs: prepare
     runs-on: windows-latest
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - variant: cpu
-            requirements: requirements-cpu.txt
-          - variant: gpu
-            requirements: requirements-gpu.txt
-
     steps:
       # --------------------------------------------------
       # 1. 检出代码
@@ -178,7 +168,7 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install --upgrade pip
-          python -m pip install -r ${{ matrix.requirements }}
+          python -m pip install -r requirements-cpu.txt
 
       # --------------------------------------------------
       # 7. 构建并校验 v2 Web 前端
@@ -209,29 +199,24 @@ jobs:
           }
 
       - name: Verify backend contracts
-        if: matrix.variant == 'cpu'
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install "pytest>=8.4,<9"
           python -m pytest tests_backend -q
 
       - name: Verify frontend unit tests
-        if: matrix.variant == 'cpu'
         working-directory: vue-frontend
         run: npm test
 
       - name: Verify frontend lint
-        if: matrix.variant == 'cpu'
         working-directory: vue-frontend
         run: npm run lint
 
       - name: Verify frontend styles
-        if: matrix.variant == 'cpu'
         working-directory: vue-frontend
         run: npm run lint:css
 
       - name: Verify frontend architecture
-        if: matrix.variant == 'cpu'
         working-directory: vue-frontend
         run: npm run lint:ui:audit
 
@@ -257,8 +242,7 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           $version = "${{ needs.prepare.outputs.version }}"
-          $variant = "${{ matrix.variant }}"
-          $outputName = "MiyakoKB-$version-$variant"
+          $outputName = "MiyakoKB-$version"
           
           Write-Host "Compressing with 7z format... Output: $outputName.7z (split at 1900MB)"
           
@@ -282,8 +266,7 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           $version = "${{ needs.prepare.outputs.version }}"
-          $variant = "${{ matrix.variant }}"
-          $baseName = "MiyakoKB-$version-$variant"
+          $baseName = "MiyakoKB-$version"
           
           Write-Host "Verifying compressed archives..."
           
@@ -306,7 +289,7 @@ jobs:
       - name: Upload to Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python .github/scripts/upload_release_assets.py "${{ needs.prepare.outputs.tag_name }}" . "MiyakoKB-${{ needs.prepare.outputs.version }}-${{ matrix.variant }}.7z*"
+        run: python .github/scripts/upload_release_assets.py "${{ needs.prepare.outputs.tag_name }}" . "MiyakoKB-${{ needs.prepare.outputs.version }}.7z*"
 
   # ============================================================================
   # 完成 Job - 输出结果
