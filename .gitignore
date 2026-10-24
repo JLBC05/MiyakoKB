@@ -96,6 +96,7 @@ docs/*
 CLAUDE.md
 .windsurfchatopen/
 .windsurfrules
+.AGENTS.md
 
 # --- 本地审阅产物 ---
 /audit/refactor/
@@ -125,3 +126,6 @@ vue-frontend/.vite-tmp/
 
 # Archify 生成过程目录（架构图源文件与截图，不入库）
 .archify/
+
+启动.bat
+version.json
