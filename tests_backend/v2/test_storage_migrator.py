@@ -473,6 +473,10 @@ def test_real_launcher_confirms_candidate_and_cleans_backup(root):
             db.execute("ALTER TABLE app_settings DROP COLUMN old_fixture_column")
     ready = threading.Event()
     errors = []
+    # A full-suite run contends for CPU, so the launcher may need a second
+    # attempt: LauncherSupervisor retries a healthy-check timeout up to
+    # MAX_RESTARTS. Give the readiness wait the same headroom as the retries.
+    deadline_seconds = 120
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -488,7 +492,7 @@ def test_real_launcher_confirms_candidate_and_cleans_backup(root):
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
         try:
-            assert ready.wait(40), "candidate did not become healthy"
+            assert ready.wait(deadline_seconds), "candidate did not become healthy"
             assert not errors, errors
             assert business_ready(root)
             op, state = list(migration._operations())[0]

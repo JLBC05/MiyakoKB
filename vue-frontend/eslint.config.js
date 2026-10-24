@@ -72,6 +72,9 @@ export default [
   },
 
   {
-    ignores: ['dist/**', 'node_modules/**', '*.config.js', '*.config.ts'],
+    // .vite-tmp/ holds throwaway trees that tooling generates during a build
+    // (check-ui-architecture.mjs stages sources there). They are not source, so
+    // they must not be linted.
+    ignores: ['dist/**', 'node_modules/**', '.vite-tmp/**', '.vite-*/**', '*.config.js', '*.config.ts'],
   },
 ]

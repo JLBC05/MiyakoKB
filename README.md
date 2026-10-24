@@ -211,6 +211,8 @@ npm run check:api                          # 契约与生成类型是否一致
 ```
 
 > 跑后端全量前先停掉开发栈（它占用 5000 端口，会让启动器与端口类用例超时），也别设 `PYTHONIOENCODING=utf-8`（会被角色子进程继承，导致按 locale 解码的探针用例假失败）。
+>
+> 若 `vue-frontend` 下出现 `.vite-tmp/`，那是构建/架构检查用的临时目录：`vite build` 与 `check-ui-architecture.mjs` 都会在里面写中间文件，它已在 `.gitignore` 与 eslint 的 `ignores` 里排除，不要提交。
 
 打包与发布：
 
@@ -230,6 +232,7 @@ python .github/scripts/probe_package.py dist/MiyakoKB/MiyakoKB.exe   # 逐角色
 - **想换模型提供商？** 任务的模型配置在启动时冻结，改设置只影响下一个任务；换完请重新触发分析（已发布的页结果可用「增量」范围复用）。
 - **实体对齐很慢？** 它是把整张候选图分批送模型裁决，规模取决于书的大小与概念类实体数量；`INSIGHT_ALIGN_*` 环境变量可调批大小、并发、候选面与概念最小页数，`INSIGHT_ANALYZE_PARALLEL` 控制页分析的批内并发。
 - **设置里某页签「恢复默认」会动到密钥吗？** 不会，只恢复该页签的非凭据字段；换机器搬配置用「导出备份 / 导入备份」，备份**不含**密钥，导入后需重新填写。
+- **打包产物（`MiyakoKB.exe`）在 Windows 上直接双击能开，但 `--version` / `--probe` 之类命令式调用报 `No usable temporary directory found`？** 该发行包是无控制台（windowed）子系统程序，Windows 在它没有控制台时会把标准流（以及 `%TEMP%` 的解析）退化成异常状态，Python 的 `tempfile` 因此认为所有候选临时目录都不可用。修法是**从带控制台的父进程启动它**（`Start-Process -NoNewWindow`、`cmd /c`、CI 里的 `subprocess` 只要父子同控制台即可），或者显式把 `TEMP`/`TMP` 指向一个可写的已存在目录再启动。这不是应用逻辑缺陷，控制台版（`console=True`）不会有这个问题。
 - **存储版本升级？** 见 [`docs/storage-migrations.md`](docs/storage-migrations.md)。
 
 ## ❤️ 贡献与反馈
