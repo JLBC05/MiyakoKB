@@ -46,6 +46,7 @@ import {
   listRecentInsightPageAnalyses,
   rebuildInsightOverview,
   rebuildInsightCompressedContext,
+  rebuildInsightEntityAlignment,
   rebuildInsightTimeline,
   rebuildInsightVectors,
   updateInsightNote,
@@ -961,6 +962,11 @@ export function getQAStatus(
 
 export async function rebuildCompressedContext(bookId: string): Promise<string> {
   const accepted = await rebuildInsightCompressedContext(bookId)
+  return accepted.jobIds[0]
+}
+
+export async function rebuildEntityAlignment(bookId: string): Promise<string> {
+  const accepted = await rebuildInsightEntityAlignment(bookId)
   return accepted.jobIds[0]
 }
 

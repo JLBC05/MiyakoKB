@@ -2,7 +2,13 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useInsightStore } from '@/stores/insightStore'
-import { listInsightEntities, type V2InsightEntity } from '@/api/v2/insight'
+import {
+  listInsightEntities,
+  rebuildInsightEntityAlignment,
+  type V2InsightEntity,
+} from '@/api/v2/insight'
+import { confirmProductAction } from '@/composables/useProductConfirm'
+import { showToast } from '@/utils/toast'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiInput from '@/components/ui/UiInput.vue'
 
@@ -15,6 +21,10 @@ const errorMessage = ref('')
 const selectedCategory = ref<string>('all')
 const searchQuery = ref('')
 const expandedEntityIds = ref<Set<string>>(new Set())
+const isRebuildingAlignment = ref(false)
+const rebuildTaskId = ref('')
+const rebuildBookId = ref('')
+const rebuildProgressLabel = ref('')
 
 const categories = [
   { key: 'all', label: '全部', icon: '🌐' },
@@ -117,6 +127,49 @@ function isExpanded(id: string): boolean {
   return expandedEntityIds.value.has(id)
 }
 
+function resetRebuildState(): void {
+  isRebuildingAlignment.value = false
+  rebuildTaskId.value = ''
+  rebuildBookId.value = ''
+  rebuildProgressLabel.value = ''
+}
+
+async function rebuildAlignment(): Promise<void> {
+  const queryBook = typeof route?.query?.book === 'string' ? route.query.book.trim() : ''
+  const bookId = insightStore.currentBookId || queryBook
+  if (!bookId || isRebuildingAlignment.value) return
+
+  isRebuildingAlignment.value = true
+  rebuildBookId.value = bookId
+  rebuildProgressLabel.value = '等待确认...'
+  const confirmed = await confirmProductAction({
+    title: '重建实体对齐',
+    message:
+      '确定要重新对齐实体吗？现有实体、别名与共现关系会保留到新版本构建并发布完成。',
+    confirmText: '重建',
+    cancelText: '取消',
+    tone: 'primary',
+  })
+  if (!confirmed) {
+    if (bookId === (insightStore.currentBookId || queryBook)) resetRebuildState()
+    return
+  }
+  if (bookId !== (insightStore.currentBookId || queryBook) || rebuildTaskId.value) return
+
+  rebuildProgressLabel.value = '准备启动...'
+  try {
+    const taskId = await rebuildInsightEntityAlignment(bookId)
+    rebuildTaskId.value = taskId.jobIds[0]
+    rebuildBookId.value = bookId
+    rebuildProgressLabel.value = '任务已启动'
+    showToast('实体对齐重建任务已启动', 'success')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '重建实体对齐失败'
+    showToast(message, 'error')
+    resetRebuildState()
+  }
+}
+
 watch(
   () => [insightStore.currentBookId, route?.query?.book],
   () => {
@@ -167,7 +220,22 @@ onMounted(() => {
         >
           刷新
         </UiButton>
+        <UiButton
+          variant="secondary"
+          size="sm"
+          :loading="isRebuildingAlignment"
+          :disabled="isRebuildingAlignment"
+          @click="rebuildAlignment"
+        >
+          {{ isRebuildingAlignment ? '重建中…' : '重建实体对齐' }}
+        </UiButton>
       </div>
+    </div>
+
+    <!-- Rebuild progress -->
+    <div v-if="rebuildProgressLabel" class="entity-browser-panel__rebuild-status" aria-live="polite">
+      {{ rebuildProgressLabel }}
+      <span v-if="rebuildTaskId" class="entity-browser-panel__rebuild-task">任务 {{ rebuildTaskId }}</span>
     </div>
 
     <!-- Error message -->
@@ -373,6 +441,25 @@ onMounted(() => {
   border-radius: 0.5rem;
   color: var(--entity-browser-text-red);
   margin-bottom: 1rem;
+}
+
+.entity-browser-panel__rebuild-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.6rem 1rem;
+  background: var(--entity-browser-surface-whisper-blue);
+  border: 1px solid var(--entity-browser-stroke-soft);
+  border-radius: 0.5rem;
+  color: var(--entity-browser-text-blue-bright-alt2);
+  margin-bottom: 1rem;
+}
+
+.entity-browser-panel__rebuild-task {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--entity-browser-text-blue-mid);
 }
 
 .entity-browser-panel__loading,

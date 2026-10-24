@@ -145,6 +145,14 @@ export function rebuildInsightVectors(bookId: string): Promise<V2AcceptedJob> {
   )
 }
 
+export function rebuildInsightEntityAlignment(bookId: string): Promise<V2AcceptedJob> {
+  return apiClient.post(
+    `${ROOT}/books/${encodeURIComponent(bookId)}/entity-alignment/rebuild`,
+    {},
+    { headers: { 'Idempotency-Key': newIdempotencyKey() } }
+  )
+}
+
 export function listInsightNotes(
   bookId: string,
   options: { cursor?: string; kind?: 'qa' | 'text'; limit?: number } = {}

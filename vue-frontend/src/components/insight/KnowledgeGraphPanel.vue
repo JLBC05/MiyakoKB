@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Graph } from '@antv/g6'
+import type { Graph as G6Graph } from '@antv/g6'
 import { useInsightStore } from '@/stores/insightStore'
 import { getInsightGraph, type V2InsightGraphNode, type V2InsightGraphEdge } from '@/api/v2/insight'
 import UiButton from '@/components/ui/UiButton.vue'
@@ -27,7 +27,7 @@ const selectedNodeId = ref<string | null>(null)
 const selectedEdgeId = ref<string | null>(null)
 
 const graphContainerRef = ref<HTMLDivElement | null>(null)
-let graph: Graph | null = null
+let graph: G6Graph | null = null
 let isMounted = false
 let renderSequence = 0
 
@@ -166,6 +166,9 @@ async function renderGraph(): Promise<void> {
   if (!container) return
   const sequence = ++renderSequence
   if (!graph) {
+    // G6 占图谱 chunk 的绝大部分体积，只有真正要画图时才加载它。
+    const { Graph } = await import('@antv/g6')
+    if (sequence !== renderSequence) return
     graph = new Graph({
       container,
       autoResize: true,

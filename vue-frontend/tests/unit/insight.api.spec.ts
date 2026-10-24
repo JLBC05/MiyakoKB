@@ -253,6 +253,20 @@ describe('insight v2 api', () => {
     expect(rebuild).toBe('compressed-context-job')
   })
 
+  it('rebuilds entity alignment through the dedicated backend endpoint', async () => {
+    postMock.mockResolvedValueOnce(accepted('entity-alignment-job'))
+    const { rebuildEntityAlignment } = await import('@/api/insight')
+
+    const jobId = await rebuildEntityAlignment('book/id one')
+
+    expect(postMock).toHaveBeenCalledWith(
+      '/api/v2/insight/books/book%2Fid%20one/entity-alignment/rebuild',
+      {},
+      { headers: { 'Idempotency-Key': expect.any(String) } }
+    )
+    expect(jobId).toBe('entity-alignment-job')
+  })
+
   it('serializes generic QA with the backend generic-mode contract', async () => {
     const body = [
       'event: status',
