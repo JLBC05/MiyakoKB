@@ -702,58 +702,57 @@ watch(
 
             <template v-else>
               <template v-if="activeKind === 'skill'">
-              <section v-if="summary?.one_liner" class="character-skill-section">
-                <h2 class="character-skill-section__title">一句话</h2>
-                <p class="character-skill-section__text">{{ summary.one_liner }}</p>
-              </section>
+                <section v-if="summary?.one_liner" class="character-skill-section">
+                  <h2 class="character-skill-section__title">一句话</h2>
+                  <p class="character-skill-section__text">{{ summary.one_liner }}</p>
+                </section>
 
-              <section v-if="summary?.persona_prompt" class="character-skill-section">
-                <div class="character-skill-section__head">
-                  <h2 class="character-skill-section__title">扮演提示</h2>
-                  <UiButton size="sm" variant="ghost" @click="copyText('persona', String(summary.persona_prompt))">
-                    {{ copied === 'persona' ? '已复制' : '复制' }}
-                  </UiButton>
-                </div>
-                <p class="character-skill-section__text">{{ summary.persona_prompt }}</p>
-              </section>
+                <section v-if="summary?.persona_prompt" class="character-skill-section">
+                  <div class="character-skill-section__head">
+                    <h2 class="character-skill-section__title">扮演提示</h2>
+                    <UiButton size="sm" variant="ghost" @click="copyText('persona', String(summary.persona_prompt))">
+                      {{ copied === 'persona' ? '已复制' : '复制' }}
+                    </UiButton>
+                  </div>
+                  <p class="character-skill-section__text">{{ summary.persona_prompt }}</p>
+                </section>
 
-              <section
-                v-for="block in skillSections"
-                :key="block.key"
-                class="character-skill-section"
-              >
-                <template v-if="entriesOf(block.key).length > 0">
-                  <h2 class="character-skill-section__title">{{ block.title }}</h2>
-                  <ul class="character-skill-entries">
-                    <li
-                      v-for="(entry, index) in entriesOf(block.key)"
-                      :key="`${block.key}-${index}`"
-                      class="character-skill-entries__item"
-                    >
-                      <span class="character-skill-entries__headline">{{ entryHeadline(entry) }}</span>
-                      <span v-if="entryDetail(entry)" class="character-skill-entries__detail">
-                        {{ entryDetail(entry) }}
-                      </span>
-                      <span class="character-skill-entries__foot">
-                        <span v-if="entryConfidence(entry)" class="character-skill-entries__confidence">
-                          {{ entryConfidence(entry) }}
+                <section
+                  v-for="block in skillSections"
+                  :key="block.key"
+                  class="character-skill-section"
+                >
+                  <template v-if="entriesOf(block.key).length > 0">
+                    <h2 class="character-skill-section__title">{{ block.title }}</h2>
+                    <ul class="character-skill-entries">
+                      <li
+                        v-for="(entry, index) in entriesOf(block.key)"
+                        :key="`${block.key}-${index}`"
+                        class="character-skill-entries__item"
+                      >
+                        <span class="character-skill-entries__headline">{{ entryHeadline(entry) }}</span>
+                        <span v-if="entryDetail(entry)" class="character-skill-entries__detail">
+                          {{ entryDetail(entry) }}
                         </span>
-                        <span class="character-skill-entries__citation">{{ entryCitation(entry) }}</span>
-                      </span>
+                        <span class="character-skill-entries__foot">
+                          <span v-if="entryConfidence(entry)" class="character-skill-entries__confidence">
+                            {{ entryConfidence(entry) }}
+                          </span>
+                          <span class="character-skill-entries__citation">{{ entryCitation(entry) }}</span>
+                        </span>
+                      </li>
+                    </ul>
+                  </template>
+                </section>
+
+                <section v-if="summary?.unknowns?.length" class="character-skill-section">
+                  <h2 class="character-skill-section__title">资料缺口</h2>
+                  <ul class="character-skill-entries">
+                    <li v-for="(item, index) in summary.unknowns" :key="`unknown-${index}`" class="character-skill-entries__item">
+                      <span class="character-skill-entries__headline">{{ item }}</span>
                     </li>
                   </ul>
-                </template>
-              </section>
-
-              <section v-if="summary?.unknowns?.length" class="character-skill-section">
-                <h2 class="character-skill-section__title">资料缺口</h2>
-                <ul class="character-skill-entries">
-                  <li v-for="(item, index) in summary.unknowns" :key="`unknown-${index}`" class="character-skill-entries__item">
-                    <span class="character-skill-entries__headline">{{ item }}</span>
-                  </li>
-                </ul>
-              </section>
-
+                </section>
               </template>
 
               <template v-else>

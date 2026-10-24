@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import AppShell from '@/components/ui/AppShell.vue'
 import MiyakoNavbar from '@/components/common/MiyakoNavbar.vue'
 import UiButton from '@/components/ui/UiButton.vue'
@@ -7,7 +7,6 @@ import UiField from '@/components/ui/UiField.vue'
 import UiInput from '@/components/ui/UiInput.vue'
 import UiSelect from '@/components/ui/UiSelect.vue'
 import UiCheckbox from '@/components/ui/UiCheckbox.vue'
-import ProductActionRow from '@/components/product/ProductActionRow.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import { useInsightStore } from '@/stores/insightStore'
 import { useSettingsAutoSave } from '@/composables/useSettingsAutoSave'
@@ -533,19 +532,19 @@ async function handleManualSave(): Promise<void> {
                 <div class="settings-param-block">
                   <h4 class="settings-subheading">分层架构与批次设定</h4>
                   <ProductStatusBanner
-                class="settings-cost-note"
-                tone="info"
-                title="性能与成本怎么估"
-              >
-                <ul class="settings-cost-note__list">
-                  <li>页分析请求数 = 总页数 ÷ 每批页数；每批再按「批内并发数」切成多个分片同时发出，墙钟约等于单请求时延 × 批数 ÷ 并发数。</li>
-                  <li>实测参考：387 页、每批 5 页、并发 3 → 页分析约 19 分钟；实体对齐按图批量裁决，1507 页整本 269 个请求、约 1 小时 52 分；向量索引 387 页约 48 秒。</li>
-                  <li>成本 ≈（页面图 + 提示词）输入 token × 单价 + 输出 token × 单价；开启思考模式时推理 token 计入输出，容易吃光预算，视觉分析建议关闭。</li>
-                  <li>并发不是越大越快：供应商限流会返回 429，实际吞吐由「最慢的那个分片」决定。</li>
-                </ul>
-              </ProductStatusBanner>
+                    class="settings-cost-note"
+                    tone="info"
+                    title="性能与成本怎么估"
+                  >
+                    <ul class="settings-cost-note__list">
+                      <li>页分析请求数 = 总页数 ÷ 每批页数；每批再按「批内并发数」切成多个分片同时发出，墙钟约等于单请求时延 × 批数 ÷ 并发数。</li>
+                      <li>实测参考：387 页、每批 5 页、并发 3 → 页分析约 19 分钟；实体对齐按图批量裁决，1507 页整本 269 个请求、约 1 小时 52 分；向量索引 387 页约 48 秒。</li>
+                      <li>成本 ≈（页面图 + 提示词）输入 token × 单价 + 输出 token × 单价；开启思考模式时推理 token 计入输出，容易吃光预算，视觉分析建议关闭。</li>
+                      <li>并发不是越大越快：供应商限流会返回 429，实际吞吐由「最慢的那个分片」决定。</li>
+                    </ul>
+                  </ProductStatusBanner>
 
-              <BatchSettingsTab
+                  <BatchSettingsTab
                     @update:config="insightStore.updateBatchConfig($event)"
                   />
                 </div>

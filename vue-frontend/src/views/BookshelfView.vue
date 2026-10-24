@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useBookshelfStore } from '@/stores/bookshelfStore'
 import { getV2ServerInfo } from '@/api/v2/system'
-import { createBooksExportJob, getBookDetail } from '@/api/bookshelf'
+import { createBooksExportJob } from '@/api/bookshelf'
 import { startAnalysis } from '@/api/insight'
 import { getBooksKnowledgeStatus } from '@/api/v2/insight'
 import type { BookKnowledgeStatus } from '@/api/v2/insight'
@@ -17,11 +17,7 @@ import PublicTrialNotice from '@/components/common/PublicTrialNotice.vue'
 import ProductActionRow from '@/components/product/ProductActionRow.vue'
 import ProductCardGrid from '@/components/product/ProductCardGrid.vue'
 import ProductEmptyState from '@/components/product/ProductEmptyState.vue'
-import ProductHeaderAction from '@/components/product/ProductHeaderAction.vue'
-import ProductHeaderMetaPill from '@/components/product/ProductHeaderMetaPill.vue'
-import ProductPageHeader from '@/components/product/ProductPageHeader.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
-import ProductThemeToggle from '@/components/product/ProductThemeToggle.vue'
 import AppShell from '@/components/ui/AppShell.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiIcon from '@/components/ui/UiIcon.vue'
@@ -30,7 +26,6 @@ import UiSpinner from '@/components/ui/UiSpinner.vue'
 import type { UiSelectValue } from '@/components/ui/selectTypes'
 import UiCheckbox from '@/components/ui/UiCheckbox.vue'
 import BaseModal from '@/components/common/BaseModal.vue'
-import { copyTextToClipboard } from '@/utils/clipboard'
 import { showToast, useToast } from '@/utils/toast'
 import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import { useRuntimeStore } from '@/stores/runtimeStore'
@@ -52,9 +47,6 @@ const PUBLIC_TRIAL_NOTICE_DISMISSED_KEY = 'saber_public_trial_notice_dismissed'
 
 const lanUrl = ref<string | null>(null)
 const isLocalProfile = computed(() => runtimeStore.capabilities?.profile === 'local')
-const showLanAccess = computed(
-  () => isLocalProfile.value && Boolean(lanUrl.value),
-)
 const isPublicProfile = computed(() => runtimeStore.capabilities?.profile === 'public')
 const publicTrialNoticeDismissed = ref(
   window.localStorage.getItem(PUBLIC_TRIAL_NOTICE_DISMISSED_KEY) === 'true',
@@ -72,13 +64,11 @@ const disabledFeatureMessage = computed(() => {
 const showBookModal = ref(false)
 const showImportModal = ref(false)
 const showDetailModal = ref(false)
-const showTagManageModal = ref(false)
 const editingBookId = ref<string | null>(null)
 const showBatchTagsModal = ref(false)
 const batchTagAction = ref<'add' | 'remove'>('add')
 const selectedBatchTagNames = ref(new Set<string>())
 const batchBusy = ref(false)
-let detailRequestVersion = 0
 
 const knowledgeStatusMap = ref<Record<string, BookKnowledgeStatus>>({})
 
@@ -101,10 +91,6 @@ const isEmpty = computed(() => (
   && bookshelfStore.selectedTagNames.length === 0
 ))
 const selectedBookCount = computed(() => bookshelfStore.selectedBookIds.size)
-const hasSelectedChapters = computed(() => bookshelfStore.books.some(book => (
-  bookshelfStore.selectedBookIds.has(book.id)
-  && (book.chapterCount ?? book.chapters?.length ?? 0) > 0
-)))
 const hasSelectedPages = computed(() => bookshelfStore.books.some(book => (
   bookshelfStore.selectedBookIds.has(book.id)
   && (book.totalPages ?? book.chapters?.reduce(
@@ -155,24 +141,12 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  detailRequestVersion += 1
   window.removeEventListener('pageshow', handlePageShow)
 })
-
-async function copyLanUrl() {
-  if (!lanUrl.value) return
-  const copied = await copyTextToClipboard(lanUrl.value)
-  showToast(copied ? '局域网地址已复制！' : '复制局域网地址失败', copied ? 'success' : 'error')
-}
 
 function dismissPublicTrialNotice(): void {
   publicTrialNoticeDismissed.value = true
   window.localStorage.setItem(PUBLIC_TRIAL_NOTICE_DISMISSED_KEY, 'true')
-}
-
-function openCreateBookModal() {
-  editingBookId.value = null
-  showBookModal.value = true
 }
 
 function openEditBookModal(bookId: string) {
@@ -181,17 +155,12 @@ function openEditBookModal(bookId: string) {
 }
 
 function closeBookDetail() {
-  detailRequestVersion += 1
   showDetailModal.value = false
 }
 
 function openBookDetail(bookId: string) {
   bookshelfStore.setCurrentBook(bookId)
   void router.push({ name: 'book-detail', params: { bookId } })
-}
-
-function openTagManageModal() {
-  showTagManageModal.value = true
 }
 
 function setSort(value: UiSelectValue) {

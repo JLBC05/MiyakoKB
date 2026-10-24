@@ -2,7 +2,6 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useInsightStore } from '@/stores/insightStore'
-import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import AppShell from '@/components/ui/AppShell.vue'
 import MiyakoNavbar from '@/components/common/MiyakoNavbar.vue'
 import BookSelector from '@/components/insight/BookSelector.vue'
@@ -19,7 +18,6 @@ import type { BookData } from '@/types'
 const route = useRoute()
 const router = useRouter()
 const insightStore = useInsightStore()
-const taskCenterStore = useTaskCenterStore()
 
 type GraphTabId = 'network' | 'entities' | 'synopsis'
 

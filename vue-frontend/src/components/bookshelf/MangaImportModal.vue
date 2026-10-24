@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import BaseModal from '@/components/common/BaseModal.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiIcon from '@/components/ui/UiIcon.vue'
@@ -16,7 +16,6 @@ import {
   confirmLocalImport,
   type VeneraComic,
   type LocalBookPreview,
-  type LocalChapterPreview,
   type LocalBookConfirmPayload,
 } from '@/api/v2/mangaImport'
 import { getV2Settings, saveV2SettingsTransaction } from '@/api/v2/settings'
@@ -385,7 +384,9 @@ onMounted(() => {
             :loading="isSavingVeneraBaseDir"
             :disabled="isSavingVeneraBaseDir"
             @click="saveVeneraBaseDir"
-          >保存并使用</UiButton>
+          >
+            保存并使用
+          </UiButton>
           <span class="venera-path-source">
             {{ veneraBaseDirSource === 'setting' ? '自定义目录' : '默认目录' }}
           </span>

@@ -5,7 +5,6 @@ import { useRouter } from 'vue-router'
 import { getBook, listChapterPages, type V2BookDetail, type V2PageSummary } from '@/api/v2/content'
 import { useToast } from '@/utils/toast'
 import { useAuthStore } from '@/stores/authStore'
-import { usePublicUserAccess } from '@/composables/usePublicUserAccess'
 import { useDialogLifecycle } from '@/composables/useDialogLifecycle'
 import UiButton from '@/components/ui/UiButton.vue'
 import ReaderCanvas from '@/components/reader/ReaderCanvas.vue'
@@ -29,7 +28,6 @@ const props = defineProps<{ bookId: string; chapterId: string }>()
 const router = useRouter()
 const toast = useToast()
 const auth = useAuthStore()
-const access = usePublicUserAccess()
 const shell = ref<ComponentPublicInstance | null>(null)
 const root = computed(() => shell.value?.$el as HTMLElement | undefined)
 const drawer = ref<HTMLElement | null>(null)
