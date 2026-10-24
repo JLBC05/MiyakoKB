@@ -143,8 +143,8 @@ def _show_dialog(message: str, log_hint: Path | None, detail: str) -> None:
     except Exception:
         pass
 
-    # No UI available at all: at least leave the trace in the failure log, which
-    # ``_write_failure_log`` has already written before this point.
+    # No UI could be shown. The traceback is already on disk: the caller wrote
+    # it before asking for any dialog, so there is nothing left to do here.
     _ = detail
 
 
