@@ -244,11 +244,37 @@ def test_direct_production_role_startup_requires_launcher_identity(
         env=_clean_role_environment(),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=30,
     )
 
     assert completed.returncode != 0
     assert "Launcher-issued epoch identity" in completed.stderr
+
+
+def test_role_entrypoint_writes_non_ascii_output_as_utf8(tmp_path: Path) -> None:
+    """A GBK console must not leak its code page into captured child output.
+
+    CI collects the bytes and decodes them as UTF-8, so a Chinese error message
+    written with the ANSI code page would either break log collection or hide
+    the real assertion. The dispatcher reconfigures the streams, which means the
+    child can be decoded strictly as UTF-8 no matter which host started it.
+    """
+    completed = subprocess.run(
+        [sys.executable, str(ENTRYPOINT), "--role", "api", "--data-dir", str(tmp_path / "api")],
+        cwd=PROJECT_ROOT,
+        env=_clean_role_environment(),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+
+    assert completed.returncode != 0
+    # The leading message is Chinese, so decoding strictly as UTF-8 above is
+    # itself the assertion; the literal pins the content so an empty or
+    # mojibake stream cannot slip through.
+    assert "API 进程启动或运行失败" in completed.stderr
 
 
 def test_launcher_exposes_only_the_target_roles_secret() -> None:

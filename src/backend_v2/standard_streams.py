@@ -10,6 +10,7 @@ def restore_standard_streams() -> None:
     if os.name != "nt" or all(
         getattr(sys, name) is not None for name in ("stdin", "stdout", "stderr")
     ):
+        _force_utf8_streams()
         return
 
     import _winapi
@@ -49,3 +50,23 @@ def restore_standard_streams() -> None:
             )
         setattr(sys, name, stream)
         setattr(sys, f"__{name}__", stream)
+
+
+def _force_utf8_streams() -> None:
+    """Write UTF-8 regardless of the host's ANSI code page.
+
+    A Windows console normally encodes Chinese output with the ANSI code page
+    (GBK on a zh-CN host), so anything that captures the child's bytes and
+    decodes them as UTF-8 — CI log collectors, ``subprocess.run(text=True)`` —
+    fails on the first non-ASCII message. Reconfiguring in place keeps the
+    underlying handles, so console parents and pipes both still work.
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # detached or already closed stream
+            continue

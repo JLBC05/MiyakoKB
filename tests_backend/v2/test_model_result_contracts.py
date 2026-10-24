@@ -27,6 +27,11 @@ def _config(platform):
     )
     for section in ("chat", "vlm"):
         config[section]["openai_options"]["execution"]["business_retries"] = 1
+    # These contracts describe parsing and retry semantics, not batching. Left at
+    # the default concurrency the worker would split a two-page batch into two
+    # shards, so each page would consume its own model reply and the single
+    # request each case scripts would be spent twice.
+    config["vlm"]["analyze_concurrency"] = 1
     return config
 
 
@@ -253,6 +258,9 @@ def test_partial_page_retry_over_http_publishes_global_results(insight_platform,
             )).scalar_one())
             payload["customBaseUrl"] = f"http://127.0.0.1:{server.server_port}/v1"
             payload["openaiOptions"]["execution"]["business_retries"] = 1
+            # One shard per batch keeps the request count deterministic: this case
+            # asserts on retry semantics, not on how a batch is split.
+            payload["analyzeConcurrency"] = 1
             connection.execute(update(provider_settings).where(
                 provider_settings.c.domain == "insight_vlm", provider_settings.c.provider == "ollama",
             ).values(payload_json=json.dumps(payload)))
