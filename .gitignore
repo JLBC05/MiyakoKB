@@ -119,6 +119,8 @@ CLAUDE.md
 # 例：tmp_switch_vlm_deepseek.py 含真实 API Key；temp/backup-before-cleanup/saber.sqlite3 含整份凭据库
 /tmp_*
 /_tmp_*
+# vite build 用的临时目录（$env:TEMP 重定向目标；构建时不要把产物写进默认 TEMP 之外的地方）
+vue-frontend/.vite-tmp/
 /dump_*
 /temp/
 *.sqlite3
