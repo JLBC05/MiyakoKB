@@ -117,8 +117,11 @@ for mod in ['src.backend_v2', 'flask', 'werkzeug', 'jinja2']:
     hiddenimports += collect_submodules(mod)
 
 # ===================== 排除项 =====================
+# ``tkinter`` is NOT excluded: src/backend_v2/startup_failure.py uses it to show
+# a native "MiyakoKB 启动失败" dialog, because the packaged executable runs
+# without a console and an uncaught startup error would otherwise be invisible.
 excludes = [
-    'tkinter', 'PyQt5', 'PyQt6', 'PySide2',
+    'PyQt5', 'PyQt6', 'PySide2',
     'IPython', 'jupyter', 'notebook', 'pytest', 'sphinx', 'docutils',
     # 已移除的翻译流水线本地推理栈，不再进入安装包
     'torch', 'torchvision', 'transformers', 'tensorboard', 'timm',

@@ -57,6 +57,40 @@ class DataRootAlreadyLocked(StorageError):
     pass
 
 
+LOCKED_MESSAGE = (
+    "这个数据目录正被另一个 MiyakoKB 实例占用。\n\n"
+    "常见原因：上一个 MiyakoKB 窗口被关掉了，但它在后台的核心进程"
+    "（MiyakoKB.exe）还在运行——关掉浏览器页面并不会让它退出。\n\n"
+    "请先在任务管理器的「详细信息」里结束所有 MiyakoKB.exe，然后重新启动。"
+)
+
+# The lock only needs to be exclusive against *other* launchers. Windows child
+# processes normally do not inherit the handle, but an inheritable handle would
+# let the API/Worker keep the data root locked after the launcher itself exits,
+# which surfaces as a confusing "already locked" error on the next start.
+HANDLE_FLAG_INHERIT = 0x00000001
+
+
+def _harden_lock_handle(handle) -> None:
+    if os.name != "nt":
+        return
+    try:
+        import msvcrt
+        from ctypes import wintypes, windll
+
+        handle_flags = windll.kernel32.SetHandleInformation
+        handle_flags.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD]
+        handle_flags.restype = wintypes.BOOL
+        handle_flags(
+            msvcrt.get_osfhandle(handle.fileno()),
+            wintypes.DWORD(HANDLE_FLAG_INHERIT),
+            wintypes.DWORD(0),
+        )
+    except (OSError, AttributeError, ValueError):
+        # Best effort: a failed call leaves the historical behaviour intact.
+        return
+
+
 class DataRootLock:
     def __init__(self, data_root: Path):
         self.data_root = data_root.resolve()
@@ -86,7 +120,8 @@ class DataRootLock:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             handle.close()
-            raise DataRootAlreadyLocked("another Saber Translator Launcher/Desktop already owns this data root；请先退出已有实例") from exc
+            raise DataRootAlreadyLocked(LOCKED_MESSAGE) from exc
+        _harden_lock_handle(handle)
         self._handle = handle
 
     def release(self) -> None:
