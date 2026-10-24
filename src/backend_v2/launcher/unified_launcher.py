@@ -67,6 +67,7 @@ class UnifiedLauncher:
         self.api_process: subprocess.Popen[str] | None = None
         self.worker_process: subprocess.Popen[str] | None = None
         self.job: ChildProcessJob | None = None
+        self.storage_manager: StorageManager | None = None
 
         self._stopping = threading.Event()
         self._lock = threading.Lock()
@@ -83,13 +84,36 @@ class UnifiedLauncher:
         The one-click launcher starts API/Worker in explicit test mode, so the
         locked conversion step that normally guards child startup has to run
         here; otherwise a fresh data root has no schema at all.
+
+        The manager stays open (lock still held) until :meth:`_confirm_storage`
+        runs after the API reports healthy: a storage upgrade only counts as
+        committed once the backend actually came up on the new schema, and
+        ``upgrade-pending.json`` keeps every business endpoint answered with
+        503 until then.
         """
         data_root = ensure_data_root(resolve_data_root(self.data_dir))
         profile = "local"
-        with StorageManager(data_root, profile) as manager:
+        manager = StorageManager(data_root, profile)
+        manager.__enter__()
+        try:
             result = manager.prepare(initialize_database)
             manager.before_start()
+        except Exception:
+            manager.__exit__(None, None, None)
+            raise
+        self.storage_manager = manager
         LOGGER.debug("统一启动器存储准备完成：%s", result.get("status"))
+
+    def _confirm_storage(self) -> None:
+        """Commit the storage upgrade once the API is healthy, then release the lock."""
+        manager = self.storage_manager
+        if manager is None:
+            return
+        try:
+            manager.confirm_ready()
+        finally:
+            manager.__exit__(None, None, None)
+            self.storage_manager = None
 
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -224,7 +248,26 @@ class UnifiedLauncher:
                 self._terminate_proc(self.worker_process, "Worker 进程")
                 self.worker_process = None
 
+        self._abandon_storage_upgrade()
         print("[守护启动器] 所有服务子进程已干净退出。")
+
+    def _abandon_storage_upgrade(self) -> None:
+        """Roll back an uncommitted storage upgrade before releasing the lock.
+
+        Children are already gone at this point: a backend that never became
+        healthy must not leave the root in the ``starting`` stage, otherwise the
+        next launch keeps answering every business endpoint with 503.
+        """
+        manager = self.storage_manager
+        if manager is None:
+            return
+        try:
+            manager.startup_failed(include_installed=True)
+        except Exception as exc:
+            LOGGER.debug("存储升级回滚失败：%s", exc)
+        finally:
+            manager.__exit__(None, None, None)
+            self.storage_manager = None
 
     def _poll_health(self) -> None:
         """Background health checker to notify user when ready and optionally open browser."""
@@ -236,6 +279,8 @@ class UnifiedLauncher:
                 req = urllib.request.Request(url, headers={"User-Agent": "MiyakoKB-Launcher"})
                 with urllib.request.urlopen(req, timeout=1.0) as resp:
                     if resp.status == 200:
+                        if not self._commit_storage_upgrade():
+                            return
                         print(f"\n[服务就绪] Web UI 地址: http://{self.host}:{self.port}")
                         print("[服务就绪] API 与 Worker 协同正常运行。按 Ctrl+C 可停止。\n")
                         if self.open_browser and not opened:
@@ -245,6 +290,23 @@ class UnifiedLauncher:
             except Exception:
                 pass
             time.sleep(0.5)
+        if not self._stopping.is_set() and self.storage_manager is not None:
+            print("[告警] 服务在 30 秒内未报告就绪，正在回滚存储升级并关闭。")
+            self.stop()
+
+    def _commit_storage_upgrade(self) -> bool:
+        """Report the storage upgrade as committed now that the API answered healthy.
+
+        Returns ``False`` when the commit failed; the supervisor must then shut
+        the children down instead of running on a half-admitted data root.
+        """
+        try:
+            self._confirm_storage()
+        except Exception as exc:
+            print(f"[错误] 存储升级提交失败: {exc}")
+            self.stop()
+            return False
+        return True
 
     def run(self) -> int:
         """Main supervisor loop."""
