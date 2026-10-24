@@ -592,10 +592,25 @@ class JobQueueRepository:
         *,
         owner_user_id: str,
     ) -> None:
-        """Reject body-supplied targets that do not belong to the request owner."""
+        """Reject body-supplied targets that do not belong to the request owner.
+
+        Ownership answers are memoised for the lifetime of the call: a batch of
+        thousands of page retries repeatedly asks about the same book, the same
+        analysis run and the same credential snapshots, and each of those used
+        to cost its own round trip per spec.
+        """
+        owned: dict[tuple[str, str], bool] = {}
 
         def require(statement, label: str) -> None:
-            if connection.execute(statement).scalar_one_or_none() is None:
+            # Every statement below binds the target id to ``id_1`` (SQLAlchemy
+            # names bound parameters after the column), so it identifies the
+            # subject together with the label.
+            key = (label, str(statement.compile().params.get("id_1", "")))
+            cached = owned.get(key)
+            if cached is None:
+                cached = connection.execute(statement).scalar_one_or_none() is not None
+                owned[key] = cached
+            if not cached:
                 raise JobNotFound(f"{label} not found")
 
         for spec in specs:
