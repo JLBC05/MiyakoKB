@@ -204,7 +204,9 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install "pytest>=8.4,<9"
-          python -m pytest tests_backend -q
+          # --durations=20 让这一步直接打印最慢的 20 个用例，便于定位 CI 上的长尾；
+          # -p no:cacheprovider 关闭 .pytest_cache，避免在 runner 上多写一遍磁盘。
+          python -m pytest tests_backend -q -p no:cacheprovider --durations=20
 
       - name: Verify frontend unit tests
         working-directory: vue-frontend
