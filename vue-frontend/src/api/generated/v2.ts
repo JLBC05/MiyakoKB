@@ -3834,23 +3834,57 @@ export interface components {
             comics: components["schemas"]["VeneraComic"][];
             total: number;
             veneraFound: boolean;
-            error?: string;
             baseDir?: string;
             /** @enum {string} */
             baseDirSource?: "setting" | "default";
             dbPath?: string;
         };
+        /** @description One concrete thing that went wrong during an import, at a precise granularity. */
+        ImportIssue: {
+            /** @enum {string} */
+            scope: "book" | "chapter" | "page" | "cover";
+            code: string;
+            reason: string;
+            chapter?: {
+                ordinal: number;
+                title: string;
+            } | null;
+            page?: number | null;
+        };
+        ImportIssueSummary: {
+            pagesFailed: number;
+            chaptersFailed: number;
+            bookFaults: number;
+            coverFailed: number;
+        };
+        ImportSkippedChapter: {
+            ordinal: number;
+            title: string;
+        };
+        /**
+         * @description Outcome for one comic. `status` is `success` when nothing went wrong, `partial` when
+         *     some chapters or pages were skipped (see `issues`), and `failed` when the whole comic
+         *     could not be imported. Retrying the same comic resumes the same book instead of
+         *     creating a duplicate.
+         */
         VeneraImportDetail: {
             comic_id: string;
-            book_id?: components["schemas"]["Uuid"];
+            book_id?: string | null;
+            title?: string;
             /** @enum {string} */
-            status: "success" | "failed";
+            status: "success" | "partial" | "failed";
             chapters?: number;
+            chaptersWritten: number;
             pages?: number;
-            error?: string;
+            pagesWritten: number;
+            resumed: boolean;
+            skippedChapters?: components["schemas"]["ImportSkippedChapter"][];
+            issues: components["schemas"]["ImportIssue"][];
+            summary: components["schemas"]["ImportIssueSummary"];
         };
         VeneraImportResult: {
             imported: number;
+            partial: number;
             failed: number;
             details: components["schemas"]["VeneraImportDetail"][];
         };
@@ -3895,15 +3929,31 @@ export interface components {
             cover_source_path?: string | null;
             chapters: components["schemas"]["LocalChapterConfirm"][];
         };
+        /**
+         * @description Outcome for one reviewed local book. Chapter and page level problems are listed in
+         *     `issues` instead of aborting the whole import; retrying the same book resumes the same
+         *     book id.
+         */
         LocalImportedBook: {
-            book_id: components["schemas"]["Uuid"];
+            book_id: string | null;
             title: string;
-            chapters_count: number;
-            pages_count: number;
-            status: string;
+            /** @enum {string} */
+            status: "success" | "partial" | "failed";
+            chapters?: number;
+            chaptersWritten: number;
+            pages?: number;
+            pagesWritten: number;
+            resumed: boolean;
+            skippedChapters?: components["schemas"]["ImportSkippedChapter"][];
+            issues: components["schemas"]["ImportIssue"][];
+            summary: components["schemas"]["ImportIssueSummary"];
         };
         LocalImportResult: {
-            status: string;
+            /** @enum {string} */
+            status: "success" | "partial" | "failed";
+            imported: number;
+            partial: number;
+            failed: number;
             imported_books: components["schemas"]["LocalImportedBook"][];
         };
         BookKnowledgeStatus: {
