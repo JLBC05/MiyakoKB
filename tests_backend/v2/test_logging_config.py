@@ -445,11 +445,11 @@ def test_json_log_details_never_break_business_values() -> None:
     circular: dict[str, object] = {}
     circular["self"] = circular
 
-    assert json_details({"path": Path("模型/文件.bin")}) == [
-        "{",
-        '  "path": "模型\\\\文件.bin"',
-        "}",
-    ]
+    # 路径分隔符随平台变化：Windows 上 str(Path(.)) 是 "模型\\文件.bin"（JSON 里再转义成
+    # 四个反斜杠），Linux/macOS 上是 "模型/文件.bin"。断言必须跟随当前平台，
+    # 否则这套用例只能在 Windows 上跑，CI 换到 Ubuntu 就会假红。
+    expected_path = json.dumps({"path": str(Path("模型/文件.bin"))}, ensure_ascii=False, indent=2)
+    assert json_details({"path": Path("模型/文件.bin")}) == expected_path.splitlines()
     assert json_details(circular) == ["{'self': {...}}"]
 
     class BrokenString:

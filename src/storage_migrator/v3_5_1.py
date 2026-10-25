@@ -13,6 +13,21 @@ from .v3_5_0 import validate as validate_previous
 
 SUFFIXES = {'.ttf', '.ttc', '.otf', '.woff', '.woff2'}
 
+# 文件名长度上限必须按 **字节** 而不是字符来定：Linux 的 ext4 限制是 255 字节，
+# 一个中文字符在 UTF-8 下占 3 字节，所以 80 个中文字符会变成 240 字节，
+# 加上 "-<36 位 uuid>.ttf" 后缀就超过 255，迁移会在目标路径上抛
+# OSError: [Errno 36] File name too long。留 120 字节（约 40 个中文字符）
+# 给显示名，后缀最多约 41 字节，总计控制在 200 字节以内，两平台都安全。
+_NAME_BUDGET_BYTES = 120
+
+
+def _truncate_utf8(value: str, budget: int) -> str:
+    """按 UTF-8 字节预算截断，且不把多字节字符切成半个。"""
+    encoded = value.encode('utf-8')
+    if len(encoded) <= budget:
+        return value
+    return encoded[:budget].decode('utf-8', errors='ignore')
+
 
 def _path(root, relative, owner):
     parts = PurePosixPath(relative).parts
@@ -80,7 +95,10 @@ def convert(root):
                     raise StorageError('旧字体资源缺失或越界')
                 if source.stat().st_size != row['byte_size'] or file_hash(source) != row['checksum']:
                     raise StorageError('旧字体资源内容校验失败')
-                name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', row['display_name']).strip(' .')[:80] or 'font'
+                name = _truncate_utf8(
+                    re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', row['display_name']).strip(' .'),
+                    _NAME_BUDGET_BYTES,
+                ).strip(' .') or 'font'
                 relative = f"fonts/users/{owner}/{name}-{row['id']}{source.suffix.lower()}"
             destination = _path(root, relative, owner)
             _copy(source, destination)
