@@ -80,7 +80,7 @@ MiyakoKB 处理的对象是**漫画的图片页**，产出的是**结构化的�
 | --- | --- |
 | **漫画导入** | 从 [Venera](https://github.com/wgh136/venera) 本地库导入，或从本地目录导入（先预览再确认）；按章落库为页与页面资产；Venera 数据目录可在设置里改 |
 | **逐页结构化分析** | 视觉模型逐页抽取页面概要、关键事件、连续性备注，以及角色 / 地点 / 物品 / 能力 / 概念五类实体 |
-| **实体对齐** | 跨章节消歧与别名合并：硬性规则（泛词与从属过滤、简称包含、同音与异体字、日期与编号区分）+ 按候选图分批的语义裁决；裁决缓存按书隔离，失败不写缓存 |
+| **实体对齐** | 跨章节消歧与别名合并：硬性规则（泛词与从属过滤、简称包含、同音与异体字、日期与编号区分）+ 按候选图分批的语义裁决 |
 | **分层聚合** | 页 → 分组 → 章 → 全书的多层汇总，可按范围触发（全书 / 增量 / 指定章节 / 指定页）；聚合粒度与每批页数可分别配置 |
 | **概述与压缩上下文** | 无剧透概览、剧情总结、压缩上下文，作为问答的全库资料 |
 | **剧情时间线** | 由分析结果生成事件与角色时间线 |
@@ -133,7 +133,7 @@ data-v2/
 
 ### 1. 获取程序
 
-- **发行包**：到 [Releases](https://github.com/JLBC05/MiyakoKB/releases) 下载 `MiyakoKB-<版本>.7z.001` 及其后续分卷（只有一个发行包，不再区分 CPU / GPU），全部放在同一目录后用 [7-Zip](https://www.7-zip.org/) 或 [Bandizip](https://www.bandisoft.com/bandizip/) 解压 `.7z.001`（Windows 内置解压与部分工具无法正确识别分卷 7z）。
+- **发行包**：到 [Releases](https://github.com/JLBC05/MiyakoKB/releases) 下载 `MiyakoKB-<版本>.7z`（**单个文件，不再分卷**，也不区分 CPU / GPU），用 [7-Zip](https://www.7-zip.org/) 或 [Bandizip](https://www.bandisoft.com/bandizip/) 解压后运行 `MiyakoKB.exe`（Windows 内置解压与 WinRAR 无法正确识别 7z）。
 - **源码运行**：见下方[源码开发](#-源码开发)。
 - 发行包**不含**本地模型运行时：视觉 / 语言 / 嵌入 / 重排全部通过 API 接入，首次启动后在「设置」中填写。
 
@@ -170,7 +170,7 @@ data-v2/
 ```bash
 # 后端
 python -m venv .venv
-.venv\Scripts\activate            # Windows
+.venv\Scripts\activate            # Windows（Linux/macOS: source .venv/bin/activate）
 pip install -r requirements.txt
 
 # 前端
@@ -221,7 +221,7 @@ python -m PyInstaller app.spec --clean     # 产物在 dist/MiyakoKB/
 python .github/scripts/probe_package.py dist/MiyakoKB/MiyakoKB.exe   # 逐角色启动探测
 ```
 
-推送 `v*` tag 或手动触发 `.github/workflows/release.yml`：工作流会跑后端测试 + 前端门禁（含 `check:api`）+ 打包探测，再产出单一发行包的 7z 分卷资产（`MiyakoKB-<version>.7z*`）。`version.json` 的 `version` 必须与 tag 一致。
+推送 `v*` tag 或手动触发 `.github/workflows/release.yml`：工作流会跑后端测试 + 前端门禁（含 `check:api`）+ 打包探测，再产出单一发行包的单个 7z 资产（`MiyakoKB-<version>.7z`，不分卷）。`version.json` 的 `version` 必须与 tag 一致。
 
 ## ❓ 常见问题
 
@@ -232,7 +232,7 @@ python .github/scripts/probe_package.py dist/MiyakoKB/MiyakoKB.exe   # 逐角色
 - **想换模型提供商？** 任务的模型配置在启动时冻结，改设置只影响下一个任务；换完请重新触发分析（已发布的页结果可用「增量」范围复用）。
 - **实体对齐很慢？** 它是把整张候选图分批送模型裁决，规模取决于书的大小与概念类实体数量；`INSIGHT_ALIGN_*` 环境变量可调批大小、并发、候选面与概念最小页数，`INSIGHT_ANALYZE_PARALLEL` 控制页分析的批内并发。
 - **设置里某页签「恢复默认」会动到密钥吗？** 不会，只恢复该页签的非凭据字段；换机器搬配置用「导出备份 / 导入备份」，备份**不含**密钥，导入后需重新填写。
-- **打包产物（`MiyakoKB.exe`）在 Windows 上直接双击能开，但 `--version` / `--probe` 之类命令式调用报 `No usable temporary directory found`？** 该发行包是无控制台（windowed）子系统程序，只要它的**工作目录或 `TEMP` 落在系统临时目录之内**，Python 的 `tempfile` 就无法证明任何候选目录可写，连 `--version` 都会失败。CI 的每一步恰好从系统临时目录下的新目录启动，所以这是发行流程的必踩坑。修法是让**工作目录与 `TEMP`/`TMP` 都待在系统临时根目录之外**（比如项目目录旁边的一个空目录），三者缺一不可：只把 `TEMP` 指到临时目录内的另一个子目录无效。`.github/scripts/probe_package.py` 已经这么做了（它在检出目录旁建 `.package-probe/`，跑完自动删除）。这不是应用逻辑缺陷，控制台版（`console=True`）也不受影响。
+- **打包产物（`MiyakoKB.exe`）双击能开，但 `--version` / `--probe` 报 `No usable temporary directory found`？** 这是无控制台（windowed）发行包的已知行为：只要它的**工作目录或 `TEMP` 落在系统临时目录之内**，Python `tempfile` 就无法证明候选目录可写。修法是让工作目录与 `TEMP`/`TMP` 都待在系统临时根目录之外（三者缺一不可）。控制台版不受影响；CI 侧 `probe_package.py` 已规避，发行流程细节见 `.github/scripts/probe_package.py`。
 - **存储版本升级？** 见 [`docs/storage-migrations.md`](docs/storage-migrations.md)。
 
 ## ❤️ 贡献与反馈
