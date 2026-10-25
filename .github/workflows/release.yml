@@ -131,10 +131,37 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================================================
+  # 后端契约测试 Job
+  # ============================================================================
+  # 跑在 ubuntu-latest 而不是 windows-latest：这套测试是纯 Python + SQLite，
+  # 与打包平台无关，但 windows runner 的磁盘 I/O 会让它从 11 分钟膨胀到
+  # 30 分钟以上仍未完成。发布门槛不变——build 仍然 needs 它，失败就不打包。
+  backend-tests:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install "pytest>=8.4,<9"
+
+      - name: Verify backend contracts
+        run: python -m pytest tests_backend -q -p no:cacheprovider --durations=20
+
+  # ============================================================================
   # 构建 Job - 单一发行包，直接上传到 Release
   # ============================================================================
   build:
-    needs: prepare
+    needs: [prepare, backend-tests]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -200,13 +227,9 @@ jobs:
             throw "Frontend build changed generated static assets"
           }
 
-      - name: Verify backend contracts
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          python -m pip install "pytest>=8.4,<9"
-          # --durations=20 让这一步直接打印最慢的 20 个用例，便于定位 CI 上的长尾；
-          # -p no:cacheprovider 关闭 .pytest_cache，避免在 runner 上多写一遍磁盘。
-          python -m pytest tests_backend -q -p no:cacheprovider --durations=20
+      # 后端契约测试不再在这里跑：windows-latest 上同一套 825 个用例本机 11 分钟、
+      # runner 上 30 分钟仍未完成（三次复现，停在 [87%]）。已移到下面的
+      # backend-tests job（ubuntu-latest），build 通过 needs 等它。
 
       - name: Verify frontend unit tests
         working-directory: vue-frontend
@@ -299,7 +322,7 @@ jobs:
   # 完成 Job - 输出结果
   # ============================================================================
   complete:
-    needs: [prepare, build]
+    needs: [prepare, backend-tests, build]
     runs-on: ubuntu-latest
     if: always()
     
@@ -312,6 +335,7 @@ jobs:
           echo ""
           echo "Version: ${{ needs.prepare.outputs.version }}"
           echo "Tag: ${{ needs.prepare.outputs.tag_name }}"
+          echo "Backend tests result: ${{ needs.backend-tests.result }}"
           echo "Build result: ${{ needs.build.result }}"
           echo ""
           if [ "${{ needs.build.result }}" = "success" ]; then
