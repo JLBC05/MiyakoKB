@@ -145,8 +145,9 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
+          # 不能加 cache: pip —— 顶层 env 里有 PIP_NO_CACHE_DIR=1，
+          # setup-python 定位缓存时会跑 `pip cache dir` 并直接失败。
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
 
       - name: Install dependencies
         run: |
