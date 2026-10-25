@@ -6393,27 +6393,75 @@ components:
         comics: {type: array, items: {$ref: "#/components/schemas/VeneraComic"}}
         total: {type: integer, minimum: 0}
         veneraFound: {type: boolean}
-        error: {type: string}
         baseDir: {type: string}
         baseDirSource: {type: string, enum: [setting, default]}
         dbPath: {type: string}
+    ImportIssue:
+      type: object
+      additionalProperties: false
+      required: [scope, code, reason]
+      description: One concrete thing that went wrong during an import, at a precise granularity.
+      properties:
+        scope: {type: string, enum: [book, chapter, page, cover]}
+        code: {type: string}
+        reason: {type: string}
+        chapter:
+          type: [object, "null"]
+          additionalProperties: false
+          required: [ordinal, title]
+          properties:
+            ordinal: {type: integer}
+            title: {type: string}
+        page: {type: [integer, "null"]}
+    ImportIssueSummary:
+      type: object
+      additionalProperties: false
+      required: [pagesFailed, chaptersFailed, bookFaults, coverFailed]
+      properties:
+        pagesFailed: {type: integer, minimum: 0}
+        chaptersFailed: {type: integer, minimum: 0}
+        bookFaults: {type: integer, minimum: 0}
+        coverFailed: {type: integer, minimum: 0}
+    ImportSkippedChapter:
+      type: object
+      additionalProperties: false
+      required: [ordinal, title]
+      properties:
+        ordinal: {type: integer}
+        title: {type: string}
     VeneraImportDetail:
       type: object
       additionalProperties: false
-      required: [comic_id, status]
+      required: [comic_id, status, chaptersWritten, pagesWritten, resumed, issues, summary]
+      description: |
+        Outcome for one comic. `status` is `success` when nothing went wrong, `partial` when
+        some chapters or pages were skipped (see `issues`), and `failed` when the whole comic
+        could not be imported. Retrying the same comic resumes the same book instead of
+        creating a duplicate.
       properties:
         comic_id: {type: string}
-        book_id: {$ref: "#/components/schemas/Uuid"}
-        status: {type: string, enum: [success, failed]}
+        book_id: {type: [string, "null"]}
+        title: {type: string}
+        status: {type: string, enum: [success, partial, failed]}
         chapters: {type: integer, minimum: 0}
+        chaptersWritten: {type: integer, minimum: 0}
         pages: {type: integer, minimum: 0}
-        error: {type: string}
+        pagesWritten: {type: integer, minimum: 0}
+        resumed: {type: boolean}
+        skippedChapters:
+          type: array
+          items: {$ref: "#/components/schemas/ImportSkippedChapter"}
+        issues:
+          type: array
+          items: {$ref: "#/components/schemas/ImportIssue"}
+        summary: {$ref: "#/components/schemas/ImportIssueSummary"}
     VeneraImportResult:
       type: object
       additionalProperties: false
-      required: [imported, failed, details]
+      required: [imported, partial, failed, details]
       properties:
         imported: {type: integer, minimum: 0}
+        partial: {type: integer, minimum: 0}
         failed: {type: integer, minimum: 0}
         details: {type: array, items: {$ref: "#/components/schemas/VeneraImportDetail"}}
     LocalChapterPreview:
@@ -6482,19 +6530,44 @@ components:
     LocalImportedBook:
       type: object
       additionalProperties: false
-      required: [book_id, title, chapters_count, pages_count, status]
+      required:
+        - book_id
+        - title
+        - status
+        - chaptersWritten
+        - pagesWritten
+        - resumed
+        - issues
+        - summary
+      description: |
+        Outcome for one reviewed local book. Chapter and page level problems are listed in
+        `issues` instead of aborting the whole import; retrying the same book resumes the same
+        book id.
       properties:
-        book_id: {$ref: "#/components/schemas/Uuid"}
+        book_id: {type: [string, "null"]}
         title: {type: string}
-        chapters_count: {type: integer, minimum: 0}
-        pages_count: {type: integer, minimum: 0}
-        status: {type: string}
+        status: {type: string, enum: [success, partial, failed]}
+        chapters: {type: integer, minimum: 0}
+        chaptersWritten: {type: integer, minimum: 0}
+        pages: {type: integer, minimum: 0}
+        pagesWritten: {type: integer, minimum: 0}
+        resumed: {type: boolean}
+        skippedChapters:
+          type: array
+          items: {$ref: "#/components/schemas/ImportSkippedChapter"}
+        issues:
+          type: array
+          items: {$ref: "#/components/schemas/ImportIssue"}
+        summary: {$ref: "#/components/schemas/ImportIssueSummary"}
     LocalImportResult:
       type: object
       additionalProperties: false
-      required: [status, imported_books]
+      required: [status, imported, partial, failed, imported_books]
       properties:
-        status: {type: string}
+        status: {type: string, enum: [success, partial, failed]}
+        imported: {type: integer, minimum: 0}
+        partial: {type: integer, minimum: 0}
+        failed: {type: integer, minimum: 0}
         imported_books:
           type: array
           items: {$ref: "#/components/schemas/LocalImportedBook"}

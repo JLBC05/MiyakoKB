@@ -40,8 +40,15 @@ export interface QAResolvedEntities {
 }
 
 export interface QACitation {
+  /** 给人看的页码：默认是章内页码，元数据缺失时才回退全书页码（见 pageNumberSource）。 */
   page: number
   pageId?: string
+  /** page 的语义来源：chapter = 章内页码，run_global = 本 run 范围内的全书页码。 */
+  pageNumberSource?: 'chapter' | 'run_global'
+  /** 章内第几页；元数据缺失时为 null。 */
+  pageInChapter?: number | null
+  /** 全书（本 run 范围）页码，与模型看到的页码一致。 */
+  globalPageNumber?: number | null
   chapterOrdinal?: number
   chapterTitle?: string
   sourceUrl?: string

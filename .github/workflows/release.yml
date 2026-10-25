@@ -118,13 +118,13 @@ jobs:
             ### 下载说明
             
             📦 **普通用户（开箱即用）：**
-            - 下载所有 `MiyakoKB-${{ steps.version.outputs.VERSION }}.7z*` 文件
-            - 将所有分卷放在同一目录，使用 **7-Zip** 或 **Bandzip** 解压 `.7z.001` 文件即可
+            - 下载 `MiyakoKB-${{ steps.version.outputs.VERSION }}.7z`（**单个文件，无需拼分卷**）
+            - 使用 **7-Zip** 或 **Bandzip** 解压后运行 `MiyakoKB.exe`
             
             🔧 **源码部署用户：**
             - > 说明：模型不再随仓库分发，请按 README 的“运行”一节准备数据根与凭据；本版安装包已不含本地模型域
             
-            > ⚠️ 程序包采用 7z 分卷压缩格式，请使用 [7-Zip](https://www.7-zip.org/) 或 [Bandzip](https://www.bandisoft.com/bandizip/) 解压，Windows 内置解压和 WinRAR 可能无法正确识别
+            > ⚠️ 程序包采用 7z 压缩格式，请使用 [7-Zip](https://www.7-zip.org/) 或 [Bandzip](https://www.bandisoft.com/bandizip/) 解压，Windows 内置解压和 WinRAR 可能无法正确识别
           draft: true
           prerelease: false
         env:
@@ -266,21 +266,22 @@ jobs:
       # --------------------------------------------------
       # 10. 7z 分卷压缩（最高压缩率）
       # --------------------------------------------------
-      - name: Package with 7z split (ultra compression)
+      - name: Package with 7z (ultra compression)
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           $version = "${{ needs.prepare.outputs.version }}"
           $outputName = "MiyakoKB-$version"
           
-          Write-Host "Compressing with 7z format... Output: $outputName.7z (split at 1900MB)"
+          Write-Host "Compressing with 7z format... Output: $outputName.7z (single volume)"
           
           Push-Location dist
           
-          # -t7z: 7z native format (better compatibility than ZIP split)
+          # -t7z: 7z native format
           # -mx=9: Maximum compression level
           # -mfb=258: Maximum FastBytes
-          # -v1900m: Split at 1900MB
-          7z a -t7z -mx=9 -mfb=258 -v1900m "../$outputName.7z" "MiyakoKB/*"
+          # 不分卷：产物始终是单个 MiyakoKB-<版本>.7z，用户下载一个文件即可，
+          # 不再需要「把所有分卷放在同一目录再解压 .7z.001」。
+          7z a -t7z -mx=9 -mfb=258 "../$outputName.7z" "MiyakoKB/*"
           
           Pop-Location
           
@@ -298,18 +299,21 @@ jobs:
           
           Write-Host "Verifying compressed archives..."
           
-          # List all generated 7z split files
+          # 单包发行：这里应当恰好只有一个文件，多出来就是配置回归。
           $files = Get-ChildItem "$baseName.7z*" | Sort-Object Name
           
           Write-Host "Generated $($files.Count) archive file(s):"
           $files | Format-Table Name, @{N='SizeMB';E={[math]::Round($_.Length/1MB, 2)}}
           
-          # Verify the first split file (7z will check all parts)
-          $firstFile = $files | Select-Object -First 1
-          Write-Host "Testing archive integrity: $($firstFile.Name)"
-          7z t $firstFile.FullName
+          if ($files.Count -ne 1) {
+            throw "Expected exactly 1 archive file for $baseName.7z, found $($files.Count). Split volumes must not be produced anymore."
+          }
           
-          Write-Host "Archive verification passed!"
+          $archive = $files | Select-Object -First 1
+          Write-Host "Testing archive integrity: $($archive.Name)"
+          7z t $archive.FullName
+          
+          Write-Host "Archive verification passed:"
 
       # --------------------------------------------------
       # 12. 直接上传到 Release（不通过 artifacts）

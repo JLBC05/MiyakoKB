@@ -181,4 +181,47 @@ describe('apiClient error normalization', () => {
     })
   })
 
+  it('broadcasts one conflict event for every 409 so panels can refresh their snapshot', async () => {
+    const { CONFLICT_EVENT, onApiConflict } = await import('@/api/client')
+    const responseErrorHandler = responseUseMock.mock.calls[0]?.[1] as ResponseErrorHandler | undefined
+    if (!responseErrorHandler) throw new Error('response error interceptor was not registered')
+
+    const received: Array<{ code: string; url: string; method: string }> = []
+    const unsubscribe = onApiConflict((detail) => {
+      received.push({ code: detail.code, url: detail.url, method: detail.method })
+    })
+
+    const conflict = Object.assign(new Error('Request failed with status code 409'), {
+      code: 'ERR_BAD_RESPONSE',
+      config: { url: '/api/v2/jobs/abc/cancel', method: 'POST' },
+      response: {
+        status: 409,
+        data: { error: { code: 'invalid_job_transition', message: 'running does not accept cancel' } },
+      },
+    }) as AxiosError
+
+    try {
+      const error = await responseErrorHandler(conflict).catch((value: unknown) => value)
+      expect(error).toMatchObject({ status: 409, code: 'invalid_job_transition' })
+      expect(received).toEqual([
+        { code: 'invalid_job_transition', url: '/api/v2/jobs/abc/cancel', method: 'post' },
+      ])
+
+      // 非 409 不应广播，避免无关失败触发无谓刷新。
+      await responseErrorHandler(Object.assign(new Error('bad request'), {
+        code: 'ERR_BAD_REQUEST',
+        config: { url: '/api/v2/jobs/abc/cancel', method: 'POST' },
+        response: { status: 400, data: { error: { code: 'validation_error', message: 'bad' } } },
+      }) as AxiosError).catch(() => undefined)
+      expect(received).toHaveLength(1)
+    } finally {
+      unsubscribe()
+    }
+
+    // 取消订阅后不再收到事件。
+    await responseErrorHandler(conflict).catch(() => undefined)
+    expect(received).toHaveLength(1)
+    expect(CONFLICT_EVENT).toBe('miyako:conflict')
+  })
+
 })

@@ -1,0 +1,438 @@
+"""P1-1 导入韧性：部分失败可见、幂等重试、结构化错误。"""
+
+from __future__ import annotations
+
+import json
+import zipfile
+from pathlib import Path
+
+import pytest
+from flask import Flask
+from sqlalchemy import select
+from sqlalchemy.pool import StaticPool
+
+from src.backend_v2.auth.constants import LOCAL_USER_ID
+from src.backend_v2.content.image_import import ImageImportService
+from src.backend_v2.content.repository import ContentRepository
+from src.backend_v2.manga_import.importer_base import render_issues
+from src.backend_v2.manga_import.routes import create_manga_import_blueprint
+from src.backend_v2.manga_import.source_tag import display_title, parse_tag
+from src.backend_v2.storage.assets import AssetStorageService
+from src.backend_v2.storage.database import create_sqlite_engine
+from src.backend_v2.storage.schema import books, chapters, metadata, pages
+from src.backend_v2.storage.seeding import seed_system_records
+
+
+PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+    b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+@pytest.fixture()
+def env(tmp_path: Path):
+    data_root = tmp_path / "data"
+    for name in ("objects", "temp", "staging", "imports", "chroma"):
+        (data_root / name).mkdir(parents=True, exist_ok=True)
+    engine = create_sqlite_engine(data_root / "saber.sqlite3")
+    metadata.create_all(engine)
+    seed_system_records(engine)
+    repository = ContentRepository(engine)
+    storage = AssetStorageService(data_root, engine)
+    importer = ImageImportService(data_root=data_root, repository=repository, storage=storage)
+    app = Flask("manga-import-resilience-test")
+    app.register_blueprint(create_manga_import_blueprint(data_root=data_root, engine=engine))
+    return {
+        "data_root": data_root,
+        "engine": engine,
+        "app": app,
+        "client": app.test_client(),
+    }
+
+
+def _write_pages(folder: Path, count: int) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    for index in range(1, count + 1):
+        (folder / f"{index:03d}.png").write_bytes(PNG_BYTES)
+
+
+def _book_payload(title: str, chapters: list[dict]) -> dict:
+    return {"title": title, "chapters": chapters}
+
+
+# --------------------------------------------------------------------------
+# source_tag
+# --------------------------------------------------------------------------
+
+
+def test_source_tag_roundtrip_and_display() -> None:
+    from src.backend_v2.manga_import.source_tag import build_title, digest_for
+
+    wire = build_title("咒术回战", kind="venera", identifier="zhoushuhuizhan")
+    tag = parse_tag(wire)
+    assert tag is not None and tag.kind == "venera" and tag.identifier == "zhoushuhuizhan"
+    assert display_title(wire) == "咒术回战"
+    assert digest_for("venera", "zhoushuhuizhan") == tag.digest
+    # 无标记的标题原样返回
+    assert display_title("普通书名") == "普通书名"
+    assert parse_tag("普通书名") is None
+
+
+def test_source_tag_truncates_long_titles_but_stays_parseable() -> None:
+    from src.backend_v2.manga_import.source_tag import build_title
+
+    wire = build_title("长" * 900, kind="local", identifier="x" * 64)
+    display = display_title(wire)
+    assert 0 < len(display) < 900
+    assert parse_tag(wire) is not None
+
+
+# --------------------------------------------------------------------------
+# 本地导入：部分失败与幂等
+# --------------------------------------------------------------------------
+
+
+def test_local_import_reports_partial_when_one_chapter_is_missing(env, tmp_path: Path) -> None:
+    good = tmp_path / "ch1"
+    _write_pages(good, 2)
+    missing = tmp_path / "ch2-that-does-not-exist"
+
+    response = env["client"].post(
+        "/api/v2/import/local/confirm",
+        json={
+            "books": [
+                _book_payload(
+                    "混合批次",
+                    [
+                        {"title": "第一话", "ordinal": 1, "source_type": "folder", "source_path": str(good)},
+                        {"title": "第二话", "ordinal": 2, "source_type": "folder", "source_path": str(missing)},
+                    ],
+                )
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] == "partial"
+    assert body["imported"] == 0 and body["partial"] == 1
+    result = body["imported_books"][0]
+    assert result["status"] == "partial"
+    assert result["chaptersWritten"] == 1
+    assert result["pagesWritten"] == 2
+    assert result["summary"]["chaptersFailed"] == 1
+
+    codes = [issue["code"] for issue in result["issues"]]
+    assert "source_missing" in codes
+    issue = next(i for i in result["issues"] if i["code"] == "source_missing")
+    assert issue["scope"] == "chapter"
+    assert issue["chapter"]["ordinal"] == 2
+    assert issue["chapter"]["title"] == "第二话"
+
+    # readable text 也是结构化字段的一部分
+    assert any("第二话" in line for line in render_issues(result["issues"]))
+
+
+def test_local_import_is_idempotent_on_retry(env, tmp_path: Path) -> None:
+    ch1 = tmp_path / "c1"
+    ch2 = tmp_path / "c2"
+    _write_pages(ch1, 2)
+    _write_pages(ch2, 3)
+    payload = {
+        "books": [
+            _book_payload(
+                "可重试",
+                [
+                    {"title": "第一话", "ordinal": 1, "source_type": "folder", "source_path": str(ch1)},
+                    {"title": "第二话", "ordinal": 2, "source_type": "folder", "source_path": str(ch2)},
+                ],
+            )
+        ]
+    }
+
+    first = env["client"].post("/api/v2/import/local/confirm", json=payload).get_json()
+    first_result = first["imported_books"][0]
+    assert first["status"] == "success"
+    assert first_result["pagesWritten"] == 5
+    book_id = first_result["book_id"]
+
+    second = env["client"].post("/api/v2/import/local/confirm", json=payload).get_json()
+    second_result = second["imported_books"][0]
+
+    assert second_result["book_id"] == book_id
+    assert second_result["resumed"] is True
+    assert second_result["chaptersWritten"] == 0
+    assert second_result["pagesWritten"] == 0
+    assert len(second_result["skippedChapters"]) == 2
+
+    with env["engine"].connect() as conn:
+        imported_books = conn.execute(
+            select(books.c.id).where(books.c.owner_user_id == LOCAL_USER_ID, books.c.kind == "library")
+        ).all()
+        assert len(imported_books) == 1
+        book_id = imported_books[0].id
+        assert len(conn.execute(select(chapters.c.id).where(chapters.c.book_id == book_id)).all()) == 2
+        assert len(conn.execute(select(pages.c.id)).all()) == 5
+
+
+def test_local_import_title_strips_source_tag_in_api(env, tmp_path: Path) -> None:
+    ch1 = tmp_path / "only"
+    _write_pages(ch1, 1)
+    body = env["client"].post(
+        "/api/v2/import/local/confirm",
+        json={
+            "books": [
+                _book_payload(
+                    "带标记的书",
+                    [{"title": "第一话", "ordinal": 1, "source_type": "folder", "source_path": str(ch1)}],
+                )
+            ]
+        },
+    ).get_json()
+
+    result = body["imported_books"][0]
+    assert result["title"] == "带标记的书"
+
+    with env["engine"].connect() as conn:
+        our_books = conn.execute(
+            select(books.c.title).where(books.c.title.like("%⟦miyako:local:%"))
+        ).all()
+    assert len(our_books) == 1
+    stored = our_books[0].title
+    assert parse_tag(stored) is not None
+    assert display_title(stored) == "带标记的书"
+
+
+def test_local_import_rejects_book_without_usable_chapters(env, tmp_path: Path) -> None:
+    body = env["client"].post(
+        "/api/v2/import/local/confirm",
+        json={
+            "books": [
+                _book_payload(
+                    "空书",
+                    [
+                        {
+                            "title": "缺序号",
+                            "source_type": "folder",
+                            "source_path": str(tmp_path),
+                        }
+                    ],
+                )
+            ]
+        },
+    ).get_json()
+
+    assert body["status"] == "failed"
+    result = body["imported_books"][0]
+    assert result["status"] == "failed"
+    codes = [issue["code"] for issue in result["issues"]]
+    assert "source_invalid" in codes
+    assert result["summary"]["chaptersFailed"] == 1
+    assert result["book_id"] is None
+
+
+def test_local_import_rejects_duplicate_ordinals(env, tmp_path: Path) -> None:
+    ch1 = tmp_path / "dup1"
+    ch2 = tmp_path / "dup2"
+    _write_pages(ch1, 1)
+    _write_pages(ch2, 1)
+    body = env["client"].post(
+        "/api/v2/import/local/confirm",
+        json={
+            "books": [
+                _book_payload(
+                    "重复序号",
+                    [
+                        {"title": "一", "ordinal": 1, "source_type": "folder", "source_path": str(ch1)},
+                        {"title": "一b", "ordinal": 1, "source_type": "folder", "source_path": str(ch2)},
+                    ],
+                )
+            ]
+        },
+    ).get_json()
+
+    result = body["imported_books"][0]
+    codes = [issue["code"] for issue in result["issues"]]
+    assert "source_invalid" in codes
+    # 第一话成功、重复那一章被报出来
+    assert result["chaptersWritten"] == 1
+    assert body["status"] == "partial"
+
+
+# --------------------------------------------------------------------------
+# Venera 导入：部分失败与幂等
+# --------------------------------------------------------------------------
+
+
+def _write_venera_library(base_dir: Path, *, directory: str, downloaded: list[str], chapters_map: dict) -> None:
+    import sqlite3
+
+    base_dir.mkdir(parents=True, exist_ok=True)
+    (base_dir / "local" / directory).mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(base_dir / "local.db")
+    conn.execute(
+        "CREATE TABLE comics (id TEXT, title TEXT, subtitle TEXT, tags TEXT, directory TEXT, "
+        "chapters TEXT, cover TEXT, comic_type TEXT, downloadedChapters TEXT, created_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO comics VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            "comic-1",
+            "咒术回战",
+            "",
+            "[]",
+            directory,
+            json.dumps(chapters_map),
+            "",
+            "",
+            json.dumps(downloaded),
+            "2026-01-01T00:00:00Z",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _write_chapter_dir(base_dir: Path, directory: str, uuid: str, pages: int) -> None:
+    target = base_dir / "local" / directory / uuid
+    _write_pages(target, pages)
+
+
+def test_venera_import_reports_missing_chapter_directory(env, tmp_path: Path) -> None:
+    base = tmp_path / "venera"
+    _write_venera_library(
+        base,
+        directory="jjk",
+        downloaded=["u1", "u2"],
+        chapters_map={"默認": {"u1": "第1话", "u2": "第2话"}},
+    )
+    _write_chapter_dir(base, "jjk", "u1", 2)
+    # u2 的目录故意不创建
+
+    import src.backend_v2.manga_import.routes as routes_module
+
+    original = routes_module.resolve_venera_base_dir
+    routes_module.resolve_venera_base_dir = lambda engine: (base, "setting")
+    try:
+        response = env["client"].post("/api/v2/import/venera", json={"comic_ids": ["comic-1"]})
+    finally:
+        routes_module.resolve_venera_base_dir = original
+
+    body = response.get_json()
+    assert body["partial"] == 1 and body["failed"] == 0
+    detail = body["details"][0]
+    assert detail["status"] == "partial"
+    assert detail["chaptersWritten"] == 1
+    assert detail["pagesWritten"] == 2
+    codes = [issue["code"] for issue in detail["issues"]]
+    assert "source_missing" in codes
+
+
+def test_venera_import_is_idempotent_on_retry(env, tmp_path: Path) -> None:
+    base = tmp_path / "venera2"
+    _write_venera_library(
+        base,
+        directory="jjk2",
+        downloaded=["a1", "a2"],
+        chapters_map={"默認": {"a1": "第1话", "a2": "第2话"}},
+    )
+    _write_chapter_dir(base, "jjk2", "a1", 2)
+    _write_chapter_dir(base, "jjk2", "a2", 3)
+
+    import src.backend_v2.manga_import.routes as routes_module
+
+    original = routes_module.resolve_venera_base_dir
+    routes_module.resolve_venera_base_dir = lambda engine: (base, "setting")
+    try:
+        first = env["client"].post("/api/v2/import/venera", json={"comic_ids": ["comic-1"]}).get_json()
+        second = env["client"].post("/api/v2/import/venera", json={"comic_ids": ["comic-1"]}).get_json()
+    finally:
+        routes_module.resolve_venera_base_dir = original
+
+    assert first["imported"] == 1 and first["details"][0]["pagesWritten"] == 5
+    assert second["imported"] == 1
+    resumed = second["details"][0]
+    assert resumed["book_id"] == first["details"][0]["book_id"]
+    assert resumed["resumed"] is True
+    assert resumed["pagesWritten"] == 0
+    assert len(resumed["skippedChapters"]) == 2
+
+    with env["engine"].connect() as conn:
+        imported_books = conn.execute(
+            select(books.c.id).where(books.c.owner_user_id == LOCAL_USER_ID, books.c.kind == "library")
+        ).all()
+        assert len(imported_books) == 1
+
+
+def test_venera_library_returns_structured_error_when_apath_missing(env, monkeypatch) -> None:
+    monkeypatch.delenv("APPDATA", raising=False)
+
+    import src.backend_v2.manga_import.routes as routes_module
+
+    original = routes_module.resolve_venera_base_dir
+    routes_module.resolve_venera_base_dir = lambda engine: (_ for _ in ()).throw(
+        FileNotFoundError("APPDATA environment variable not found")
+    )
+    try:
+        response = env["client"].get("/api/v2/import/venera/library")
+    finally:
+        routes_module.resolve_venera_base_dir = original
+
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["error"]["code"] == "venera_data_dir_unavailable"
+    assert "APPDATA" in body["error"]["message"]
+
+
+def test_local_confirm_rejects_non_object_book_entries(env) -> None:
+    response = env["client"].post("/api/v2/import/local/confirm", json={"books": ["not-an-object"]})
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["status"] == "failed"
+    assert body["imported_books"][0]["issues"][0]["code"] == "import_crashed"
+
+
+def test_local_preview_validates_paths(env) -> None:
+    response = env["client"].post("/api/v2/import/local/preview", json={"paths": []})
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "validation_error"
+
+
+def test_legacy_untagged_book_is_adopted_instead_of_duplicated(env, tmp_path: Path) -> None:
+    """v0.1.0 导入的书标题没有溯源标记；重试应认领它而不是再造一本。"""
+    from sqlalchemy import update as sa_update
+
+    ch1 = tmp_path / "legacy"
+    _write_pages(ch1, 1)
+    payload = {
+        "books": [
+            _book_payload(
+                "老书",
+                [{"title": "第一话", "ordinal": 1, "source_type": "folder", "source_path": str(ch1)}],
+            )
+        ]
+    }
+
+    first = env["client"].post("/api/v2/import/local/confirm", json=payload).get_json()
+    book_id = first["imported_books"][0]["book_id"]
+
+    # 模拟旧版本留下的形态：标题是裸书名、没有标记。
+    with env["engine"].begin() as conn:
+        conn.execute(sa_update(books).where(books.c.id == book_id).values(title="老书"))
+
+    second = env["client"].post("/api/v2/import/local/confirm", json=payload).get_json()
+    result = second["imported_books"][0]
+    assert result["book_id"] == book_id
+    assert result["resumed"] is True
+    assert result["pagesWritten"] == 0
+
+    with env["engine"].connect() as conn:
+        titles = [
+            row.title
+            for row in conn.execute(
+                select(books.c.title).where(books.c.owner_user_id == LOCAL_USER_ID, books.c.kind == "library")
+            ).all()
+        ]
+    assert len(titles) == 1
+    assert parse_tag(titles[0]) is not None

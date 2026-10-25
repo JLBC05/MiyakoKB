@@ -17,9 +17,59 @@ import {
   type VeneraComic,
   type LocalBookPreview,
   type LocalBookConfirmPayload,
+  type ImportIssue,
 } from '@/api/v2/mangaImport'
 import { getV2Settings, saveV2SettingsTransaction } from '@/api/v2/settings'
 import { showToast } from '@/utils/toast'
+
+/** 导入结果里任何一条带有 issues 的条目（Venera 与本地两种形状共用）。 */
+type ImportedOutcome = { issues?: ImportIssue[]; title?: string; comic_id?: string; book_id?: string | null }
+
+function issueOwner(item: ImportedOutcome): string {
+  return item.title || item.comic_id || item.book_id || '这本书'
+}
+
+/** 把单条 issue 渲染成一句可读的话，带上章 / 页定位。 */
+function describeIssue(issue: ImportIssue, owner: string): string {
+  const chapter = issue.chapter
+  const where = chapter
+    ? `第${chapter.ordinal}话（${chapter.title}）${issue.scope === 'page' ? ` 第${issue.page}页` : ''}`
+    : issue.scope === 'cover'
+      ? '封面'
+      : '整本书'
+  return `${owner} · ${where}：${issue.reason}［${issue.code}］`
+}
+
+function issueLines(items: readonly ImportedOutcome[] | undefined | null): string[] {
+  const lines: string[] = []
+  for (const item of items ?? []) {
+    for (const issue of item.issues ?? []) {
+      lines.push(describeIssue(issue, issueOwner(item)))
+    }
+  }
+  return lines
+}
+
+/**
+ * 汇总文案：成功 / 部分成功 / 失败的计数，失败时附上首条具体原因，
+ * 避免过去「导入成功」但书残缺的情况。
+ */
+function summarizeIssues(
+  items: readonly ImportedOutcome[] | undefined | null,
+  partial: number,
+  failed: number
+): string {
+  const total = items?.length ?? 0
+  const lines = issueLines(items)
+  if (failed > 0 && total > 0 && failed === total) {
+    return lines[0] ?? `全部 ${total} 部漫画导入失败`
+  }
+  const ok = total - partial - failed
+  const head = partial > 0
+    ? `成功 ${ok} 部，部分失败 ${partial} 部${failed > 0 ? `，失败 ${failed} 部` : ''}`
+    : `成功导入 ${ok} 部漫画`
+  return lines.length > 0 ? `${head}：${lines[0]}` : head
+}
 
 const emit = defineEmits<{
   close: []
@@ -82,7 +132,7 @@ async function loadVeneraComics() {
     veneraBaseDir.value = res.baseDir ?? ''
     veneraBaseDirSource.value = res.baseDirSource === 'setting' ? 'setting' : 'default'
     if (!res.veneraFound) {
-      errorMessage.value = res.error || '未检测到 Venera，请确认已安装并下载漫画'
+      errorMessage.value = '未检测到 Venera，请确认已安装并下载漫画'
     }
   } catch (err: unknown) {
     veneraFound.value = false
@@ -173,15 +223,15 @@ async function handleImport() {
     clearTimeout(timer1)
     clearTimeout(timer2)
     importProgressText.value = `导入完成！`
-    importSubText.value = `成功导入 ${res.imported} 部漫画`
+    importSubText.value = summarizeIssues(res.details, res.partial, res.failed)
 
     await new Promise(r => setTimeout(r, 600))
-    if (res.imported > 0) {
-      showToast(`成功导入 ${res.imported} 部漫画！`, 'success')
+    if (res.imported > 0 || res.partial > 0) {
+      showToast(summarizeIssues(res.details, res.partial, res.failed), 'success')
       emit('imported')
       emit('close')
     } else {
-      showToast('导入失败，请查看控制台日志', 'error')
+      showToast(issueLines(res.details)[0] ?? '导入失败，请查看控制台日志', 'error')
     }
   } catch (err: unknown) {
     clearTimeout(timer1)
@@ -297,15 +347,15 @@ async function handleConfirmLocal() {
     clearTimeout(timer1)
     clearTimeout(timer2)
     importProgressText.value = `导入完成！`
-    importSubText.value = `已成功入库 ${res.imported_books.length} 部漫画`
+    importSubText.value = summarizeIssues(res.imported_books, res.partial, res.failed)
 
     await new Promise(r => setTimeout(r, 600))
-    if (res.imported_books && res.imported_books.length > 0) {
-      showToast(`成功导入 ${res.imported_books.length} 部漫画！`, 'success')
+    if ((res.imported ?? 0) > 0 || (res.partial ?? 0) > 0) {
+      showToast(summarizeIssues(res.imported_books, res.partial, res.failed), 'success')
       emit('imported')
       emit('close')
     } else {
-      showToast('导入失败，无有效漫画写入', 'error')
+      showToast(issueLines(res.imported_books)[0] ?? '导入失败，无有效漫画写入', 'error')
     }
   } catch (err: unknown) {
     clearTimeout(timer1)

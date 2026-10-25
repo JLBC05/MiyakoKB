@@ -12,7 +12,12 @@ export function useQANoteModal(insightStore: ReturnType<typeof useInsightStore>)
     bookId: string
     question: string
     answer: string
-    citations: Array<{ page: number }>
+    citations: Array<{
+      page: number
+      chapterOrdinal?: number
+      chapterTitle?: string
+      pageNumberSource?: 'chapter' | 'run_global'
+    }>
   } | null>(null)
   const noteTitle = ref('')
   const noteComment = ref('')

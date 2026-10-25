@@ -18,11 +18,16 @@ const emit = defineEmits<{
 const citationChips = computed<ProductChipItem[]>(() => {
   return (
     props.message.citations?.map((citation, index) => {
-      let label = `第${citation.page}页`
+      // 审计 P2-4：页码有两种语义。章内页码可以直接点开阅读器；全书页码只是
+      // 模型看到的编号，不能当阅读器位置用——标签里明确写出来，避免两者混为一张卡。
+      const pagePart = citation.pageNumberSource === 'run_global'
+        ? `全书第${citation.page}页`
+        : `第${citation.page}页`
+      let label = pagePart
       if (citation.chapterTitle) {
-        label = `${citation.chapterTitle}：第${citation.page}页`
+        label = `${citation.chapterTitle}：${pagePart}`
       } else if (citation.chapterOrdinal !== undefined) {
-        label = `第${citation.chapterOrdinal}话：第${citation.page}页`
+        label = `第${citation.chapterOrdinal}话：${pagePart}`
       }
       if (citation.source === 'entity') {
         label = `${label}（实体依据）`

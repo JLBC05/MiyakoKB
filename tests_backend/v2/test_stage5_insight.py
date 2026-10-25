@@ -5441,6 +5441,30 @@ def test_qa_citation_keeps_complete_current_excerpt() -> None:
     assert citations[0]["excerpt"] == document
 
 
+def test_qa_citation_without_page_metadata_labels_the_run_global_number() -> None:
+    """元数据缺失时必须显式降级，而不是把全书页码伪装成章内页码（审计 P2-4）。"""
+
+    citations = citations_for(
+        [
+            {
+                "id": "page-1",
+                "type": "page",
+                "pageId": "page-1",
+                "pageNumber": 42,
+                "document": "证据",
+                "hybridScore": 0.9,
+            }
+        ]
+    )
+
+    citation = citations[0]
+    assert citation["globalPageNumber"] == 42
+    assert citation["pageNumber"] == 42
+    # 没有章元数据时章内页码必须是 None，不能退化成同一个数字。
+    assert citation["pageInChapter"] is None
+    assert citation["pageNumberSource"] == "run_global"
+
+
 def test_qa_accepts_page_scoped_snapshot_after_vector_rebuild(
     insight_platform,
 ) -> None:
@@ -6568,6 +6592,11 @@ def test_qa_entity_evidence_pages_become_citable_candidates(
     assert citations[0]["pageId"] == page_id
     assert citations[0]["source"] == "page"
     assert citations[0]["chapterOrdinal"] is not None
+    # 审计 P2-4：页码双字段化——章内页码与全书页码各占一个显式字段，不再靠
+    # 「元数据命中就替换」的单字段切换语义。
+    assert citations[0]["globalPageNumber"] == 7
+    assert citations[0]["pageInChapter"] == citations[0]["pageNumber"]
+    assert citations[0]["pageNumberSource"] == "chapter"
 
     context = _answer_context(candidates, resolved_entities, locations=locations)
     assert "页话对应：第 1 话" in context

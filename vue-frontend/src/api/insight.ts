@@ -165,6 +165,11 @@ function requireQaCitations(value: unknown): QACitation[] {
     const excerpt = typeof raw.excerpt === 'string' ? raw.excerpt : undefined
     const source: QACitation['source'] =
       raw.source === 'entity' ? 'entity' : raw.source === 'page' ? 'page' : undefined
+    const pageInChapter = typeof raw.pageInChapter === 'number' ? raw.pageInChapter : (typeof raw.page_in_chapter === 'number' ? raw.page_in_chapter : null)
+    const globalPageNumber = typeof raw.globalPageNumber === 'number' ? raw.globalPageNumber : (typeof raw.global_page_number === 'number' ? raw.global_page_number : null)
+    const rawSource = typeof raw.pageNumberSource === 'string' ? raw.pageNumberSource : raw.page_number_source
+    const pageNumberSource: QACitation['pageNumberSource'] =
+      rawSource === 'run_global' ? 'run_global' : rawSource === 'chapter' ? 'chapter' : undefined
 
     if (pageNumber < 1) {
       throw new Error('问答引用字段无效')
@@ -172,6 +177,9 @@ function requireQaCitations(value: unknown): QACitation[] {
     return {
       page: pageNumber,
       pageId,
+      pageNumberSource,
+      pageInChapter,
+      globalPageNumber,
       chapterOrdinal,
       chapterTitle,
       sourceUrl,

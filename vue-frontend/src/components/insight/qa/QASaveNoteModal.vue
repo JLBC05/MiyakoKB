@@ -15,7 +15,12 @@ import UiTextarea from '@/components/ui/UiTextarea.vue'
 interface QANotePreviewData {
   question: string
   answer: string
-  citations: Array<{ page: number }>
+  citations: Array<{
+    page: number
+    chapterOrdinal?: number
+    chapterTitle?: string
+    pageNumberSource?: 'chapter' | 'run_global'
+  }>
 }
 
 const props = withDefaults(
@@ -51,11 +56,23 @@ const noteCommentModel = computed({
 
 const citationChips = computed<ProductChipItem[]>(() => {
   return (
-    props.pendingQAData?.citations.map(citation => ({
-      id: citation.page,
-      label: `第${citation.page}页`,
-      tone: 'primary',
-    })) ?? []
+    props.pendingQAData?.citations.map((citation, index) => {
+      // 与回答气泡保持同一套语义：章内页码 vs 全书页码不能混写。
+      const pagePart =
+        citation.pageNumberSource === 'run_global'
+          ? `全书第${citation.page}页`
+          : `第${citation.page}页`
+      const chapter = citation.chapterTitle
+        ? `${citation.chapterTitle}：`
+        : citation.chapterOrdinal !== undefined
+          ? `第${citation.chapterOrdinal}话：`
+          : ''
+      return {
+        id: index,
+        label: `${chapter}${pagePart}`,
+        tone: 'primary' as const,
+      }
+    }) ?? []
   )
 })
 </script>

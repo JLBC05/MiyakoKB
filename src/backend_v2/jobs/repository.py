@@ -1079,10 +1079,42 @@ class JobQueueRepository:
                     )
                     .limit(limit)
                 )
+                # audit P2-1：``limit`` 只约束过 ``limited_batch_ids``，裸
+                # ``jobs.status == "interrupted"`` 这一支没有上限——历史里只要
+                # 攒下大批 interrupted 任务，每次翻历史都会把它们全部拉回来。
+                # 这里把 interrupted 也收进同一个受 ``limit`` 约束的子查询：
+                # 取最近 ``limit`` 个 interrupted 批次的 id + 最近 ``limit`` 个
+                # 无批次的 interrupted 任务 id。
+                interrupted_batches = (
+                    select(job_batches.c.id)
+                    .where(
+                        job_batches.c.id.in_(interrupted_batch_ids),
+                    )
+                    .order_by(
+                        job_batches.c.created_at.desc(),
+                        job_batches.c.id.desc(),
+                    )
+                    .limit(limit)
+                )
+                lone_interrupted = (
+                    select(jobs.c.id)
+                    .where(
+                        jobs.c.status == "interrupted",
+                        jobs.c.owner_user_id == effective_owner_id(),
+                        jobs.c.batch_id.is_(None),
+                        *filters,
+                    )
+                    .order_by(
+                        jobs.c.finished_at.desc(),
+                        jobs.c.created_at.desc(),
+                        jobs.c.id.desc(),
+                    )
+                    .limit(limit)
+                )
                 statement = statement.where(
                     or_(
-                        jobs.c.status == "interrupted",
-                        jobs.c.batch_id.in_(interrupted_batch_ids),
+                        jobs.c.id.in_(lone_interrupted),
+                        jobs.c.batch_id.in_(interrupted_batches),
                         jobs.c.batch_id.in_(limited_batch_ids),
                     )
                 ).order_by(

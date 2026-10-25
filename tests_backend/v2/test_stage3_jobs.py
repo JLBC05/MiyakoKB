@@ -2642,6 +2642,38 @@ def test_batch_prioritize_cancel_and_continue_are_database_owned(
         ).scalars().all() == ["cancelled", "cancelled"]
 
 
+def test_history_list_limit_also_caps_interrupted_jobs(job_platform) -> None:
+    """audit P2-1：``limit`` 也必须约束 interrupted 这一支。
+
+    历史上只要攒下大批 interrupted 任务，翻历史会把它们全部拉回来
+    （裸 ``jobs.status == "interrupted"`` 不受 ``limit`` 约束）。
+    """
+
+    engine, repository, _book, _chapter, _worker_epoch_id = job_platform
+    job_ids: list[str] = []
+    for index in range(4):
+        job_id = _create_job(repository)
+        job_ids.append(job_id)
+        now = utcnow()
+        with engine.begin() as connection:
+            _set_stored_job_status(
+                connection,
+                job_id,
+                "interrupted",
+                queue_rank=None,
+                finished_at=now,
+                updated_at=now,
+            )
+
+    limited = repository.list_jobs(scope="history", limit=2)
+    returned = {str(row["jobId"]) for row in limited["items"]}
+
+    # 只返回最近的两个 interrupted 任务，而不是全部 4 个。
+    assert len(returned) == 2
+    assert returned <= set(job_ids)
+    assert job_ids[0] not in returned or job_ids[1] not in returned
+
+
 def test_interrupted_job_is_listed_only_in_history(job_platform) -> None:
     engine, repository, _book, _chapter, _worker_epoch_id = job_platform
     job_id = _create_job(repository)

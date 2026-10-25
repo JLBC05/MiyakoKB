@@ -13,6 +13,7 @@ import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import { useRuntimeStore } from '@/stores/runtimeStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useCustomAiProfileStore } from '@/stores/customAiProfileStore'
+import { onApiConflict, type ConflictEventDetail } from '@/api/client'
 
 const settingsStore = useSettingsStore()
 const taskCenterStore = useTaskCenterStore()
@@ -21,6 +22,7 @@ const authStore = useAuthStore()
 const customAiProfileStore = useCustomAiProfileStore()
 const route = useRoute()
 const router = useRouter()
+let unsubscribeConflict: () => void = () => {}
 const routerReady = ref(false)
 const settingsLoading = ref(false)
 const loadedSettingsContext = ref<string | null>(null)
@@ -132,9 +134,23 @@ function handleAuthenticationRequired(): void {
   }
 }
 
+/**
+ * 409 统一处理：后端告诉我们「你手上的快照已过期」。
+ *
+ * 任务中心相关的冲突（job / batch / 队列类路径）只需要重新拉一次快照，
+ * 用户的提示仍由各调用点自己给出，避免重复弹窗。
+ */
+function handleApiConflict(detail: ConflictEventDetail): void {
+  const url = detail.url
+  const touchesJobs = url.includes('/jobs') || url.includes('/job-batches')
+  if (!touchesJobs) return
+  void taskCenterStore.refresh().catch(() => undefined)
+}
+
 onMounted(async () => {
   appMounted = true
   window.addEventListener('saber:authentication-required', handleAuthenticationRequired)
+  unsubscribeConflict = onApiConflict(handleApiConflict)
   await router.isReady()
   if (appMounted) routerReady.value = true
 })
@@ -146,6 +162,7 @@ watch([routerReady, readerImmersiveMode, applicationContextReady, settingsContex
 onBeforeUnmount(() => {
   appMounted = false
   window.removeEventListener('saber:authentication-required', handleAuthenticationRequired)
+  unsubscribeConflict()
   taskCenterStore.disconnect()
 })
 </script>

@@ -170,10 +170,12 @@ def test_cover_endpoint_reports_missing_inputs_and_missing_files(venera_platform
     )
 
     (venera_platform["default_base"] / "local" / "测试漫画" / "cover.jpg").unlink()
-    body = client.get(
+    response = client.get(
         "/api/v2/import/venera/cover", query_string={"comicId": "comic-1"}
-    ).get_json()
-    assert body["error"] == "cover not found"
+    )
+    assert response.status_code == 404
+    # P1-2：错误体统一为 {"error": {"code", "message"}}，不再返回扁平字符串。
+    assert response.get_json()["error"]["code"] == "not_found"
 
 
 def test_library_and_cover_reject_directory_traversal(venera_platform) -> None:

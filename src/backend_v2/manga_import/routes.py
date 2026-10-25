@@ -9,6 +9,7 @@ from typing import Any
 from flask import Blueprint, jsonify, request, Response, send_file
 from sqlalchemy import select, insert, update
 
+from src.backend_v2.api.request_helpers import error_response as _error
 from src.backend_v2.storage.schema import books, chapters, pages, page_assets
 from src.backend_v2.content.repository import ContentRepository
 from src.backend_v2.settings.resolver import SettingsResolver
@@ -19,7 +20,9 @@ from src.backend_v2.timestamps import utcnow
 from src.backend_v2.auth.authorization import effective_owner_id
 from src.backend_v2.auth.constants import LOCAL_USER_ID
 from src.backend_v2.manga_import.local_preview import preview_local_paths
-from src.backend_v2.manga_import.local_confirm import import_single_local_book
+from src.backend_v2.manga_import.local_importer import import_single_local_book
+from src.backend_v2.manga_import.source_tag import display_title
+from src.backend_v2.manga_import.venera_importer import import_single_venera_comic
 
 def default_venera_base_dir() -> Path:
     """Venera 的默认数据目录（安装后即存在；用户可在导入界面覆盖）。"""
@@ -168,7 +171,7 @@ def _get_venera_comic_detail(base_dir: Path, comic_id: str) -> dict[str, Any] | 
     finally:
         conn.close()
 
-def import_single_venera_comic(
+def import_single_venera_comic_v2(
     *,
     base_dir: Path,
     comic_id: str,
@@ -176,146 +179,14 @@ def import_single_venera_comic(
     engine: object,
     importer: ImageImportService,
 ) -> dict[str, Any]:
-    comic = _get_venera_comic_detail(base_dir, comic_id)
-    if not comic:
-        return {"comic_id": comic_id, "status": "failed", "error": f"Venera comic '{comic_id}' not found in local.db"}
-
-    comic_dir = venera_comic_dir(base_dir, comic["directory"])
-    if comic_dir is None:
-        return {"comic_id": comic_id, "status": "failed", "error": f"Comic directory for '{comic_id}' is invalid"}
-    if not comic_dir.exists():
-        return {"comic_id": comic_id, "status": "failed", "error": f"Comic directory '{comic_dir}' does not exist"}
-
-    now = utcnow()
-    book_id = str(uuid.uuid4())
-    owner_id = effective_owner_id()
-
-    # 1. Publish cover asset (outside transaction)
-    cover_asset_id = None
-    cover_path = comic_dir / comic["cover"] if comic.get("cover") else None
-    if cover_path and cover_path.exists():
-        with cover_path.open("rb") as f:
-            cover_asset = importer.publish_cover(f)
-            cover_asset_id = cover_asset.id
-
-    # 2. Insert book record
-    with engine.begin() as conn:
-        conn.execute(
-            insert(books).values(
-                id=book_id,
-                owner_user_id=owner_id,
-                kind="library",
-                title=comic["title"],
-                chapter_order_revision=1,
-                cover_asset_id=cover_asset_id,
-                created_at=now,
-                updated_at=now,
-            )
-        )
-
-    # Resolve default page style
-    with engine.connect() as conn:
-        default_font_id, style_defaults = resolve_new_page_style(conn)
-
-    total_chapters = 0
-    total_pages = 0
-
-    downloaded = comic["downloaded_chapters"]
-    title_map = comic["chapter_title_map"]
-
-    for c_idx, ch_uuid in enumerate(downloaded, start=1):
-        ch_title = title_map.get(ch_uuid, f"第{c_idx}话")
-        chapter_dir = comic_dir / ch_uuid
-        if not chapter_dir.exists():
-            continue
-
-        chapter_id = str(uuid.uuid4())
-        ch_now = utcnow()
-        with engine.begin() as conn:
-            conn.execute(
-                insert(chapters).values(
-                    id=chapter_id,
-                    book_id=book_id,
-                    ordinal=c_idx,
-                    title=ch_title,
-                    page_order_revision=1,
-                    settings_memory_json="{}",
-                    settings_memory_revision=1,
-                    created_at=ch_now,
-                    updated_at=ch_now,
-                )
-            )
-
-        page_files = [f for f in chapter_dir.iterdir() if f.is_file() and f.suffix.lower() in (".webp", ".jpg", ".jpeg", ".png")]
-        page_files.sort(key=lambda f: int(f.stem) if f.stem.isdigit() else 999999)
-
-        batch_size = 50
-        for b_start in range(0, len(page_files), batch_size):
-            chunk = page_files[b_start : b_start + batch_size]
-            
-            # Step A: Publish image assets OUTSIDE open database transaction
-            published_chunk: list[tuple[int, str, Any, Any]] = []
-            for p_offset, p_file in enumerate(chunk):
-                p_ordinal = b_start + p_offset + 1
-                with p_file.open("rb") as pf:
-                    source_asset, thumb_asset = importer.publish_standalone_image(pf)
-                published_chunk.append((p_ordinal, p_file.name, source_asset, thumb_asset))
-
-            # Step B: Insert page records in a dedicated transaction
-            with engine.begin() as conn:
-                for p_ordinal, fname, source_asset, thumb_asset in published_chunk:
-                    page_id = str(uuid.uuid4())
-                    logical_path = f"{ch_uuid}/{fname}"
-                    p_now = utcnow()
-
-                    conn.execute(
-                        insert(pages).values(
-                            id=page_id,
-                            chapter_id=chapter_id,
-                            ordinal=p_ordinal,
-                            logical_source_path=logical_path,
-                            source_revision=1,
-                            document_revision=1,
-                            render_status="not_rendered",
-                            detection_state="unprocessed",
-                            default_font_id=default_font_id,
-                            page_style_defaults_json=json.dumps(style_defaults),
-                            warnings_json="[]",
-                            created_at=p_now,
-                            updated_at=p_now,
-                        )
-                    )
-
-                    conn.execute(
-                        insert(page_assets),
-                        [
-                            {
-                                "page_id": page_id,
-                                "role": "source",
-                                "asset_id": source_asset.id,
-                                "input_source_revision": 1,
-                                "parent_asset_id": None,
-                            },
-                            {
-                                "page_id": page_id,
-                                "role": "thumbnail_source",
-                                "asset_id": thumb_asset.id,
-                                "input_source_revision": 1,
-                                "parent_asset_id": source_asset.id,
-                            },
-                        ],
-                    )
-                    total_pages += 1
-
-        total_chapters += 1
-
-    return {
-        "comic_id": comic_id,
-        "book_id": book_id,
-        "status": "success",
-        "chapters": total_chapters,
-        "pages": total_pages,
-    }
+    """兼容包装：保留模块级旧入口名，实现已迁到 ``venera_importer``。"""
+    return import_single_venera_comic(
+        base_dir=base_dir,
+        comic_id=comic_id,
+        data_root=data_root,
+        engine=engine,
+        importer=importer,
+    )
 
 def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Blueprint:
     blueprint = Blueprint("manga_import_v2", __name__, url_prefix="/api/v2/import")
@@ -333,37 +204,46 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
         try:
             base_dir, source = resolve_venera_base_dir(engine)
             comics = list_venera_comics(base_dir)
-            return jsonify({
-                "comics": comics,
-                "total": len(comics),
-                "veneraFound": True,
-                "baseDir": str(base_dir),
-                "baseDirSource": source,
-                "dbPath": str(venera_local_db_path(base_dir)),
-            })
-        except Exception as e:
-            return jsonify({
-                "comics": [],
-                "total": 0,
-                "veneraFound": False,
-                "error": str(e),
-            }), 200
+        except FileNotFoundError as error:
+            return _error(
+                "venera_data_dir_unavailable",
+                f"未找到 Venera 数据目录，请在设置里指定：{error}",
+                503,
+            )
+        except Exception as error:  # noqa: BLE001 - 库读取失败要显式上报
+            return _error(
+                "venera_library_unreadable",
+                f"读取 Venera 书库失败：{error}",
+                500,
+            )
+        return jsonify({
+            "comics": comics,
+            "total": len(comics),
+            "veneraFound": True,
+            "baseDir": str(base_dir),
+            "baseDirSource": source,
+            "dbPath": str(venera_local_db_path(base_dir)),
+        })
 
     @blueprint.get("/venera/cover")
     def get_venera_cover() -> Response:
         comic_id = str(request.args.get("comicId") or "").strip()
         if not comic_id:
-            return jsonify({"error": "comicId is required"}), 400
+            return _error("validation_error", "comicId 不能为空", 400)
         try:
             base_dir, _ = resolve_venera_base_dir(engine)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 404
+        except Exception as error:  # noqa: BLE001
+            return _error(
+                "venera_data_dir_unavailable",
+                f"未找到 Venera 数据目录，请在设置里指定：{error}",
+                503,
+            )
         comic = _get_venera_comic_detail(base_dir, comic_id)
         if comic is None:
-            return jsonify({"error": "comic not found"}), 404
+            return _error("not_found", f"Venera 书库里没有漫画 '{comic_id}'", 404)
         path = venera_cover_path(base_dir, comic)
         if path is None:
-            return jsonify({"error": "cover not found"}), 404
+            return _error("not_found", f"漫画 '{comic_id}' 的封面文件不存在", 404)
         mimetype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         response = send_file(path, mimetype=mimetype, conditional=True)
         response.headers["Cache-Control"] = "private, max-age=3600"
@@ -374,41 +254,46 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
         payload = request.get_json(silent=True) or {}
         comic_ids = payload.get("comic_ids") or []
         if not isinstance(comic_ids, list) or not comic_ids:
-            return jsonify({"error": "comic_ids must be a non-empty array"}), 400
-
-        details = []
-        imported_count = 0
-        failed_count = 0
+            return _error("validation_error", "comic_ids 必须是非空数组", 400)
 
         try:
             base_dir, _ = resolve_venera_base_dir(engine)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except Exception as error:  # noqa: BLE001
+            return _error(
+                "venera_data_dir_unavailable",
+                f"未找到 Venera 数据目录，请在设置里指定：{error}",
+                503,
+            )
 
-        for cid in comic_ids:
+        imported_count = 0
+        partial_count = 0
+        failed_count = 0
+        details: list[dict[str, Any]] = []
+
+        for raw_id in comic_ids:
+            comic_id = str(raw_id)
             try:
-                res = import_single_venera_comic(
+                result = import_single_venera_comic(
                     base_dir=base_dir,
-                    comic_id=str(cid),
+                    comic_id=comic_id,
                     data_root=data_root,
                     engine=engine,
                     importer=importer,
                 )
-                details.append(res)
-                if res.get("status") == "success":
-                    imported_count += 1
-                else:
-                    failed_count += 1
-            except Exception as e:
-                details.append({
-                    "comic_id": str(cid),
-                    "status": "failed",
-                    "error": str(e),
-                })
+            except Exception as error:  # noqa: BLE001 - 单本失败不打断整批
+                result = _crash_result(comic_id, error)
+            status = str(result.get("status") or "failed")
+            if status == "success":
+                imported_count += 1
+            elif status == "partial":
+                partial_count += 1
+            else:
                 failed_count += 1
+            details.append(result)
 
         return jsonify({
             "imported": imported_count,
+            "partial": partial_count,
             "failed": failed_count,
             "details": details,
         })
@@ -419,41 +304,102 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
         paths = payload.get("paths") or []
         enable_ai_vision = bool(payload.get("enable_ai_vision", False))
         if not isinstance(paths, list) or not paths:
-            return jsonify({"error": "paths 必须是非空数组"}), 400
+            return _error("validation_error", "paths 必须是非空数组", 400)
 
         try:
             result = preview_local_paths(paths=paths, enable_ai_vision=enable_ai_vision)
-            return jsonify(result), 200
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 400
-        except Exception as e:
-            return jsonify({"error": f"扫描失败: {str(e)}"}), 500
+        except ValueError as error:
+            return _error("validation_error", str(error), 400)
+        except Exception as error:  # noqa: BLE001
+            return _error("scan_failed", f"扫描失败：{error}", 500)
+        return jsonify(result)
 
     @blueprint.post("/local/confirm")
     def confirm_local() -> Response:
         payload = request.get_json(silent=True) or {}
         books_payload = payload.get("books") or []
         if not isinstance(books_payload, list) or not books_payload:
-            return jsonify({"error": "books 必须是非空数组"}), 400
+            return _error("validation_error", "books 必须是非空数组", 400)
 
-        imported_books = []
-        for b_data in books_payload:
-            try:
-                res = import_single_local_book(
-                    b_data,
-                    data_root=data_root,
-                    engine=engine,
-                    importer=importer,
+        imported_books: list[dict[str, Any]] = []
+        for index, book_data in enumerate(books_payload, start=1):
+            if not isinstance(book_data, dict):
+                imported_books.append(
+                    _crash_result(
+                        f"book#{index}",
+                        ValueError("books 数组的每一项都必须是对象"),
+                    )
                 )
-                imported_books.append(res)
-            except ValueError as e:
-                return jsonify({"error": str(e)}), 400
-            except Exception as e:
-                return jsonify({"error": f"导入失败: {str(e)}"}), 500
+                continue
+            try:
+                imported_books.append(
+                    import_single_local_book(
+                        book_data,
+                        data_root=data_root,
+                        engine=engine,
+                        importer=importer,
+                    )
+                )
+            except Exception as error:  # noqa: BLE001 - 单本失败不打断整批
+                imported_books.append(_crash_result(f"book#{index}", error))
+
+        statuses = [str(item.get("status") or "failed") for item in imported_books]
+        if all(value == "failed" for value in statuses):
+            overall = "failed"
+        elif any(value != "success" for value in statuses):
+            overall = "partial"
+        else:
+            overall = "success"
 
         return jsonify({
-            "status": "ok",
+            "status": overall,
             "imported_books": imported_books,
+            "imported": statuses.count("success"),
+            "partial": statuses.count("partial"),
+            "failed": statuses.count("failed"),
         }), 200
 
     return blueprint
+
+
+def _crash_result(identifier: str, error: Exception) -> dict[str, Any]:
+    """把路由层捕获的异常也表达成与导入器一致的形状。"""
+    return {
+        "comic_id": identifier,
+        "book_id": None,
+        "status": "failed",
+        "chapters": 0,
+        "chaptersWritten": 0,
+        "pages": 0,
+        "pagesWritten": 0,
+        "resumed": False,
+        "skippedChapters": [],
+        "issues": [
+            {
+                "scope": "book",
+                "code": "import_crashed",
+                "reason": f"{type(error).__name__}: {error}",
+            }
+        ],
+        "summary": {"pagesFailed": 0, "chaptersFailed": 1, "bookFaults": 1, "coverFailed": 0},
+        "title": "",
+    }
+
+
+def _display_titles(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for item in items:
+        if isinstance(item, dict) and item.get("title"):
+            item["title"] = display_title(str(item["title"]))
+    return items
+
+
+__all__ = [
+    "create_manga_import_blueprint",
+    "default_venera_base_dir",
+    "import_single_venera_comic_v2",
+    "list_venera_comics",
+    "resolve_venera_base_dir",
+    "venera_comic_dir",
+    "venera_cover_path",
+    "venera_local_db_path",
+]

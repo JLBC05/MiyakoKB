@@ -31,7 +31,7 @@ describe('QASaveNoteModal', () => {
         pendingQAData: {
           question: '主角为什么离开？',
           answer: '**为了保护同伴。**',
-          citations: [{ page: 5 }],
+          citations: [{ page: 5, pageNumberSource: 'chapter' }],
         },
         renderMarkdown: (content: string) => content,
         visible: true,
@@ -51,7 +51,7 @@ describe('QASaveNoteModal', () => {
 
     const citations = wrapper.getComponent(ProductChipList)
     expect(citations.props('ariaLabel')).toBe('引用页码')
-    expect(citations.props('items')).toEqual([{ id: 5, label: '第5页', tone: 'primary' }])
+    expect(citations.props('items')).toEqual([{ id: 0, label: '第5页', tone: 'primary' }])
 
     expect(wrapper.getComponent(ProductDetailPanel).props('ariaLabel')).toBe('问答预览')
     const detailSections = wrapper.findAllComponents(ProductDetailSection)

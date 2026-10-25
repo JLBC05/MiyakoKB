@@ -23,6 +23,37 @@ export class ApiClientError extends Error implements ApiError {
   }
 }
 
+/** 统一冲突事件：任何 409 都会在 window 上广播一次，供 UI 统一刷新快照。 */
+export const CONFLICT_EVENT = 'miyako:conflict' as const
+
+export interface ConflictEventDetail {
+  /** 后端返回的业务错误码，例如 ``revision_conflict`` / ``invalid_job_transition``。 */
+  code: string
+  /** 后端原始提示，可能为空字符串。 */
+  message: string
+  /** 触发冲突的请求路径，便于 UI 判断要不要刷新对应面板。 */
+  url: string
+  /** HTTP 方法（小写）。 */
+  method: string
+}
+
+/**
+ * 订阅统一冲突事件。
+ *
+ * 返回取消订阅函数，调用方应在 ``onUnmounted`` 里调用，避免重复注册。
+ */
+export function onApiConflict(
+  handler: (detail: ConflictEventDetail) => void,
+): () => void {
+  if (typeof window === 'undefined') return () => {}
+  const listener = (event: Event) => {
+    const detail = (event as CustomEvent<ConflictEventDetail>).detail
+    if (detail) handler(detail)
+  }
+  window.addEventListener(CONFLICT_EVENT, listener)
+  return () => window.removeEventListener(CONFLICT_EVENT, listener)
+}
+
 function createApiError(error: AxiosError): ApiError {
   const response = error.response
   const data = response?.data
@@ -109,6 +140,18 @@ class ApiClient {
         const isSessionProbe = error.config?.url === '/api/v2/auth/me'
         if (apiError.status === 401 && !isSessionProbe && typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('saber:authentication-required'))
+        }
+        // 审计 P2-1：409 在 124 条路径上代表「你手上的快照过期了」。过去每个
+        // 调用点各自弹一句「冲突」，用户不知道该刷新什么。这里统一广播一次，
+        // 由 shell 层刷新任务中心与相关面板；调用点照旧展示各自的提示。
+        if (apiError.status === 409 && typeof window !== 'undefined') {
+          const detail: ConflictEventDetail = {
+            code: apiError.code,
+            message: apiError.message,
+            url: String(error.config?.url ?? ''),
+            method: String(error.config?.method ?? 'get').toLowerCase(),
+          }
+          window.dispatchEvent(new CustomEvent<ConflictEventDetail>(CONFLICT_EVENT, { detail }))
         }
         return Promise.reject(apiError)
       }

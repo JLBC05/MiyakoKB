@@ -82,6 +82,9 @@ from src.shared.user_logging import (
 
 
 LOGGER = logging.getLogger("saber.worker.insight_qa")
+# 客户端断开后多久检查一次取消信号（秒）。只在模型输出静默期（思考中）才会被感知，
+# 有分片到达时 on_chunk 会立刻中止。取值兼顾响应速度与轮询开销。
+_CANCELLATION_POLL_INTERVAL = 0.2
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]{2,}")
 _QUESTION_WORDS = frozenset(
     {
@@ -1695,6 +1698,23 @@ class DefaultQAApiAlgorithms:
                     continue
             return False
 
+        def publish_final(value: object) -> None:
+            """终态标记（``done`` 或异常）必须入队，否则消费方会一直等下去。
+
+            取消之后 ``publish_chunk`` 会立即返回 False，用它发 ``done`` 会让
+            ``stream_answer`` 的消费循环永远拿不到终止信号（实测挂死）。这里改为
+            跳过队列长度限制，并在必要时挤掉一个待发分片。
+            """
+            while True:
+                try:
+                    chunks.put(value, timeout=0.1)
+                    return
+                except queue.Full:
+                    try:
+                        chunks.get_nowait()
+                    except queue.Empty:
+                        pass
+
         def on_chunk(chunk: str, _full_text: str) -> None:
             if not publish_chunk(chunk):
                 raise ConnectionClosed("QA connection closed")
@@ -1723,11 +1743,60 @@ class DefaultQAApiAlgorithms:
             async def check_connection() -> None:
                 before_request()
 
-            await OpenAICompatibleAsyncExecutor().execute(
-                request,
-                capability=request.capability,
-                before_request=check_connection,
+            # 审计 P2-5：``cancelled`` 是 threading.Event，过去只在「下一次模型分片
+            # 到达」或请求开始前被看到。用户关页面后没人再读它，上游请求会一直跑到
+            # 300s 上限，白烧一整次回答的 token（推理模型尤甚）。
+            #
+            # 这里用一个纯 asyncio 的轮询协程与上游请求赛跑：
+            # * 不能用 ``asyncio.to_thread(cancelled.wait)``——流式响应里上游协程在
+            #   分片之间是纯 Python 等待，永远不会让出控制权去跑 ``call_soon`` 回调，
+            #   取消因此传不进去（实测会挂死）；
+            # * 分片到达时 ``on_chunk`` 会立刻发现自己被取消，所以最坏只多等一个
+            #   ``_CANCELLATION_POLL_INTERVAL`` 的模型静默期，也就是思考期。
+            async def wait_cancelled() -> None:
+                while not cancelled.is_set():
+                    await asyncio.sleep(_CANCELLATION_POLL_INTERVAL)
+                raise ConnectionClosed("QA connection closed")
+
+            upstream = asyncio.ensure_future(
+                OpenAICompatibleAsyncExecutor().execute(
+                    request,
+                    capability=request.capability,
+                    before_request=check_connection,
+                )
             )
+            watcher = asyncio.ensure_future(wait_cancelled())
+            try:
+                # 不能直接 ``await gather(watcher, upstream)``：watcher 只有在被取消
+                # 时才结束，正常回答时它永远 pending，gather 就永远不返回，于是
+                # ``done`` 永远不会入队、消费循环无限等待（实测挂死 100s+）。
+                # 改为「谁先结束就先处理」：上游先完成就收起 watcher 并返回结果，
+                # 取消先到就取消上游并抛 ConnectionClosed。
+                pending: set[asyncio.Future[object]] = {upstream, watcher}
+                while pending:
+                    finished, pending = await asyncio.wait(
+                        pending,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for future in finished:
+                        if future is upstream:
+                            upstream.result()  # 把上游异常原样抛出
+                            return
+                        future.result()  # watcher 只在被取消时结束，不会走到这里
+            except BaseException:
+                for pending_future in (upstream, watcher):
+                    if not pending_future.done():
+                        pending_future.cancel()
+                # 等被取消的协程真正收尾，再关掉 httpx 连接，避免响应流悬挂。
+                for pending_future in (upstream, watcher):
+                    try:
+                        await pending_future
+                    except BaseException:
+                        pass
+                raise
+            finally:
+                if not watcher.done():
+                    watcher.cancel()
 
         def run() -> None:
             try:
@@ -1739,9 +1808,9 @@ class DefaultQAApiAlgorithms:
             except ConnectionClosed:
                 pass
             except BaseException as exc:
-                publish_chunk(exc)
+                publish_final(exc)
             finally:
-                publish_chunk(done)
+                publish_final(done)
 
         producer_context = copy_context()
         thread = threading.Thread(
@@ -1963,6 +2032,7 @@ def citations_for(
         page_ids.append(page_id)
 
     page_metadata: dict[str, dict[str, Any]] = {}
+    metadata_failed = False
     if engine is not None and page_ids:
         try:
             with engine.connect() as conn:
@@ -1989,6 +2059,7 @@ def citations_for(
                 for r in conn.execute(query).mappings():
                     page_metadata[r["id"]] = dict(r)
         except Exception as exc:
+            metadata_failed = True
             LOGGER.warning("Failed to enrich citation chapter/page metadata: %s", exc)
 
     processed: set[str] = set()
@@ -2001,7 +2072,20 @@ def citations_for(
 
         meta = page_metadata.get(page_id, {})
         page_ordinal = meta.get("page_ordinal")
-        page_num = page_ordinal if page_ordinal is not None else row["pageNumber"]
+        # 审计 P2-4：过去这里用「章内序号命中就替换、失败就回退全书页码」的单字段，
+        # 同一字段会有两种语义。现在两个语义各占一个显式字段：
+        #   pageInChapter     —— 章内第几页（真实可点击位置，元数据缺失时为 None）
+        #   globalPageNumber  —— 该页在本 run 范围内的全书页码（模型看到的就是它）
+        # pageNumber 保留为「给人看的页码」，等于章内页码，元数据缺失时才退回全书页码，
+        # 同时用 pageNumberSource 明确告诉调用方它到底是哪一种。
+        page_in_chapter = page_ordinal if page_ordinal is not None else None
+        global_page_number = row["pageNumber"]
+        if page_in_chapter is not None:
+            page_num = page_in_chapter
+            page_number_source = "chapter"
+        else:
+            page_num = global_page_number
+            page_number_source = "run_global"
         chapter_ordinal = (
             meta.get("chapter_ordinal")
             if meta.get("chapter_ordinal") is not None
@@ -2021,6 +2105,12 @@ def citations_for(
                 "page_id": page_id,
                 "pageNumber": page_num,
                 "page_number": page_num,
+                "pageNumberSource": page_number_source,
+                "page_number_source": page_number_source,
+                "pageInChapter": page_in_chapter,
+                "page_in_chapter": page_in_chapter,
+                "globalPageNumber": global_page_number,
+                "global_page_number": global_page_number,
                 "chapterOrdinal": chapter_ordinal,
                 "chapter_ordinal": chapter_ordinal,
                 "chapterTitle": chapter_title,
@@ -2031,6 +2121,11 @@ def citations_for(
                 "excerpt": row["document"],
                 "score": row.get("rerankScore", row["hybridScore"]),
             }
+        )
+    if metadata_failed:
+        LOGGER.warning(
+            "Citation chapter metadata unavailable; %d citation(s) fall back to run-global page numbers",
+            len(citations),
         )
     return citations
 

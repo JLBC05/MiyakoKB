@@ -13,10 +13,36 @@ const assistantMessage: QAMessage = {
   role: 'assistant',
   content: '第 5 页揭示了关键线索。',
   mode: 'precise',
-  citations: [{ page: 5 }],
+  citations: [{ page: 5, pageNumberSource: 'chapter' }],
 }
 
 describe('QAMessageItem', () => {
+  it('labels a run-global page number explicitly instead of pretending it is a chapter page', () => {
+    // 审计 P2-4：章元数据缺失时后端回退成全书页码，界面上必须说明清楚。
+    const wrapper = mount(QAMessageItem, {
+      props: {
+        message: {
+          id: 'qa-message-global',
+          role: 'assistant',
+          content: '这条引用只有全书页码。',
+          citations: [{ page: 190, pageNumberSource: 'run_global' }],
+        },
+        renderMarkdown: content => `<p>${content}</p>`,
+      },
+    })
+
+    const citations = wrapper.getComponent(ProductChipList)
+    expect(citations.props('items')).toEqual([
+      {
+        id: 0,
+        label: '全书第190页',
+        ariaLabel: '查看 全书第190页',
+        interactive: true,
+        tone: 'primary',
+      },
+    ])
+  })
+
   it('uses explicit button semantics for citation navigation', async () => {
     const wrapper = mount(QAMessageItem, {
       props: {
@@ -46,7 +72,10 @@ describe('QAMessageItem', () => {
     citations.vm.$emit('select', 0)
 
     expect(wrapper.emitted('selectPage')?.[0]?.[0]).toBe(5)
-    expect(wrapper.emitted('previewCitation')?.[0]?.[0]).toEqual({ page: 5 })
+    expect(wrapper.emitted('previewCitation')?.[0]?.[0]).toEqual({
+      page: 5,
+      pageNumberSource: 'chapter',
+    })
   })
 
   it('formats citations with chapter when chapterOrdinal is provided', () => {

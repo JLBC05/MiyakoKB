@@ -19,7 +19,6 @@ export interface VeneraLibraryResponse {
   comics: VeneraComic[]
   total: number
   veneraFound: boolean
-  error?: string
   /** Venera 数据目录（用户设置优先，缺省为系统默认位置）。 */
   baseDir?: string
   /** baseDir 的来源：setting 表示用户在界面里设置过。 */
@@ -27,17 +26,47 @@ export interface VeneraLibraryResponse {
   dbPath?: string
 }
 
+/** 一条具体的导入问题：能定位到章、页或封面，用来替代过去被吞掉的失败。 */
+export interface ImportIssue {
+  scope: 'book' | 'chapter' | 'page' | 'cover'
+  code: string
+  reason: string
+  chapter?: { ordinal: number; title: string } | null
+  page?: number | null
+}
+
+export interface ImportIssueSummary {
+  pagesFailed: number
+  chaptersFailed: number
+  bookFaults: number
+  coverFailed: number
+}
+
+export interface ImportedChapterRef {
+  ordinal: number
+  title: string
+}
+
 export interface VeneraImportDetail {
   comic_id: string
-  book_id?: string
-  status: 'success' | 'failed'
+  book_id?: string | null
+  title?: string
+  /** partial 表示部分章节或页面被跳过，详见 issues。 */
+  status: 'success' | 'partial' | 'failed'
   chapters?: number
+  chaptersWritten?: number
   pages?: number
-  error?: string
+  pagesWritten?: number
+  /** 命中同一本已有书并续传，而不是新建一本。 */
+  resumed?: boolean
+  skippedChapters?: ImportedChapterRef[]
+  issues?: ImportIssue[]
+  summary?: ImportIssueSummary
 }
 
 export interface VeneraImportResponse {
   imported: number
+  partial: number
   failed: number
   details: VeneraImportDetail[]
 }
@@ -98,15 +127,26 @@ export interface LocalBookConfirmPayload {
   chapters: LocalChapterConfirmPayload[]
 }
 
+export interface LocalImportedBook {
+  book_id: string | null
+  title: string
+  status: 'success' | 'partial' | 'failed'
+  chapters?: number
+  chaptersWritten?: number
+  pages?: number
+  pagesWritten?: number
+  resumed?: boolean
+  skippedChapters?: ImportedChapterRef[]
+  issues?: ImportIssue[]
+  summary?: ImportIssueSummary
+}
+
 export interface LocalConfirmResponse {
-  status: string
-  imported_books: Array<{
-    book_id: string
-    title: string
-    chapters_count: number
-    pages_count: number
-    status: string
-  }>
+  status: 'success' | 'partial' | 'failed'
+  imported: number
+  partial: number
+  failed: number
+  imported_books: LocalImportedBook[]
 }
 
 export async function previewLocalManga(paths: string[], enableAiVision = false): Promise<LocalPreviewResponse> {
