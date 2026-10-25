@@ -2,3 +2,5 @@
 # Auto detection preserves binary files such as images and fonts.
 /vue-frontend/** text=auto eol=lf
 /src/backend_v2/static/vue/** text=auto eol=lf
+src/backend_v2/static/vue/** linguist-generated=true
+vue-frontend/src/api/generated/** linguist-generated=true
