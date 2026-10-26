@@ -1533,7 +1533,10 @@ def test_asset_gc_restores_the_row_when_the_file_cannot_be_removed(
     real_unlink = Path.unlink
 
     def _refusing_unlink(self, *args, **kwargs):
-        if Path(self) == target:
+        # resolve_relative_path may hand back a \\?\ prefixed path on Windows,
+        # so compare file names: matching on the full path silently skipped this
+        # branch there and the test asserted nothing about the restore path.
+        if Path(self).name == target.name:
             raise PermissionError("file is locked")
         return real_unlink(self, *args, **kwargs)
 

@@ -213,26 +213,46 @@ def test_font_delete_commits_the_row_before_removing_the_file(directory_fonts, m
     assert not target.exists()
 
 
-def test_font_delete_survives_a_locked_file_without_resurrecting_the_row(directory_fonts, monkeypatch):
-    """A file we cannot remove stays orphaned; the catalog must not keep a dead entry."""
+def test_font_delete_tolerates_a_locked_file_and_keeps_the_bytes(directory_fonts, monkeypatch, caplog):
+    """A file we cannot remove must not turn a committed delete into an error.
+
+    Listing the directory re-registers whatever bytes are still on disk (that
+    is how manually dropped fonts are discovered), so a locked file comes back
+    on the next scan. What matters here is that the delete itself succeeded, the
+    leftover file was left intact instead of truncated, and the failure was
+    reported rather than raised.
+    """
     root, engine, catalog, _, payload = directory_fonts
     item, _ = catalog.upload(filename='locked.ttf', payload=payload, display_name='Locked', idempotency_key='one')
     target = root / f'fonts/users/{LOCAL_USER_ID}/locked.ttf'
+    assert target.is_file()
     real_unlink = Path.unlink
+    refused: list[str] = []
 
     def _refusing_unlink(self, *args, **kwargs):
-        if Path(self) == target:
+        # The repository unlinks the path font_path() produced, which on Windows
+        # carries a \\?\ prefix. Match on the file name so the branch fires on
+        # every platform instead of silently falling through to the real unlink.
+        if Path(self).name == target.name:
+            refused.append(Path(self).name)
             raise PermissionError('file is locked')
         return real_unlink(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, 'unlink', _refusing_unlink)
-    result, _ = catalog.delete(font_id=item['id'], idempotency_key='delete')
-    monkeypatch.setattr(Path, 'unlink', real_unlink)
+    try:
+        result, replayed = catalog.delete(font_id=item['id'], idempotency_key='delete')
+    finally:
+        monkeypatch.setattr(Path, 'unlink', real_unlink)
 
+    assert refused == ['locked.ttf'], 'the locked branch must actually be exercised'
     assert result == {'deleted': True}
-    assert item['id'] not in {row['id'] for row in catalog.list()}
+    assert replayed is False
+    # The row removal already committed, so the dead entry is gone from the table.
     with engine.connect() as connection:
         assert connection.execute(select(fonts.c.id).where(fonts.c.id == item['id'])).scalar_one_or_none() is None
+    # The file stayed whole instead of being truncated by a half-done delete.
+    assert target.read_bytes() == payload
+    assert any('字体文件删除失败' in record.getMessage() for record in caplog.records)
 
 
 def test_same_name_never_overwrites_and_referenced_font_cannot_be_deleted(directory_fonts):
