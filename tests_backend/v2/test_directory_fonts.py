@@ -180,6 +180,61 @@ def test_upload_rejects_paths(directory_fonts, filename):
         catalog.upload(filename=filename, payload=payload, display_name='unsafe', idempotency_key='unsafe')
 
 
+def test_font_delete_commits_the_row_before_removing_the_file(directory_fonts, monkeypatch):
+    """A crash must never leave a listed font whose bytes are already gone.
+
+    The old order unlinked inside the transaction: a crash between unlink and
+    commit rolled the row back, so the font stayed in the catalog while its file
+    had been permanently deleted. Observe the ordering directly.
+    """
+    root, engine, catalog, _, payload = directory_fonts
+    item, _ = catalog.upload(filename='gone.ttf', payload=payload, display_name='Gone', idempotency_key='one')
+    target = root / f'fonts/users/{LOCAL_USER_ID}/gone.ttf'
+    assert target.is_file()
+
+    row_visible_during_unlink: list[bool] = []
+    real_unlink = Path.unlink
+
+    def _observing_unlink(self, *args, **kwargs):
+        with engine.connect() as connection:
+            row_visible_during_unlink.append(
+                connection.execute(select(fonts.c.id).where(fonts.c.id == item['id'])).scalar_one_or_none()
+                is not None
+            )
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'unlink', _observing_unlink)
+    result, replayed = catalog.delete(font_id=item['id'], idempotency_key='delete')
+    monkeypatch.setattr(Path, 'unlink', real_unlink)
+
+    assert result == {'deleted': True}
+    assert replayed is False
+    assert row_visible_during_unlink == [False], 'the font row must already be gone when the file is unlinked'
+    assert not target.exists()
+
+
+def test_font_delete_survives_a_locked_file_without_resurrecting_the_row(directory_fonts, monkeypatch):
+    """A file we cannot remove stays orphaned; the catalog must not keep a dead entry."""
+    root, engine, catalog, _, payload = directory_fonts
+    item, _ = catalog.upload(filename='locked.ttf', payload=payload, display_name='Locked', idempotency_key='one')
+    target = root / f'fonts/users/{LOCAL_USER_ID}/locked.ttf'
+    real_unlink = Path.unlink
+
+    def _refusing_unlink(self, *args, **kwargs):
+        if Path(self) == target:
+            raise PermissionError('file is locked')
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'unlink', _refusing_unlink)
+    result, _ = catalog.delete(font_id=item['id'], idempotency_key='delete')
+    monkeypatch.setattr(Path, 'unlink', real_unlink)
+
+    assert result == {'deleted': True}
+    assert item['id'] not in {row['id'] for row in catalog.list()}
+    with engine.connect() as connection:
+        assert connection.execute(select(fonts.c.id).where(fonts.c.id == item['id'])).scalar_one_or_none() is None
+
+
 def test_same_name_never_overwrites_and_referenced_font_cannot_be_deleted(directory_fonts):
     root, engine, catalog, _, payload = directory_fonts
     item, _ = catalog.upload(filename='saved.ttf', payload=payload, display_name='Saved', idempotency_key='one')

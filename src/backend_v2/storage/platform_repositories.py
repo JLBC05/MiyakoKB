@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path, PureWindowsPath
 import time
@@ -59,6 +60,9 @@ from src.backend_v2.storage.database import (
     read_transaction,
 )
 from src.shared.openai_rate_limits import RateLimitDecision
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class RevisionConflict(RuntimeError):
@@ -1652,12 +1656,21 @@ class FontRepository:
                     raise ValueError("共享字体由管理员在字体目录中管理")
                 path = font_path(self.root, row["relative_path"], row["owner_user_id"])
                 connection.execute(delete(fonts).where(fonts.c.id == font_id))
-                path.unlink(missing_ok=True)
                 result = {"deleted": True}
                 _record_idempotency(connection, scope=scope, key=idempotency_key,
                     request_hash=request_hash, response=result, http_status=200,
                     resource_type="font", resource_id=font_id, now=now)
-                return result, False
+                pending_unlink = path
+            # The row removal has committed. Unlink only now: doing it inside the
+            # transaction meant a crash between unlink and commit left the file
+            # gone while the row rolled back, so the font could never be read
+            # again. This order can instead leave an orphan file, which is
+            # recoverable because the row is the source of truth.
+            try:
+                pending_unlink.unlink(missing_ok=True)
+            except OSError:
+                LOGGER.warning("字体文件删除失败（行已删除，文件残留）：%s", pending_unlink, exc_info=True)
+            return result, False
         except IntegrityError as exc:
             raise RevisionConflict("font is still referenced by content or history") from exc
 

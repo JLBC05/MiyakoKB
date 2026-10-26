@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
+import logging
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -31,6 +32,7 @@ from src.backend_v2.storage.schema import (
 
 _EXTENSION_PATTERN = re.compile(r"^[a-z0-9]{1,12}$")
 ASSET_GC_BATCH_LIMIT = 500
+LOGGER = logging.getLogger(__name__)
 
 
 class AssetQuotaExceeded(RuntimeError):
@@ -595,6 +597,8 @@ class AssetStorageService:
         for row in candidates:
             asset_id = str(row["id"])
             path = self.resolve_relative_path(str(row["relative_path"]))
+            existed = path.exists()
+            deleted = 0
             with immediate_transaction(self.engine) as connection:
                 connection.execute(
                     update(assets)
@@ -614,22 +618,35 @@ class AssetStorageService:
                 ).scalar_one_or_none()
                 if still_deletable is None:
                     continue
-                existed = path.exists()
-                try:
-                    path.unlink(missing_ok=True)
-                except OSError:
-                    continue
-                deleted = connection.execute(
-                    delete(assets).where(
+                removed = connection.execute(
+                    delete(assets)
+                    .where(
                         assets.c.id == asset_id,
                         assets.c.gc_marked_at == row["gc_marked_at"],
                         ~referenced,
                     )
-                )
-                if deleted.rowcount == 1:
-                    deleted_rows += 1
-                    if existed:
-                        deleted_files += 1
+                    .returning(*assets.c)
+                ).mappings().one_or_none()
+                removed_row = dict(removed) if removed is not None else None
+                deleted = 1 if removed_row is not None else 0
+            # The row removal has committed. Unlink only now: doing it inside the
+            # transaction meant a crash between unlink and commit left the file
+            # gone while the row rolled back, leaving a permanently broken asset.
+            # This order can instead leave an orphan file, which is harmless
+            # because ``reconcile_orphan_objects`` removes files with no DB row.
+            if deleted != 1 or removed_row is None:
+                continue
+            if existed:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    # Put the row back so the asset stays visible and the next GC
+                    # pass retries the file instead of leaking a missing asset.
+                    self._restore_deleted_asset(path, removed_row)
+                    continue
+            deleted_rows += 1
+            if existed:
+                deleted_files += 1
 
         with self.engine.connect() as connection:
             unmarked_ids = list(
@@ -668,6 +685,35 @@ class AssetStorageService:
             deleted_rows=deleted_rows,
             deleted_files=deleted_files,
         )
+
+    def _restore_deleted_asset(
+        self,
+        path: Path,
+        removed_row: dict[str, object],
+    ) -> None:
+        """Undo a committed GC row removal when the file could not be unlinked.
+
+        ``removed_row`` is the full row captured by ``DELETE ... RETURNING``, so
+        every NOT NULL column is preserved; only ``integrity_status`` is forced to
+        ``missing`` because the bytes are still on disk from the caller's point of
+        view but the asset is not usable until a later pass succeeds.
+        """
+        values = {
+            column.name: removed_row[column.name]
+            for column in assets.columns
+            if column.name in removed_row
+        }
+        values["integrity_status"] = "missing"
+        values["updated_at"] = _utcnow()
+        try:
+            with immediate_transaction(self.engine) as connection:
+                connection.execute(insert(assets).values(**values))
+        except Exception:  # noqa: BLE001 - restore is best effort, GC retries later
+            LOGGER.warning(
+                "Failed to restore asset row after unlink failure: %s",
+                path,
+                exc_info=True,
+            )
 
     @staticmethod
     def _asset_is_referenced():

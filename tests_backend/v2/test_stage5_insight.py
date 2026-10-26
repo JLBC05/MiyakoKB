@@ -6265,6 +6265,128 @@ def _alignment_request_payload(prompt: str) -> dict:
     return json.loads(prompt[opening:closing])
 
 
+def test_unmerge_alias_does_not_copy_the_source_entities_pages(
+    insight_platform,
+) -> None:
+    """Splitting one alias must not make two entities claim the same pages.
+
+    ``align_entities`` keeps ``total_frequency == len(pages)`` and treats those
+    pages as the entity's own evidence. ``unmerge_alias`` used to copy the whole
+    ``pages`` list onto the detached entity while only subtracting the alias
+    frequency, so both entities declared identical pages and the graph/co-occurrence
+    counts double-counted every one of them.
+    """
+    repository = InsightDerivedRepository(insight_platform["engine"])
+    book_id = insight_platform["book"]["id"]
+    chapter_id = insight_platform["chapter"]["id"]
+    pages_analysis = [
+        {"page_id": insight_platform["page_ids"][0], "page_number": 1, "characters": [{"name": "主角甲"}]},
+        {"page_id": insight_platform["page_ids"][0], "page_number": 2, "characters": [{"name": "主角甲"}, {"name": "替身乙"}]},
+        {"page_id": insight_platform["page_ids"][0], "page_number": 3, "characters": [{"name": "主角甲"}, {"name": "替身乙"}]},
+        {"page_id": insight_platform["page_ids"][0], "page_number": 4, "characters": [{"name": "替身乙"}]},
+    ]
+
+    class _RejectingJudge:
+        """裁定「不必合并」，让替身乙保持为独立别名挂在主角甲名下。"""
+
+        class client:  # noqa: N801 - mirrors LLMBatchJudge surface
+            @staticmethod
+            async def generate_json(*, prompt: str, system: str):  # noqa: ANN001
+                payload = _alignment_request_payload(prompt)
+                response: dict = {"components": []}
+                for component in payload["components"]:
+                    response["components"].append(
+                        {
+                            "component_id": component["component_id"],
+                            "groups": [],
+                            "different_pair_ids": [
+                                pair["pair_id"] for pair in component["candidate_pairs"]
+                            ],
+                            "uncertain_pair_ids": [],
+                            "independent_entity_ids": list(component["entity_ids"]),
+                            "evidence": [],
+                        }
+                    )
+                return response
+
+    aligned = repository.align_entities(
+        book_id=book_id,
+        chapter_id=chapter_id,
+        pages_analysis=pages_analysis,
+        llm_judge=_RejectingJudge(),
+    )
+    entities_before = {
+        entity["canonical_name"]: entity
+        for entity in aligned["payload"]["canonical_entities"]
+    }
+    source = entities_before["主角甲"]
+    # 让替身乙确定性地成为主角甲的一个别名（不依赖裁决结果），再把别名拆出去。
+    source.setdefault("aliases", []).append("替身乙")
+    source["alias_details"] = {"替身乙": source.get("total_frequency", 1)}
+    source["total_frequency"] = max(source["total_frequency"], 2)
+    with insight_platform["engine"].begin() as connection:
+        connection.execute(
+            update(analysis_artifacts)
+            .where(
+                analysis_artifacts.c.book_id == book_id,
+                analysis_artifacts.c.kind == "entity_alignment",
+                analysis_artifacts.c.is_active.is_(True),
+            )
+            .values(payload_json=json.dumps(
+                {
+                    **aligned["payload"],
+                    "canonical_entities": list(entities_before.values()),
+                },
+                ensure_ascii=False,
+            ))
+        )
+
+    repository.unmerge_alias(book_id=book_id, category="characters", alias_to_detach="替身乙")
+
+    with insight_platform["engine"].connect() as connection:
+        row = connection.execute(
+            select(analysis_artifacts.c.payload_json).where(
+                analysis_artifacts.c.book_id == book_id,
+                analysis_artifacts.c.kind == "entity_alignment",
+                analysis_artifacts.c.is_active.is_(True),
+            )
+        ).scalar_one()
+    payload = json.loads(row)
+    by_name = {entity["canonical_name"]: entity for entity in payload["canonical_entities"]}
+    detached = by_name["替身乙"]
+    remaining = by_name["主角甲"]
+
+    assert set(detached["pages"]) & set(remaining["pages"]) == set(), (
+        "the detached entity must not re-declare the source entity's pages"
+    )
+    assert set(detached["pages"]) | set(remaining["pages"]) == set(entities_before["主角甲"]["pages"])
+    for entity in (detached, remaining):
+        assert entity["total_frequency"] == len(entity["pages"]), (
+            f"{entity['canonical_name']} must keep total_frequency == len(pages)"
+        )
+
+
+@pytest.mark.parametrize(
+    ("pages", "detached_freq", "expected_detached", "expected_remaining"),
+    [
+        ([1, 2, 3, 4], 2, [1, 2], [3, 4]),
+        ([1, 2, 3, 4], 10, [1, 2, 3], [4]),
+        ([7], 1, [7], []),
+        ([], 1, [], []),
+        ([3, 3, 5], 1, [3], [5]),
+    ],
+)
+def test_split_entity_pages_never_duplicates_a_page(
+    pages, detached_freq, expected_detached, expected_remaining,
+) -> None:
+    from src.backend_v2.insight.derived import _split_entity_pages
+
+    detached, remaining = _split_entity_pages(pages, detached_freq=detached_freq)
+    assert detached == expected_detached
+    assert remaining == expected_remaining
+    assert set(detached) & set(remaining) == set()
+
+
 def test_align_entities_only_consults_the_llm_for_narrowed_candidates(
     insight_platform, monkeypatch,
 ) -> None:

@@ -1468,6 +1468,93 @@ def test_asset_publication_rejects_incomplete_or_invalid_dimensions(
         )
 
 
+def test_asset_gc_deletes_the_row_before_unlinking_the_file(
+    platform,
+    monkeypatch,
+) -> None:
+    """The row must be committed away before the bytes go.
+
+    The old order unlinked inside the transaction, so a crash between unlink
+    and commit rolled the row back while the file stayed gone: the asset was
+    permanently broken and no GC pass could ever repair it. Observe the
+    ordering directly by checking, from inside the unlink call, whether the
+    row is already invisible to a fresh connection.
+    """
+    data_root, engine = platform
+    storage = AssetStorageService(data_root, engine)
+    doomed = storage.publish_bytes(
+        b"unused",
+        extension="bin",
+        mime_type="application/octet-stream",
+    )
+    assert storage.collect_garbage(grace_seconds=10, now=utcnow()).marked == 1
+
+    target = storage.resolve_relative_path(doomed.relative_path)
+    row_visible_during_unlink: list[bool] = []
+    real_unlink = Path.unlink
+
+    def _observing_unlink(self, *args, **kwargs):
+        with engine.connect() as connection:
+            row_visible_during_unlink.append(
+                connection.execute(
+                    select(assets.c.id).where(assets.c.id == doomed.id)
+                ).scalar_one_or_none()
+                is not None
+            )
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", _observing_unlink)
+    result = storage.collect_garbage(grace_seconds=10, now=utcnow() + timedelta(seconds=11))
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+
+    assert row_visible_during_unlink == [False], (
+        "the assets row must already be gone when the file is unlinked"
+    )
+    assert result.deleted_rows == 1
+    assert result.deleted_files == 1
+    assert not target.exists()
+
+
+def test_asset_gc_restores_the_row_when_the_file_cannot_be_removed(
+    platform,
+    monkeypatch,
+) -> None:
+    """A failed unlink must leave a usable row, not a silently missing asset."""
+    data_root, engine = platform
+    storage = AssetStorageService(data_root, engine)
+    stuck = storage.publish_bytes(
+        b"locked",
+        extension="bin",
+        mime_type="application/octet-stream",
+    )
+    assert storage.collect_garbage(grace_seconds=10, now=utcnow()).marked == 1
+
+    target = storage.resolve_relative_path(stuck.relative_path)
+    real_unlink = Path.unlink
+
+    def _refusing_unlink(self, *args, **kwargs):
+        if Path(self) == target:
+            raise PermissionError("file is locked")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", _refusing_unlink)
+    result = storage.collect_garbage(grace_seconds=10, now=utcnow() + timedelta(seconds=11))
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+
+    assert result.deleted_rows == 0
+    assert result.deleted_files == 0
+    assert target.is_file()
+    with engine.connect() as connection:
+        restored = connection.execute(
+            select(assets.c.relative_path, assets.c.integrity_status).where(
+                assets.c.id == stuck.id
+            )
+        ).mappings().one_or_none()
+    assert restored is not None
+    assert restored["relative_path"] == stuck.relative_path
+    assert restored["integrity_status"] == "missing"
+
+
 def test_integrity_scan_and_two_pass_gc_never_delete_referenced_assets(
     platform,
 ) -> None:

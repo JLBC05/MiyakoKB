@@ -716,6 +716,41 @@ def _normalize_layer_events(value: object) -> list[dict[str, Any]]:
     return events
 
 
+def _split_entity_pages(
+    pages: object,
+    *,
+    detached_freq: int,
+) -> tuple[list[int], list[int]]:
+    """按拆分频次把一个实体的出场页切给拆出的实体。
+
+    实体上的 ``pages`` 与 ``total_frequency`` 描述的是同一批证据（见
+    ``_validate_canonical_entities`` 的 ``total_frequency == len(pages)`` 约定）。
+    手工拆分一个别名时，若把源实体的 ``pages`` 整份复制给新实体，两个实体会
+    声明相同的出场页，图谱与列表页的共现统计随之翻倍。这里按频次切分，
+    并保证两边都至少保留 1 页，使 ``total_frequency == len(pages)`` 两边都成立。
+
+    只有 1 页证据时无法在页维度上区分：整页归拆出的实体（它是被显式指认的
+    那一侧），源实体拿到空页集，调用方据此把它的频次归一到 1。
+    """
+    if not isinstance(pages, (list, tuple)):
+        return [], []
+    ordered: list[int] = []
+    seen: set[int] = set()
+    for value in pages:
+        if not isinstance(value, int) or isinstance(value, bool):
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    if not ordered:
+        return [], []
+    if len(ordered) == 1:
+        return list(ordered), []
+    take = min(max(1, int(detached_freq)), len(ordered) - 1)
+    return list(ordered[:take]), list(ordered[take:])
+
+
 def _json_object(value: object, field: str) -> dict[str, Any]:
     if not isinstance(value, str):
         raise InsightConflict(f"stored {field} is missing")
@@ -4244,9 +4279,21 @@ class InsightDerivedRepository:
                     detached_freq = int(str(raw_val).split()[0])
                 except Exception:
                     detached_freq = 1
-            source_entity["total_frequency"] = max(1, source_entity.get("total_frequency", 1) - detached_freq)
             if "original_names" in source_entity:
                 source_entity["original_names"] = [o for o in source_entity["original_names"] if o != target_name]
+
+            # 拆分出的实体不能再声明源实体的全部出场页：pages 与 total_frequency 是
+            # 同一批证据的两种投影，整份复制会让两个实体声明相同页面，图谱/列表页
+            # 的共现统计随之翻倍失真。按拆分出的频次取前 N 页，并按页切分。
+            detached_pages, remaining_pages = _split_entity_pages(
+                source_entity.get("pages", []),
+                detached_freq=detached_freq,
+            )
+            source_entity["pages"] = remaining_pages
+            # pages 与 total_frequency 是同一批证据的两种投影，切页后必须一起归一，
+            # 否则两个实体会各自声明「频次 N、页数 0」或重复声明同一页。
+            source_entity["total_frequency"] = max(1, len(remaining_pages))
+            detached_freq = max(1, len(detached_pages)) if detached_pages else detached_freq
 
             # 2. 为拆出来的实体生成新的 ID 与实体对象
             if new_entity_id:
@@ -4261,7 +4308,7 @@ class InsightDerivedRepository:
                 "canonical_name": new_canon,
                 "confidence": "high",
                 "total_frequency": detached_freq,
-                "pages": source_entity.get("pages", []),
+                "pages": detached_pages,
                 "valid_chapters": list(source_entity.get("valid_chapters", [])),
                 "aliases": [],
                 "original_names": [target_name],
