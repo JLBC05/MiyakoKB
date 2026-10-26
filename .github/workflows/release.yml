@@ -107,24 +107,22 @@ jobs:
           body: |
             ## MiyakoKB v${{ steps.version.outputs.VERSION }}
             
-            > ⚠️ **构建中...请等待单一发行包上传完成后再发布。**
-            
             ### 更新日志
             
-            <!-- 请在此处填写更新日志 -->
+            <!-- 填入更新日志 -->
             
             ---
             
             ### 下载说明
             
-            📦 **普通用户（开箱即用）：**
-            - 下载 `MiyakoKB-${{ steps.version.outputs.VERSION }}.7z`（**单个文件，无需拼分卷**）
+            📦 **普通用户：**
+            - 下载 `MiyakoKB-${{ steps.version.outputs.VERSION }}.7z`
             - 使用 **7-Zip** 或 **Bandzip** 解压后运行 `MiyakoKB.exe`
             
-            🔧 **源码部署用户：**
-            - > 说明：模型不再随仓库分发，请按 README 的“运行”一节准备数据根与凭据；本版安装包已不含本地模型域
+            **首次启动**：按向导选择数据目录，然后在「设置」里配置 VLM / LLM / 嵌入 / 重排四条通道的 API Key，再导入漫画。
             
-            > ⚠️ 程序包采用 7z 压缩格式，请使用 [7-Zip](https://www.7-zip.org/) 或 [Bandzip](https://www.bandisoft.com/bandizip/) 解压，Windows 内置解压和 WinRAR 可能无法正确识别
+            🔧 **源码部署用户：**
+            - 按 README 的「源码开发」一节准备 Python 3.11+、Node 22+ 环境，`pip install -r requirements.txt`，`npm ci && npm run build`，然后用 `python saber_v2.py --role launcher` 启动。
           draft: true
           prerelease: false
         env:
