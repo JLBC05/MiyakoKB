@@ -13,7 +13,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.backend_v2.paths import resolve_data_root
-from src.backend_v2.storage.consistency import ConsistencyChecker
+from src.backend_v2.storage.consistency import (
+    DEFAULT_CONTENT_SAMPLE,
+    ConsistencyChecker,
+)
 from src.backend_v2.storage.database import (
     create_sqlite_engine,
     database_path_for,
@@ -30,7 +33,20 @@ def main() -> int:
         action="store_true",
         help="skip Chroma collection inspection",
     )
+    parser.add_argument(
+        "--content-sample",
+        type=int,
+        default=DEFAULT_CONTENT_SAMPLE,
+        metavar="N",
+        help=(
+            "hash at most N assets to verify their bytes "
+            f"(default {DEFAULT_CONTENT_SAMPLE}; 0 disables, -1 verifies all)"
+        ),
+    )
     args = parser.parse_args()
+    content_sample: int | None = args.content_sample
+    if content_sample is not None and content_sample < 0:
+        content_sample = None
     data_root = resolve_data_root(args.data_dir)
     database_path = database_path_for(data_root)
     if not database_path.is_file():
@@ -40,7 +56,11 @@ def main() -> int:
         report = ConsistencyChecker(
             data_root=data_root,
             engine=engine,
-        ).check(include_vectors=not args.skip_vectors)
+        ).check(
+            include_vectors=not args.skip_vectors,
+            verify_content=content_sample != 0,
+            content_sample=content_sample,
+        )
     finally:
         engine.dispose()
     print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))

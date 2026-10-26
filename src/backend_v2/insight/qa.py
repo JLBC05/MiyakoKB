@@ -181,6 +181,9 @@ DEFAULT_QA_MODE = "generic"
 QA_MODES = frozenset({"generic", "exact", "global"})
 # 通用模式为全库材料预留的候选条数（在页面候选配额之外）。
 GENERIC_GLOBAL_CANDIDATE_LIMIT = 2
+# 全局资料不可用的两种原因必须区分：没有做过全局分析，与做过了但已随重新分析过期。
+_GLOBAL_CONTEXT_MISSING = "missing"
+_GLOBAL_CONTEXT_STALE = "stale"
 
 
 def _validated_request_payload(
@@ -950,7 +953,7 @@ class InsightQAWorkerService:
         mode = request_payload["mode"]
         book_id = request_payload["bookId"]
         if mode == "global":
-            artifacts = self._global_artifact_candidates(
+            artifacts, global_issue = self._global_artifact_candidates(
                 book_id=book_id,
                 dependency_fingerprint=request_payload["dependencyFingerprint"],
             )
@@ -964,11 +967,22 @@ class InsightQAWorkerService:
                     keywords=request_payload["keywords"],
                     limit=20,
                 )
-                global_reason = (
-                    "该书没有可用的全局概览资料，仅以关键词命中的页面作为依据。"
-                    if global_candidates
-                    else "该书没有可用的全局概览资料，关键词检索也未命中，本次回答缺少可用依据。"
-                )
+                # 全局资料存在但指纹失配，与「本来就没有全局资料」是不同原因：
+                # 前者说明书籍重新分析过，用户需要知道结论可能已过期。
+                if global_issue == _GLOBAL_CONTEXT_STALE:
+                    global_reason = (
+                        "全局概览资料与当前分析不一致（书籍已重新分析），"
+                        "本次仅以关键词命中的页面作为依据。"
+                        if global_candidates
+                        else "全局概览资料与当前分析不一致（书籍已重新分析），"
+                        "关键词检索也未命中，本次回答缺少可用依据。"
+                    )
+                else:
+                    global_reason = (
+                        "该书没有可用的全局概览资料，仅以关键词命中的页面作为依据。"
+                        if global_candidates
+                        else "该书没有可用的全局概览资料，关键词检索也未命中，本次回答缺少可用依据。"
+                    )
             return {
                 "mode": "global",
                 "candidates": global_candidates,
@@ -983,10 +997,25 @@ class InsightQAWorkerService:
         if mode == "exact":
             return {"mode": "exact", "candidates": candidates, "retrieval": retrieval}
         # 通用模式：页面/事件候选之后追加全库材料，使单次问答同时具备细粒度证据与全局脉络。
-        merged = self._global_artifact_candidates(
+        # 全局资料不可用时页面候选仍然有效，因此这里只把降级事实并入诊断，不改变候选。
+        artifacts, global_issue = self._global_artifact_candidates(
             book_id=book_id,
             dependency_fingerprint=request_payload["dependencyFingerprint"],
-        )[:GENERIC_GLOBAL_CANDIDATE_LIMIT] + candidates
+        )
+        merged = artifacts[:GENERIC_GLOBAL_CANDIDATE_LIMIT] + candidates
+        if global_issue is not None:
+            stale_reason = (
+                "全局概览资料已过期（书籍已重新分析），本次回答仅基于页面证据。"
+                if global_issue == _GLOBAL_CONTEXT_STALE
+                else "该书没有可用的全局概览资料，本次回答仅基于页面证据。"
+            )
+            previous = retrieval.get("reason")
+            retrieval = {
+                "degraded": True,
+                "reason": f"{previous} {stale_reason}" if previous else stale_reason,
+                "mode": retrieval.get("mode"),
+                "candidateCount": len(merged),
+            }
         return {"mode": "generic", "candidates": merged, "retrieval": retrieval}
 
     def _page_candidates(
@@ -1405,7 +1434,15 @@ class InsightQAWorkerService:
         *,
         book_id: str,
         dependency_fingerprint: str,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Return global context candidates plus why they may be incomplete.
+
+        The second value is ``None`` when every required artifact matches the
+        caller's fingerprint, ``_GLOBAL_CONTEXT_MISSING`` when some are absent, and
+        ``_GLOBAL_CONTEXT_STALE`` when they exist but were produced from an older
+        analysis. Callers surface the latter as degraded output instead of silently
+        dropping the global context.
+        """
         with self.engine.connect() as connection:
             rows = list(
                 connection.execute(
@@ -1441,6 +1478,7 @@ class InsightQAWorkerService:
         }
         output: list[dict[str, Any]] = []
         found: set[tuple[str, str]] = set()
+        stale: set[tuple[str, str]] = set()
         for row in rows:
             kind = _required_string(row["kind"], "analysis artifact kind")
             template = _required_string(
@@ -1455,6 +1493,9 @@ class InsightQAWorkerService:
                 row["dependency_fingerprint"],
                 "analysis artifact dependency fingerprint",
             ) != dependency_fingerprint:
+                # 指纹失配代表这份全局资料来自旧的分析结果：不采用它的内容，
+                # 但必须记住它「存在却过期」，否则调用方无法区分「过期」与「没有」。
+                stale.add(key)
                 continue
             output.append(
                 {
@@ -1471,7 +1512,12 @@ class InsightQAWorkerService:
                     "hybridScore": 1.0,
                 }
             )
-        return output
+        issue: str | None = None
+        if stale:
+            issue = _GLOBAL_CONTEXT_STALE
+        elif not required.issubset(found):
+            issue = _GLOBAL_CONTEXT_MISSING
+        return output, issue
 
     def _with_credentials(
         self,

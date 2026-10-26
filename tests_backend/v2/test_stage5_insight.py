@@ -5522,6 +5522,146 @@ def test_qa_accepts_page_scoped_snapshot_after_vector_rebuild(
     )
 
 
+def test_generic_qa_reports_stale_global_artifacts_as_degraded(
+    insight_platform,
+) -> None:
+    """书籍重新分析后，通用问答不该悄悄丢掉全局脉络却不吭声（审计 P3-4）。
+
+    指纹失配的全局产物既不进候选也不置 degraded，用户就以为回答仍带着全局
+    视角，实际上只剩页面候选。
+    """
+    platform = insight_platform
+    book_id = str(platform["book"]["id"])
+    InsightAnalysisCommandService(platform["engine"]).create_analysis_job(
+        command={"bookId": book_id, "scope": "full"},
+        idempotency_key="qa-generic-stale",
+    )
+    assert _run_job(platform, FakeInsightAlgorithms()) == "completed"
+
+    with platform["engine"].begin() as connection:
+        connection.execute(
+            update(analysis_artifacts)
+            .where(
+                analysis_artifacts.c.book_id == book_id,
+                analysis_artifacts.c.is_active.is_(True),
+            )
+            .values(dependency_fingerprint="fingerprint-from-an-older-analysis")
+        )
+
+    commands = InsightQACommandService(platform["engine"])
+    handle = commands.create(
+        book_id=book_id,
+        command={"question": "全局发生了什么？", "mode": "generic"},
+    )
+    requests = TransientRequestRepository(platform["engine"])
+    worker = InsightQAWorkerService(
+        data_root=platform["data_root"],
+        engine=platform["engine"],
+        worker_epoch_id=platform["epoch_id"],
+        repository=requests,
+        algorithms=FakeQARetrievalAlgorithms(),
+    )
+    assert worker.run_one()
+    result = requests.consume(
+        request_id=handle.request_id,
+        connection_token=handle.connection_token,
+    )
+    requests.close(
+        request_id=handle.request_id,
+        connection_token=handle.connection_token,
+    )
+
+    diagnostics = retrieval_diagnostics(result)
+    assert diagnostics["degraded"] is True
+    assert "过期" in (diagnostics["reason"] or "")
+    # 过期的全局资料一条都不能进候选：宁可只剩页面证据，也不能拿旧结论当依据。
+    assert "global" not in {candidate["type"] for candidate in result["candidates"]}
+    assert not any(
+        candidate["id"].startswith(("overview:", "compressed_context:"))
+        for candidate in result["candidates"]
+    )
+
+
+def test_qa_rerank_failure_degrades_to_hybrid_order_instead_of_failing(
+    insight_platform,
+) -> None:
+    """重排挂掉不该让整次问答失败（审计 P3-5）。
+
+    向量检索失败已经退到关键词检索并附警告，重排却没有对称处理：异常一路
+    冒泡成 SSE error，用户白白丢掉一个本来可用的答案。
+    """
+    platform = insight_platform
+    InsightAnalysisCommandService(platform["engine"]).create_analysis_job(
+        command={"bookId": str(platform["book"]["id"]), "scope": "full"},
+        idempotency_key="qa-rerank-fallback",
+    )
+    assert _run_job(platform, FakeInsightAlgorithms()) == "completed"
+
+    class FailingRerankAlgorithms(FakeQAApiAlgorithms):
+        def rerank(self, *, question, candidates, top_k, config):
+            self.rerank_calls += 1
+            raise RuntimeError("reranker endpoint is down")
+
+    qa_algorithms = FailingRerankAlgorithms()
+    app = Flask("qa-rerank-test")
+    app.register_blueprint(
+        create_insight_blueprint(
+            engine=platform["engine"],
+            data_root=platform["data_root"],
+            qa_algorithms=qa_algorithms,
+            profile=LOCAL_PROFILE,
+        )
+    )
+    client = app.test_client()
+    response = client.post(
+        f"/api/v2/insight/books/{platform['book']['id']}/qa",
+        json={
+            "question": "发生了什么？",
+            "mode": "exact",
+            "topK": 3,
+            "useReranker": True,
+        },
+        buffered=False,
+    )
+    worker = InsightQAWorkerService(
+        data_root=platform["data_root"],
+        engine=platform["engine"],
+        worker_epoch_id=platform["epoch_id"],
+        algorithms=FakeQARetrievalAlgorithms(),
+    )
+    worker._query_chroma = lambda **_kwargs: [
+        {
+            "id": "page-result-a",
+            "type": "page",
+            "pageId": platform["page_ids"][0],
+            "pageNumber": 1,
+            "document": "关键事件",
+            "vectorScore": 0.9,
+            "hybridScore": 0.9,
+        },
+        {
+            "id": "page-result-b",
+            "type": "page",
+            "pageId": platform["page_ids"][1],
+            "pageNumber": 2,
+            "document": "另一件关键事件",
+            "vectorScore": 0.8,
+            "hybridScore": 0.8,
+        },
+    ]
+    assert worker.run_one()
+    payload = b"".join(response.response).decode("utf-8")
+
+    assert response.status_code == 200
+    assert qa_algorithms.rerank_calls == 1
+    assert "event: error" not in payload
+    assert "event: chunk" in payload
+    assert "答案" in payload
+    assert "event: done" in payload
+    # 降级事实必须透传给用户，否则他会以为这次回答经过了重排。
+    assert "重排服务不可用" in payload
+
+
 def test_global_qa_reads_published_artifacts_as_mapping_rows(
     insight_platform,
 ) -> None:

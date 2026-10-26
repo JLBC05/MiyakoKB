@@ -672,15 +672,24 @@ def create_insight_blueprint(
                     include_reranker=should_rerank,
                 )
                 if should_rerank:
-                    ranked = [
-                        dict(value)
-                        for value in qa_api.rerank(
-                            question=handle.question,
-                            candidates=rankable,
-                            top_k=handle.options["topK"],
-                            config=config,
-                        )
-                    ]
+                    # 重排只是对页面候选做二次排序；它挂掉不应该让整次问答失败。
+                    # 候选本身已按 hybridScore 排好序，退回纯 hybrid 排序即可，
+                    # 与「向量检索不可用时退到关键词检索」保持对称。
+                    try:
+                        ranked = [
+                            dict(value)
+                            for value in qa_api.rerank(
+                                question=handle.question,
+                                candidates=rankable,
+                                top_k=handle.options["topK"],
+                                config=config,
+                            )
+                        ]
+                    except Exception as exc:
+                        LOGGER.warning("QA rerank failed, falling back to hybrid order: %s", exc)
+                        warnings.append("重排服务不可用，本次回答按混合检索得分排序。")
+                        user_log("warning", f"漫画问答重排降级：{type(exc).__name__}: {exc}")
+                        ranked = rankable[: handle.options["topK"]]
                 else:
                     ranked = rankable[: handle.options["topK"]]
                 # 实体知识库记录的「出现页码」必须作为证据页进入候选，否则回答只能转述

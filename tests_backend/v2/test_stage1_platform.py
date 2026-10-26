@@ -1684,6 +1684,90 @@ def test_orphan_object_reconciliation_honors_database_journal_and_grace(
     assert storage.resolve_relative_path(referenced.relative_path).exists()
 
 
+def test_consistency_checker_detects_content_drift_behind_an_intact_file(
+    platform,
+) -> None:
+    """A file that still exists but no longer matches its hash is a real defect.
+
+    The presence-only check reported these assets as healthy, so silent corruption
+    (truncation by a full disk, a partial copy, a bad sector) could survive every
+    consistency run.
+    """
+    data_root, engine = platform
+    storage = AssetStorageService(data_root, engine)
+    intact = storage.publish_bytes(b"intact", extension="bin", mime_type="application/octet-stream")
+    truncated = storage.publish_bytes(b"0123456789", extension="bin", mime_type="application/octet-stream")
+    rewritten = storage.publish_bytes(b"original", extension="bin", mime_type="application/octet-stream")
+
+    storage.resolve_relative_path(truncated.relative_path).write_bytes(b"01234")
+    storage.resolve_relative_path(rewritten.relative_path).write_bytes(b"tampered")
+
+    report = ConsistencyChecker(data_root=data_root, engine=engine).check(
+        include_vectors=False,
+        content_sample=None,
+    )
+
+    assert report.ok is False
+    assert report.missing_asset_files == ()
+    assert report.integrity_status_mismatches == ()
+    assert report.content_size_mismatches == (truncated.id,)
+    # 被整体改写的文件大小恰好相同，只有内容校验能发现。
+    assert report.content_checksum_mismatches == (rewritten.id,)
+    assert intact.id not in report.content_checksum_mismatches
+    assert report.content_checked == 2, "only the size-agreeing assets get hashed"
+    assert report.content_sample is None
+
+
+def test_consistency_checker_content_sample_limits_hashing(platform) -> None:
+    data_root, engine = platform
+    storage = AssetStorageService(data_root, engine)
+    ids = [
+        storage.publish_bytes(
+            f"payload-{index}".encode(),
+            extension="bin",
+            mime_type="application/octet-stream",
+        ).id
+        for index in range(3)
+    ]
+
+    sampled = ConsistencyChecker(data_root=data_root, engine=engine).check(
+        include_vectors=False,
+        content_sample=2,
+    )
+    assert sampled.ok is True
+    assert sampled.content_checked == 2
+    assert sampled.content_sample == 2
+
+    skipped = ConsistencyChecker(data_root=data_root, engine=engine).check(
+        include_vectors=False,
+        content_sample=0,
+    )
+    assert skipped.ok is True
+    assert skipped.content_checked == 0
+    assert skipped.content_sample == 0
+
+    with pytest.raises(ValueError):
+        ConsistencyChecker(data_root=data_root, engine=engine).check(
+            include_vectors=False,
+            content_sample=-1,
+        )
+
+    # 抽样只影响哈希次数，不影响大小检查：截断仍必须被报出来。
+    extra = storage.publish_bytes(
+        b"extra-payload",
+        extension="bin",
+        mime_type="application/octet-stream",
+    )
+    storage.resolve_relative_path(extra.relative_path).write_bytes(b"x")
+    partial = ConsistencyChecker(data_root=data_root, engine=engine).check(
+        include_vectors=False,
+        content_sample=0,
+    )
+    assert partial.content_checked == 0
+    assert partial.content_size_mismatches == (extra.id,)
+    assert len(ids) == 3
+
+
 def test_consistency_checker_and_cli_report_storage_divergence(
     platform,
 ) -> None:
