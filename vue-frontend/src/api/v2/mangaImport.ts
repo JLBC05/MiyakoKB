@@ -161,3 +161,45 @@ export async function confirmLocalImport(books: LocalBookConfirmPayload[]): Prom
     books,
   })
 }
+
+export interface IntegrityChapterVerdict {
+  ordinal: number
+  label: string
+  images: number | null
+  status:
+    | 'missing_in_database'
+    | 'empty_in_database'
+    | 'missing_pages'
+    | 'pages_from_elsewhere'
+    | 'fewer_pages_than_disk'
+    | 'unreadable'
+    | 'not_downloaded'
+  detail: string
+}
+
+export interface IntegrityReport {
+  source: 'venera' | 'local'
+  target: string
+  bookId: string | null
+  filesystemChapters: number
+  importedChapters: number
+  lost: IntegrityChapterVerdict[]
+  incomplete: IntegrityChapterVerdict[]
+  notDownloaded: IntegrityChapterVerdict[]
+  problems: IntegrityChapterVerdict[]
+  notes: string[]
+  ok: boolean
+}
+
+/**
+ * 核对「磁盘上实际存在的章节是否都进了库」。以文件系统为准；
+ * Venera 登记但磁盘没有的章节会落在 notDownloaded，不算丢件。
+ */
+export async function checkImportIntegrity(payload: {
+  source: 'venera' | 'local'
+  bookId: string
+  comicId?: string
+  paths?: string[]
+}): Promise<IntegrityReport> {
+  return apiClient.post<IntegrityReport>('/api/v2/import/integrity-check', payload)
+}

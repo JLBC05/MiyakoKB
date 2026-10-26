@@ -22,6 +22,11 @@ from src.backend_v2.auth.constants import LOCAL_USER_ID
 from src.backend_v2.manga_import.local_preview import preview_local_paths
 from src.backend_v2.manga_import.local_importer import import_single_local_book
 from src.backend_v2.manga_import.source_tag import display_title
+from src.backend_v2.manga_import.integrity import (
+    check_import_integrity,
+    probe_local_paths,
+    probe_venera_comic,
+)
 from src.backend_v2.manga_import.venera_importer import import_single_venera_comic
 
 def default_venera_base_dir() -> Path:
@@ -133,6 +138,38 @@ def list_venera_comics(base_dir: Path) -> list[dict[str, object]]:
         return result
     finally:
         conn.close()
+
+def _match_venera_directory(paths: list[Path]) -> tuple[Path, str] | None:
+    """若路径恰好是 Venera 某本漫画的目录，返回 ``(base_dir, comic_id)``。
+
+    Venera 的章节目录名是随机 UUID，按名字排序得到的序位与 ``downloaded_chapters``
+    里的真实顺序无关，直接当本地目录扫描会把「序位错配」误报成「页数不足」。
+    """
+
+    if not paths or not all(item.is_dir() for item in paths):
+        return None
+    base_dir = default_venera_base_dir()
+    if not base_dir.is_dir():
+        return None
+    local_root = base_dir / "local"
+    wanted = {item.resolve() for item in paths}
+    try:
+        comics = list_venera_comics(base_dir)
+    except Exception:  # noqa: BLE001 - 读不到 Venera 就安静退回本地口径
+        return None
+    for comic in comics:
+        comic_dir = venera_comic_dir(base_dir, comic.get("directory"))
+        if comic_dir is None:
+            continue
+        try:
+            resolved = comic_dir.resolve()
+        except OSError:
+            resolved = comic_dir
+        if resolved in wanted:
+            return base_dir, str(comic.get("id") or "")
+    _ = local_root  # 保留给排查用：目录形状是 base/local/<directory>
+    return None
+
 
 def _get_venera_comic_detail(base_dir: Path, comic_id: str) -> dict[str, Any] | None:
     db_path = venera_local_db_path(base_dir)
@@ -297,6 +334,87 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
             "failed": failed_count,
             "details": details,
         })
+
+    @blueprint.post("/integrity-check")
+    def check_import_integrity_route() -> Response:
+        """核对「磁盘上实际存在的章节是否都进了库」。
+
+        口径见 ``integrity`` 模块文档：以文件系统为准，Venera 登记但磁盘没有的
+        章节报「未下载」而不是失败。纯只读，不写库、不联网。
+        """
+
+        payload = request.get_json(silent=True) or {}
+        source = str(payload.get("source") or "").strip()
+        if source not in {"venera", "local"}:
+            return _error(
+                "validation_error", "source 必须是 venera 或 local", 400
+            )
+        book_id = str(payload.get("bookId") or "").strip()
+        if not book_id:
+            return _error("validation_error", "bookId 不能为空", 400)
+
+        notes: list[str] = []
+        unmapped: list[int] = []
+        try:
+            if source == "venera":
+                comic_id = str(payload.get("comicId") or "").strip()
+                if not comic_id:
+                    return _error("validation_error", "comicId 不能为空", 400)
+                base_dir, _ = resolve_venera_base_dir(engine)
+                detail = _get_venera_comic_detail(base_dir, comic_id)
+                probes, notes = probe_venera_comic(base_dir, comic_id)
+                target = str((detail or {}).get("title") or comic_id)
+                downloaded = list((detail or {}).get("downloaded_chapters") or [])
+                on_disk = {item.ordinal for item in probes}
+                unmapped = [
+                    index
+                    for index in range(1, len(downloaded) + 1)
+                    if index not in on_disk
+                ]
+            else:
+                raw_paths = payload.get("paths") or []
+                if not isinstance(raw_paths, list) or not raw_paths:
+                    return _error("validation_error", "paths 必须是非空数组", 400)
+                paths = [_expand_user_path(str(item)) for item in raw_paths]
+                # 指向 Venera 漫画根目录时，只有 ``downloaded_chapters`` 的顺序
+                # 是权威（目录名是随机 UUID，按名字排序必然错位）。这里自动
+                # 识别并改走 Venera 口径，避免把序位错配报成「页数不足」。
+                venera_hit = _match_venera_directory(paths)
+                if venera_hit is not None:
+                    base_dir, comic_id = venera_hit
+                    probes, notes = probe_venera_comic(base_dir, comic_id)
+                    source = "venera"
+                    target = comic_id
+                    detail = _get_venera_comic_detail(base_dir, comic_id)
+                    downloaded = list((detail or {}).get("downloaded_chapters") or [])
+                    on_disk = {item.ordinal for item in probes}
+                    unmapped = [
+                        index
+                        for index in range(1, len(downloaded) + 1)
+                        if index not in on_disk
+                    ]
+                    notes.append(
+                        "该路径是 Venera 漫画目录，已按 Venera 的已下载顺序核对"
+                        "（目录名是随机 UUID，按名字排序会与库里的序位错配）"
+                    )
+                else:
+                    probes = probe_local_paths(paths)
+                    target = ", ".join(str(item) for item in paths)
+        except FileNotFoundError as error:
+            return _error("import_source_unavailable", str(error), 503)
+        except Exception as error:  # noqa: BLE001 - 核对失败要显式上报
+            return _error("integrity_check_failed", f"核对失败：{error}", 500)
+
+        report = check_import_integrity(
+            engine=engine,
+            book_id=book_id,
+            probes=probes,
+            source=source,
+            target=target,
+            notes=notes,
+            unmapped_ordinals=unmapped,
+        )
+        return jsonify(report.to_payload())
 
     @blueprint.post("/local/preview")
     def preview_local() -> Response:

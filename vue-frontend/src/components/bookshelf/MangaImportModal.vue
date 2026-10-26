@@ -14,10 +14,12 @@ import {
   importVeneraComics,
   previewLocalManga,
   confirmLocalImport,
+  checkImportIntegrity,
   type VeneraComic,
   type LocalBookPreview,
   type LocalBookConfirmPayload,
   type ImportIssue,
+  type IntegrityReport,
 } from '@/api/v2/mangaImport'
 import { getV2Settings, saveV2SettingsTransaction } from '@/api/v2/settings'
 import { showToast } from '@/utils/toast'
@@ -187,6 +189,31 @@ function toggleSelectAll() {
     selectedComicIds.value.clear()
   } else {
     selectedComicIds.value = new Set(comics.value.map(c => c.id))
+  }
+}
+
+const integrityReport = ref<IntegrityReport | null>(null)
+const integrityTarget = ref<string>('')
+const isCheckingIntegrity = ref(false)
+
+async function handleIntegrityCheck() {
+  const comicId = Array.from(selectedComicIds.value)[0]
+  if (!comicId) {
+    showToast('请先选择一部漫画', 'info')
+    return
+  }
+  const comic = comics.value.find(c => c.id === comicId)
+  integrityTarget.value = comic?.title ?? comicId
+  isCheckingIntegrity.value = true
+  integrityReport.value = null
+  try {
+    const report = await checkImportIntegrity({ source: 'venera', comicId, bookId: '' })
+    integrityReport.value = report
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    showToast(`核对失败：${detail}`, 'error')
+  } finally {
+    isCheckingIntegrity.value = false
   }
 }
 
@@ -542,6 +569,39 @@ onMounted(() => {
             {{ importSubText }}
           </div>
         </div>
+
+        <!-- Integrity check: did the import drop anything? -->
+        <div v-if="integrityReport || isCheckingIntegrity" class="integrity-card">
+          <div class="integrity-head">
+            <span class="integrity-title">
+              导入完整性核对<span v-if="integrityTarget">：{{ integrityTarget }}</span>
+            </span>
+            <span v-if="integrityReport" class="integrity-badge" :class="integrityReport.ok ? 'is-ok' : 'is-bad'">
+              {{ integrityReport.ok ? '通过' : '发现问题' }}
+            </span>
+          </div>
+          <div v-if="isCheckingIntegrity" class="integrity-line">正在比对磁盘章节与数据库记录…</div>
+          <template v-else-if="integrityReport">
+            <div class="integrity-line">
+              文件系统章节 <strong>{{ integrityReport.filesystemChapters }}</strong>
+              · 已导入章节 <strong>{{ integrityReport.importedChapters }}</strong>
+              · 丢件 <strong :class="{ 'is-bad-text': integrityReport.lost.length > 0 }">{{ integrityReport.lost.length }}</strong>
+            </div>
+            <div v-if="integrityReport.notDownloaded.length" class="integrity-line integrity-muted">
+              另有 {{ integrityReport.notDownloaded.length }} 章在 Venera 登记为已下载但磁盘没有，按「未下载」处理，不计入丢件。
+            </div>
+            <ul v-if="integrityReport.lost.length" class="integrity-list">
+              <li v-for="item in integrityReport.lost.slice(0, 20)" :key="`lost-${item.ordinal}`">
+                {{ item.label }}：{{ item.detail }}
+              </li>
+            </ul>
+            <ul v-if="integrityReport.incomplete.length" class="integrity-list integrity-muted">
+              <li v-for="item in integrityReport.incomplete.slice(0, 10)" :key="`inc-${item.ordinal}`">
+                {{ item.label }}：{{ item.detail }}
+              </li>
+            </ul>
+          </template>
+        </div>
       </div>
 
       <!-- Tab 2: Local File Import -->
@@ -693,6 +753,15 @@ onMounted(() => {
         </div>
         <UiButton variant="secondary" :disabled="isImporting || isScanningLocal" @click="emit('close')">
           取消
+        </UiButton>
+        <UiButton
+          v-if="activeTab === 'venera' && selectedComicIds.size === 1"
+          variant="secondary"
+          :disabled="isImporting || isCheckingIntegrity"
+          @click="handleIntegrityCheck"
+        >
+          <UiIcon v-if="isCheckingIntegrity" name="loading" size="16" class="spinning" />
+          <span>核对导入完整性</span>
         </UiButton>
         <UiButton
           v-if="activeTab === 'venera'"
@@ -1042,6 +1111,68 @@ onMounted(() => {
   font-size: 11.5px;
   color: var(--color-text-secondary, var(--manga-import-text-blue));
   padding-left: 24px;
+}
+
+.integrity-card {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--miyako-primary-bg, var(--manga-import-surface-faint));
+  border: 1px solid var(--manga-import-stroke-light);
+}
+
+.integrity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.integrity-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-primary, var(--manga-import-text));
+}
+
+.integrity-badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+.integrity-badge.is-ok {
+  background: var(--manga-import-surface-whisper);
+  color: var(--manga-import-surface-violet);
+}
+
+.integrity-badge.is-bad {
+  background: var(--manga-import-surface-whisper-red);
+  color: var(--manga-import-text-red);
+}
+
+.integrity-line {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--color-text-secondary, var(--manga-import-text-blue));
+}
+
+.integrity-muted {
+  opacity: 0.78;
+}
+
+.is-bad-text {
+  color: var(--manga-import-text-red);
+}
+
+.integrity-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--color-text-secondary, var(--manga-import-text-blue));
+  max-height: 160px;
+  overflow-y: auto;
 }
 
 .spinning {

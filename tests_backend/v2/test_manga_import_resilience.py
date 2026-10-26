@@ -299,6 +299,148 @@ def _write_chapter_dir(base_dir: Path, directory: str, uuid: str, pages: int) ->
     _write_pages(target, pages)
 
 
+# --------------------------------------------------------------------------
+# 导入完整性核对（以文件系统为准，未下载不算丢件）
+# --------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------
+# 导入完整性核对（以文件系统为准，未下载不算丢件）
+# --------------------------------------------------------------------------
+
+
+def _confirm_book(client, title: str, chapters: list[dict]) -> str:
+    response = client.post(
+        "/api/v2/import/local/confirm",
+        json={"books": [_book_payload(title, chapters)]},
+    )
+    assert response.status_code == 200, response.get_data(as_text=True)
+    result = response.get_json()["imported_books"][0]
+    assert result["book_id"], result
+    return str(result["book_id"])
+
+
+def test_natural_key_orders_page_names_numerically() -> None:
+    from src.backend_v2.manga_import.integrity import _natural_key
+
+    names = ["10.jpg", "2.jpg", "1.jpg", "100.jpg"]
+    ordered = sorted(names, key=_natural_key)
+    assert ordered == ["1.jpg", "2.jpg", "10.jpg", "100.jpg"]
+
+
+def test_integrity_check_reports_zero_loss_when_every_chapter_imported(env, tmp_path: Path) -> None:
+    from src.backend_v2.manga_import.integrity import (
+        check_import_integrity,
+        probe_local_paths,
+    )
+
+    folder = tmp_path / "series"
+    _write_pages(folder / "ch1", 3)
+    _write_pages(folder / "ch2", 4)
+    book_id = _confirm_book(
+        env["client"],
+        "完整性样书",
+        [
+            {"title": "第1话", "ordinal": 1, "source_type": "folder", "source_path": str(folder / "ch1")},
+            {"title": "第2话", "ordinal": 2, "source_type": "folder", "source_path": str(folder / "ch2")},
+        ],
+    )
+
+    probes = probe_local_paths([folder])
+    report = check_import_integrity(
+        engine=env["engine"], book_id=book_id, probes=probes, source="local", target="series"
+    )
+    payload = report.to_payload()
+    assert payload["filesystemChapters"] == 2
+    assert payload["importedChapters"] == 2
+    assert payload["lost"] == []
+    assert payload["incomplete"] == []
+
+
+def test_integrity_check_flags_a_chapter_without_pages(env, tmp_path: Path) -> None:
+    from src.backend_v2.manga_import.integrity import (
+        check_import_integrity,
+        probe_local_paths,
+    )
+
+    folder = tmp_path / "partial"
+    _write_pages(folder / "ch1", 2)
+    book_id = _confirm_book(
+        env["client"],
+        "缺章样书",
+        [{"title": "第1话", "ordinal": 1, "source_type": "folder", "source_path": str(folder / "ch1")}],
+    )
+
+    # 磁盘上后来又多了两章，但库里没有 —— 必须报成丢件。
+    _write_pages(folder / "ch2", 2)
+    _write_pages(folder / "ch3", 2)
+    probes = probe_local_paths([folder])
+    report = check_import_integrity(
+        engine=env["engine"], book_id=book_id, probes=probes, source="local", target="partial"
+    )
+    payload = report.to_payload()
+    assert payload["filesystemChapters"] == 3
+    assert payload["importedChapters"] == 1
+    assert {item["ordinal"] for item in payload["lost"]} == {2, 3}
+
+
+def test_integrity_check_treats_registered_but_absent_chapters_as_not_downloaded(
+    env, tmp_path: Path
+) -> None:
+    from src.backend_v2.manga_import.integrity import (
+        check_import_integrity,
+        probe_venera_comic,
+    )
+
+    base = tmp_path / "venera-notdown"
+    _write_venera_library(
+        base,
+        directory="comic-dir",
+        downloaded=["aaa", "bbb"],
+        chapters_map={"g": {"aaa": "第1话", "bbb": "第2话"}},
+    )
+    # 只往磁盘写了第一个章节；bbb 登记为已下载但目录不存在（用户删了文件）。
+    _write_chapter_dir(base, "comic-dir", "aaa", 3)
+
+    probes, notes = probe_venera_comic(base, "comic-1")
+    assert [item.ordinal for item in probes] == [1]
+    assert any("第2话" in note for note in notes)
+
+    book_id = _confirm_book(
+        env["client"],
+        "未下载样书",
+        [{"title": "第1话", "ordinal": 1, "source_type": "folder", "source_path": str(base / "local" / "comic-dir" / "aaa")}],
+    )
+    report = check_import_integrity(
+        engine=env["engine"],
+        book_id=book_id,
+        probes=probes,
+        source="venera",
+        target="comic-1",
+        notes=notes,
+        unmapped_ordinals=[2],
+    )
+    payload = report.to_payload()
+    assert payload["filesystemChapters"] == 1
+    assert payload["lost"] == []
+    assert {item["ordinal"] for item in payload["notDownloaded"]} == {2}
+    assert {item["status"] for item in payload["notDownloaded"]} == {"not_downloaded"}
+
+
+def test_integrity_route_rejects_bad_source_and_missing_book_id(env) -> None:
+    client = env["client"]
+    assert (
+        client.post("/api/v2/import/integrity-check", json={"source": "ftp", "bookId": "x"}).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/v2/import/integrity-check", json={"source": "local", "paths": ["/tmp"]}
+        ).status_code
+        == 400
+    )
+
+
 def test_venera_import_reports_missing_chapter_directory(env, tmp_path: Path) -> None:
     base = tmp_path / "venera"
     _write_venera_library(

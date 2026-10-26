@@ -1308,6 +1308,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/import/integrity-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Compare the on-disk chapters with what the database holds, so "did the
+         *     import drop anything" is answerable. The filesystem is authoritative:
+         *     chapters Venera still registers but no longer has on disk come back as
+         *     `not_downloaded` and are **not** counted as losses. Read-only.
+         */
+        post: operations["checkImportIntegrity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/insight/bootstrap": {
         parameters: {
             query?: never;
@@ -3839,6 +3861,36 @@ export interface components {
             /** @enum {string} */
             baseDirSource?: "setting" | "default";
             dbPath?: string;
+        };
+        /** @description One chapter's reconciliation outcome. */
+        ImportChapterVerdict: {
+            ordinal: number;
+            label: string;
+            images: number | null;
+            /** @enum {string} */
+            status: "missing_in_database" | "empty_in_database" | "missing_pages" | "pages_from_elsewhere" | "fewer_pages_than_disk" | "unreadable" | "not_downloaded";
+            detail: string;
+        };
+        /**
+         * @description On-disk chapters versus imported chapters. `lost` is the answer to "did the
+         *     import drop anything": a chapter that exists on disk but has no rows in the
+         *     database. `notDownloaded` lists chapters Venera still registers while the
+         *     disk no longer has them — normal after the user deletes downloads, so they
+         *     are deliberately excluded from `lost`.
+         */
+        ImportIntegrityReport: {
+            /** @enum {string} */
+            source: "venera" | "local";
+            target: string;
+            bookId: string | null;
+            filesystemChapters: number;
+            importedChapters: number;
+            lost: components["schemas"]["ImportChapterVerdict"][];
+            incomplete: components["schemas"]["ImportChapterVerdict"][];
+            notDownloaded: components["schemas"]["ImportChapterVerdict"][];
+            problems: components["schemas"]["ImportChapterVerdict"][];
+            notes: string[];
+            ok: boolean;
         };
         /** @description One concrete thing that went wrong during an import, at a precise granularity. */
         ImportIssue: {
@@ -6708,6 +6760,52 @@ export interface operations {
             400: components["responses"]["ValidationError"];
             /** @description The local import failed for every submitted book. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    checkImportIntegrity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Which importer the book came from. `venera` also needs `comicId`; `local` needs `paths`.
+                     * @enum {string}
+                     */
+                    source: "venera" | "local";
+                    /** Format: uuid */
+                    bookId: string;
+                    /** @description Venera comic id, required when source is `venera`. */
+                    comicId?: string;
+                    /** @description Local roots to compare against, required when source is `local`. */
+                    paths?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description The reconciliation report. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportIntegrityReport"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            /** @description The Venera library or the configured path cannot be read. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

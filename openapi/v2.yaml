@@ -1785,6 +1785,52 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+  /import/integrity-check:
+    post:
+      tags: [import]
+      operationId: checkImportIntegrity
+      x-command-mode: transient
+      description: |
+        Compare the on-disk chapters with what the database holds, so "did the
+        import drop anything" is answerable. The filesystem is authoritative:
+        chapters Venera still registers but no longer has on disk come back as
+        `not_downloaded` and are **not** counted as losses. Read-only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source, bookId]
+              properties:
+                source:
+                  type: string
+                  enum: [venera, local]
+                  description: >-
+                    Which importer the book came from. `venera` also needs
+                    `comicId`; `local` needs `paths`.
+                bookId: {type: string, format: uuid}
+                comicId:
+                  type: string
+                  description: Venera comic id, required when source is `venera`.
+                paths:
+                  type: array
+                  minItems: 1
+                  items: {type: string}
+                  description: Local roots to compare against, required when source is `local`.
+      responses:
+        "200":
+          description: The reconciliation report.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ImportIntegrityReport"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "503":
+          description: The Venera library or the configured path cannot be read.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
   /insight/bootstrap:
     get:
       tags: [insight]
@@ -6399,6 +6445,69 @@ components:
         baseDir: {type: string}
         baseDirSource: {type: string, enum: [setting, default]}
         dbPath: {type: string}
+    ImportChapterVerdict:
+      type: object
+      additionalProperties: false
+      required: [ordinal, label, images, status, detail]
+      description: One chapter's reconciliation outcome.
+      properties:
+        ordinal: {type: integer, minimum: 1}
+        label: {type: string}
+        images: {type: [integer, "null"]}
+        status:
+          type: string
+          enum:
+            - missing_in_database
+            - empty_in_database
+            - missing_pages
+            - pages_from_elsewhere
+            - fewer_pages_than_disk
+            - unreadable
+            - not_downloaded
+        detail: {type: string}
+    ImportIntegrityReport:
+      type: object
+      additionalProperties: false
+      required:
+        - source
+        - target
+        - bookId
+        - filesystemChapters
+        - importedChapters
+        - lost
+        - incomplete
+        - notDownloaded
+        - problems
+        - notes
+        - ok
+      description: |
+        On-disk chapters versus imported chapters. `lost` is the answer to "did the
+        import drop anything": a chapter that exists on disk but has no rows in the
+        database. `notDownloaded` lists chapters Venera still registers while the
+        disk no longer has them — normal after the user deletes downloads, so they
+        are deliberately excluded from `lost`.
+      properties:
+        source: {type: string, enum: [venera, local]}
+        target: {type: string}
+        bookId: {type: [string, "null"]}
+        filesystemChapters: {type: integer, minimum: 0}
+        importedChapters: {type: integer, minimum: 0}
+        lost:
+          type: array
+          items: {$ref: "#/components/schemas/ImportChapterVerdict"}
+        incomplete:
+          type: array
+          items: {$ref: "#/components/schemas/ImportChapterVerdict"}
+        notDownloaded:
+          type: array
+          items: {$ref: "#/components/schemas/ImportChapterVerdict"}
+        problems:
+          type: array
+          items: {$ref: "#/components/schemas/ImportChapterVerdict"}
+        notes:
+          type: array
+          items: {type: string}
+        ok: {type: boolean}
     ImportIssue:
       type: object
       additionalProperties: false
