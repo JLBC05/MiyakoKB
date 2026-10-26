@@ -272,6 +272,22 @@ def _console_level(explicit: str | None) -> int:
     return level
 
 
+def _product_file_level() -> int:
+    """产品日志文件的写入电平，默认 INFO。
+
+    DEBUG 档会把每次模型请求的提示词全文逐行写进产品日志（实测一次构建
+    91% 的行都是调试行，10 MB 轮转分分钟打满），所以默认不落盘；排障时用
+    ``SABER_V2_LOG_LEVEL=DEBUG`` 或 ``--log-level debug`` 显式打开。完整
+    提示词另有 ``miyako-<role>-diagnostic.log`` 常开记录。
+    """
+
+    raw = os.environ.get(LOG_LEVEL_ENV, "INFO").strip().upper()
+    level = getattr(logging, raw, None)
+    if not isinstance(level, int):
+        return logging.INFO
+    return level
+
+
 def _owned(handler: logging.Handler) -> bool:
     return bool(getattr(handler, _HANDLER_MARKER, False))
 
@@ -315,8 +331,9 @@ def configure_backend_logging(
         if _owned(handler):
             root.removeHandler(handler)
             handler.close()
-    # DEBUG reaches the detailed file; the console handler performs its own
-    # INFO/DEBUG selection so normal terminal output remains readable.
+    # Root stays at DEBUG so the diagnostic file always sees everything.
+    # The product file keeps its own (default INFO) level: prompt bodies only
+    # land there when SABER_V2_LOG_LEVEL explicitly asks for DEBUG.
     root.setLevel(logging.DEBUG)
 
     # Enable ANSI colors on older Windows consoles while remaining idempotent
@@ -337,7 +354,7 @@ def configure_backend_logging(
             encoding="utf-8",
         )
     )
-    product_file_handler.setLevel(logging.DEBUG)
+    product_file_handler.setLevel(_product_file_level())
     product_file_handler.addFilter(ProductLogFilter())
     product_file_handler.setFormatter(product_file_formatter)
     root.addHandler(product_file_handler)

@@ -1346,3 +1346,138 @@ def test_public_backup_helper_creates_a_verified_snapshot(tmp_path: Path) -> Non
     assert len(snapshots) == 1
     with sqlite3.connect(snapshots[0]) as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+
+
+def test_openapi_document_is_not_readable_before_login(public_platform) -> None:
+    app = public_platform["app"]
+
+    anonymous = app.test_client().get(
+        "/api/v2/openapi.json",
+        base_url=PUBLIC_BASE,
+    )
+    assert anonymous.status_code == 401
+    assert anonymous.get_json()["error"]["code"] == "authentication_required"
+
+    admin_client, _csrf = _login(app, "admin", ADMIN_PASSWORD)
+    authenticated = admin_client.get(
+        "/api/v2/openapi.json",
+        base_url=PUBLIC_BASE,
+    )
+    assert authenticated.status_code == 200
+    assert authenticated.get_json()["openapi"].startswith("3.")
+
+
+def test_a_disabled_account_is_indistinguishable_without_the_right_password(
+    public_platform,
+) -> None:
+    app = public_platform["app"]
+    admin_client, admin_csrf = _login(app, "admin", ADMIN_PASSWORD)
+    alice_client, _alice_csrf = _login(app, "alice", ALICE_PASSWORD)
+
+    users = admin_client.get("/api/v2/admin/users", base_url=PUBLIC_BASE).get_json()
+    alice_id = next(
+        item["id"] for item in users["users"] if item["username"] == "alice"
+    )
+    disabled = admin_client.patch(
+        f"/api/v2/admin/users/{alice_id}/status",
+        base_url=PUBLIC_BASE,
+        headers={"X-CSRF-Token": admin_csrf},
+        json={"status": "disabled"},
+    )
+    assert disabled.status_code == 200, disabled.get_data(as_text=True)
+
+    # 密码错时不能因为"账号存在但被禁用"而给出不同的错误码。
+    wrong_password = app.test_client().post(
+        "/api/v2/auth/login",
+        base_url=PUBLIC_BASE,
+        json={"username": "alice", "password": "DefinitelyWrong123!"},
+    )
+    assert wrong_password.status_code == 401
+    assert wrong_password.get_json()["error"]["code"] == "invalid_credentials"
+
+    # 密码对时才允许暴露真实原因（account_disabled 按既有契约仍是 401）。
+    right_password = app.test_client().post(
+        "/api/v2/auth/login",
+        base_url=PUBLIC_BASE,
+        json={"username": "alice", "password": ALICE_PASSWORD},
+    )
+    assert right_password.status_code == 401
+    assert right_password.get_json()["error"]["code"] == "account_disabled"
+
+
+def test_change_password_is_rate_limited_against_guessing_the_current_one(
+    public_platform,
+) -> None:
+    app = public_platform["app"]
+    client, csrf = _login(app, "alice", ALICE_PASSWORD)
+
+    statuses: list[int] = []
+    for _attempt in range(12):
+        response = client.post(
+            "/api/v2/auth/change-password",
+            base_url=PUBLIC_BASE,
+            headers={"X-CSRF-Token": csrf},
+            json={"currentPassword": "StillWrong123!", "newPassword": "Fresh12345!"},
+        )
+        statuses.append(response.status_code)
+        if response.status_code == 429:
+            break
+
+    assert statuses[-1] == 429, statuses
+    assert all(code in {422, 401, 403, 429} for code in statuses), statuses
+
+
+def test_api_settings_default_to_loopback_only() -> None:
+    from src.backend_v2.api.app import ApiSettings
+
+    assert ApiSettings.__dataclass_fields__["host"].default == "127.0.0.1"
+
+
+def test_another_users_asset_cannot_be_fetched_by_id(public_platform) -> None:
+    """P3-2：/assets/<asset_id> 必须按 owner 过滤，否则猜到 id 就能读别人的原图。"""
+    app = public_platform["app"]
+    alice_client, alice_csrf = _login(app, "alice", ALICE_PASSWORD)
+
+    created = alice_client.post(
+        "/api/v2/books",
+        base_url=PUBLIC_BASE,
+        headers={"Idempotency-Key": "alice-book", "X-CSRF-Token": alice_csrf},
+        json={"title": "Alice 的漫画"},
+    )
+    assert created.status_code == 201, created.get_data(as_text=True)
+    book_id = str(created.get_json()["id"])
+
+    chapter = alice_client.post(
+        f"/api/v2/books/{book_id}/chapters",
+        base_url=PUBLIC_BASE,
+        headers={"Idempotency-Key": "alice-ch1", "X-CSRF-Token": alice_csrf},
+        json={"title": "第1話"},
+    )
+    assert chapter.status_code == 201, chapter.get_data(as_text=True)
+    chapter_id = str(chapter.get_json()["id"])
+
+    page = alice_client.post(
+        f"/api/v2/chapters/{chapter_id}/pages",
+        base_url=PUBLIC_BASE,
+        headers={"Idempotency-Key": "alice-p1", "X-CSRF-Token": alice_csrf},
+        data={
+            "logicalPath": "001.png",
+            "textStyle": json.dumps(DEFAULT_TEXT_STYLE),
+            "file": (BytesIO(_png_bytes()), "001.png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert page.status_code == 201, page.get_data(as_text=True)
+    source_url = str(page.get_json()["page"]["sourceUrl"])
+    assert source_url.startswith("/api/v2/assets/")
+
+    # 持有者可读。
+    owner_read = alice_client.get(source_url, base_url=PUBLIC_BASE)
+    assert owner_read.status_code == 200
+    assert owner_read.data[:8] == _png_bytes()[:8]
+
+    # 另一个已登录用户即使拿到完整 asset_id 也拿不到内容。
+    bob_client, _bob_csrf = _login(app, "bob", BOB_PASSWORD)
+    foreign_read = bob_client.get(source_url, base_url=PUBLIC_BASE)
+    assert foreign_read.status_code == 404
+    assert foreign_read.get_json()["error"]["code"] == "not_found"

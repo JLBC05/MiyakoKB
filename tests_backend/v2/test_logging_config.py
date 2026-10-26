@@ -13,10 +13,12 @@ import pytest
 
 from src.backend_v2.api.app import _install_request_logging
 from src.backend_v2.logging_config import (
+    LOG_LEVEL_ENV,
     ProductConsoleHandler,
     ProductLogFormatter,
     ProductRotatingFileHandler,
     SecretSafeFormatter,
+    _product_file_level,
     configure_backend_logging,
 )
 from src.backend_v2.storage.schema import JOB_KINDS, OPERATION_KINDS
@@ -81,6 +83,84 @@ def test_product_log_multiline_output_keeps_role_and_category_on_every_line() ->
     assert lines[0][:19] == lines[1][:19]
 
 
+def test_product_log_level_defaults_to_info_and_follows_the_env(monkeypatch) -> None:
+    monkeypatch.delenv(LOG_LEVEL_ENV, raising=False)
+    assert _product_file_level() == logging.INFO
+
+    for raw, expected in (
+        ("debug", logging.DEBUG),
+        ("DEBUG", logging.DEBUG),
+        ("warning", logging.WARNING),
+        ("  error  ", logging.ERROR),
+        ("not-a-level", logging.INFO),
+    ):
+        monkeypatch.setenv(LOG_LEVEL_ENV, raw)
+        assert _product_file_level() == expected, raw
+
+
+def test_prompt_bodies_stay_out_of_the_product_log_unless_debug_is_requested(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = logging.getLogger()
+    original_handlers = list(root.handlers)
+    original_level = root.level
+    try:
+        monkeypatch.delenv(LOG_LEVEL_ENV, raising=False)
+        log_path = configure_backend_logging(
+            role="worker",
+            data_root=tmp_path,
+            console_level="INFO",
+        )
+        log_model_input("高质量翻译", ("默认档的提示词正文",))
+        for handler in root.handlers:
+            handler.flush()
+        product_text = log_path.read_text(encoding="utf-8")
+        diagnostic_text = log_path.with_name(
+            "miyako-worker-diagnostic.log"
+        ).read_text(encoding="utf-8")
+        assert "高质量翻译请求已准备｜1 项输入" in product_text
+        assert "默认档的提示词正文" not in product_text
+        assert "默认档的提示词正文" in diagnostic_text
+    finally:
+        for handler in list(root.handlers):
+            if handler not in original_handlers:
+                root.removeHandler(handler)
+                handler.close()
+        for handler in original_handlers:
+            if handler not in root.handlers:
+                root.addHandler(handler)
+        root.setLevel(original_level)
+
+    debug_root = tmp_path / "debug-run"
+    monkeypatch.setenv(LOG_LEVEL_ENV, "DEBUG")
+    try:
+        debug_path = configure_backend_logging(
+            role="worker",
+            data_root=debug_root,
+            console_level="INFO",
+        )
+        log_model_input("高质量翻译", ("调试档的提示词正文",))
+        for handler in root.handlers:
+            handler.flush()
+        debug_product = debug_path.read_text(encoding="utf-8")
+        debug_diagnostic = debug_path.with_name(
+            "miyako-worker-diagnostic.log"
+        ).read_text(encoding="utf-8")
+        assert "调试档的提示词正文" in debug_product
+        # 已经落进产品日志的正文不再往诊断日志重复写一份。
+        assert "调试档的提示词正文" not in debug_diagnostic
+    finally:
+        for handler in list(root.handlers):
+            if handler not in original_handlers:
+                root.removeHandler(handler)
+                handler.close()
+        for handler in original_handlers:
+            if handler not in root.handlers:
+                root.addHandler(handler)
+        root.setLevel(original_level)
+
+
 def test_backend_logging_keeps_product_and_diagnostics_in_separate_files(
     tmp_path: Path,
     capsys,
@@ -126,8 +206,10 @@ def test_backend_logging_keeps_product_and_diagnostics_in_separate_files(
         assert "高质量翻译请求已准备｜1 项输入" in console
         assert "仅写入详细产品日志的提示词" not in console
         assert "OCR 识别完成" in product_text
-        assert "仅写入详细产品日志的提示词" in product_text
-        assert "[调试] [模型]" in product_text
+        # 提示词全文是 DEBUG 档记录：默认 INFO 档的产品日志不再承载它，
+        # 正文改写进诊断日志，排障能力不随分级丢失。
+        assert "仅写入详细产品日志的提示词" not in product_text
+        assert "[调试] [模型]" not in product_text
         assert "sk-model-secret" not in product_text
         assert "debug detail" not in product_text
         assert "safe info" not in product_text
@@ -138,6 +220,8 @@ def test_backend_logging_keeps_product_and_diagnostics_in_separate_files(
         assert "safe info" in diagnostic_text
         assert "diagnostic warning" in diagnostic_text
         assert "diagnostic error" in diagnostic_text
+        assert "仅写入详细产品日志的提示词" in diagnostic_text
+        assert "sk-model-secret" not in diagnostic_text
         assert "sk-do-not-log" not in product_text
         assert "sk-do-not-log" not in diagnostic_text
         assert "\x1b[" not in product_text

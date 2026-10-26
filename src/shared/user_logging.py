@@ -253,7 +253,13 @@ def user_log(
     details: Sequence[object] = (),
     level: int = logging.INFO,
 ) -> None:
-    """Publish one readable, secret-redacted product log record."""
+    """Publish one readable, secret-redacted product log record.
+
+    ``details`` 是长正文（典型是提示词/响应全文，逐行渲染成 ``│`` 续行）。
+    它会跟正文一起进产品日志；当这条记录的电平被产品日志文件的电平挡住时
+    （默认 INFO 档挡住了 DEBUG 的提示词全文），正文改写进诊断日志，避免排障
+    能力随分级一起丢失。
+    """
 
     if category not in CATEGORY_LABELS:
         raise ValueError(f"unsupported user log category: {category}")
@@ -271,9 +277,39 @@ def user_log(
                 rendered_details.append(f"│ {lines[0]}")
                 rendered_details.extend(f"│   {line}" for line in lines[1:])
             body += "\n" + "\n".join(rendered_details)
+            if not _product_file_accepts(level):
+                _DIAGNOSTIC_LOGGER.debug(
+                    "long details kept out of the product log at level %s\n%s",
+                    _product_file_level_name(),
+                    "\n".join(rendered_details),
+                )
         _publish_product_record(category, body, level=level)
     except Exception as error:
         _discard_product_log(error, "product log record dropped while formatting")
+
+
+def _product_file_level() -> int:
+    """产品日志文件的当前电平；导入失败时按最严格的 INFO 处理。"""
+
+    try:
+        from src.backend_v2.logging_config import _product_file_level as impl
+    except Exception:  # pragma: no cover - 导入失败时按最保守处理
+        return logging.INFO
+    return impl()
+
+
+def _product_file_level_name() -> str:
+    return logging.getLevelName(_product_file_level())
+
+
+def _product_file_accepts(level: int) -> bool:
+    """产品日志文件是否真的会写下这一条。
+
+    与 ``_publish_product_record`` 的 ``effective_level`` 保持同一口径：
+    正文里的提示词全文只在文件电平够低时才落产品日志。
+    """
+
+    return level >= _product_file_level()
 
 
 def _stream_log_record(

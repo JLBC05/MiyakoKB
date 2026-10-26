@@ -22,6 +22,7 @@ from typing import Sequence
 import psutil
 
 from src.backend_v2.launcher.windows_job import ChildProcessJob
+from src.backend_v2.logging_config import LOG_LEVEL_ENV
 from src.backend_v2.paths import ensure_data_root, project_root, resolve_data_root
 from src.backend_v2.storage.lifecycle import initialize_database
 from src.storage_migrator.runner import StorageManager
@@ -121,7 +122,9 @@ class UnifiedLauncher:
         env["PYTHONIOENCODING"] = "utf-8"
         env["LAUNCHER_PID"] = str(os.getpid())
         if self.log_level:
-            env["LOG_LEVEL"] = self.log_level
+            # 变量名必须与 logging_config.LOG_LEVEL_ENV 一致，否则 --log-level
+            # 只影响启动器自己的控制台，子进程仍按默认 INFO 走。
+            env[LOG_LEVEL_ENV] = self.log_level
         return env
 
     def _spawn_api(self) -> subprocess.Popen[str]:

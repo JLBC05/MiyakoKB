@@ -207,7 +207,7 @@ class CharacterSkillRepository:
 
     def alignment(self, connection: Connection, book_id: str) -> dict[str, Any]:
         row = connection.execute(
-            select(analysis_artifacts.c.payload_json).where(
+            select(analysis_artifacts.c.payload_json, analysis_artifacts.c.status).where(
                 analysis_artifacts.c.book_id == book_id,
                 analysis_artifacts.c.kind == "entity_alignment",
                 analysis_artifacts.c.is_active.is_(True),
@@ -215,6 +215,12 @@ class CharacterSkillRepository:
         ).first()
         if row is None or not row[0]:
             raise InsightConflict("该书还没有实体知识网络，请先完成一次知识库构建")
+        # stale 表示「产物是旧一轮分析的」，把它当正常证据会把过期实体写进
+        # 角色档案；ready / degraded 仍可用（degraded 只是覆盖不全）。
+        if str(row[1]) == "stale":
+            raise InsightConflict(
+                "实体知识网络已过期（书籍重新分析过），请先重新生成实体知识网络"
+            )
         return json.loads(row[0])
 
     def characters(self, *, book_id: str, min_pages: int = 0) -> list[dict[str, Any]]:
@@ -335,6 +341,18 @@ class CharacterSkillRepository:
         return payload
 
     def latest_run_id(self, connection: Connection, book_id: str) -> str:
+        """挑出「证据最多的那一轮已发布分析」。
+
+        故意的判据：按已发布页数取最大，**不是**按 created_at 取最新。
+        实测反例（FX战士久留美）：一轮 full 构建发布 1457 页，之后一轮
+        incremental 只发布了 2 页——按时间取「最新」会把 1457 页的证据
+        换成 2 页，蒸馏出来的角色档案直接失真。用 count 判据时那一轮
+        2 页的增量永远不会被选成主证据源。
+
+        这有意牺牲一个场景：某轮次的 book 被裁过页数后，旧轮次的 count
+        可能仍然更大。当前 UI 不提供裁页，真要支持得改成「按 run 的
+        target_count 判定」，不能简单换成时间排序。
+        """
         row = connection.execute(
             select(analysis_page_results.c.run_id, func.count().label("total"))
             .join(pages, pages.c.id == analysis_page_results.c.page_id_snapshot)

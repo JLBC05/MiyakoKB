@@ -1837,7 +1837,9 @@ class DefaultQAApiAlgorithms:
                 for pending_future in (upstream, watcher):
                     try:
                         await pending_future
-                    except BaseException:
+                    except BaseException:  # noqa: BLE001
+                        # 这里必须吞掉：被取消的协程醒来时抛的正是 CancelledError，
+                        # 放出去会盖掉上面正在重新抛出的原始异常。
                         pass
                 raise
             finally:

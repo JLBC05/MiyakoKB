@@ -203,11 +203,21 @@ def create_auth_blueprint(*, engine: Engine, profile: RuntimeProfile) -> Bluepri
     @blueprint.post("/auth/change-password")
     def change_password() -> Response:
         body = json_body(allowed_keys={"currentPassword", "newPassword"})
-        repository.change_password(
-            current_user_id(),
-            required_string(body, "currentPassword"),
-            required_string(body, "newPassword"),
-        )
+        user_id = current_user_id()
+        ip = client_ip()
+        # 限流按用户计（这里是已登录会话，没有 username 可套），防的是拿到
+        # 会话后暴力猜原密码——它与 login 一样是密码校验面。
+        limiter.check(route="change_password", client_ip=ip, username=user_id)
+        try:
+            repository.change_password(
+                user_id,
+                required_string(body, "currentPassword"),
+                required_string(body, "newPassword"),
+            )
+        except AuthError:
+            limiter.record_failure(route="change_password", client_ip=ip, username=user_id)
+            raise
+        limiter.clear_user(route="change_password", client_ip=ip, username=user_id)
         response = jsonify({"status": "ok"})
         response.delete_cookie(SESSION_COOKIE_NAME, path="/")
         response.delete_cookie(CSRF_COOKIE_NAME, path="/")

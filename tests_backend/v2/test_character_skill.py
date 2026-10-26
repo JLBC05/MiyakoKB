@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import io
 import json
 from pathlib import Path
@@ -16,17 +16,27 @@ from sqlalchemy import insert, update
 
 from src.backend_v2.insight.character_skill import (
     CHARACTER_SKILL_KIND,
+    CharacterSkillRepository,
     CharacterSkillService,
     PageEvidence,
     _Facts,
     _render_files,
     build_skill_archive,
 )
-from src.backend_v2.insight.repository import InsightNotFound
+from src.backend_v2.insight.repository import InsightConflict, InsightNotFound
 from src.backend_v2.insight.routes import create_insight_blueprint
 from src.backend_v2.runtime_profile import resolve_runtime_profile
 from src.backend_v2.storage.database import create_sqlite_engine
-from src.backend_v2.storage.schema import analysis_artifacts, books, metadata
+from src.backend_v2.storage.schema import (
+    analysis_artifacts,
+    analysis_page_results,
+    analysis_runs,
+    assets,
+    books,
+    chapters,
+    metadata,
+    pages,
+)
 from src.backend_v2.storage.seeding import seed_system_records
 
 
@@ -217,6 +227,159 @@ def test_character_skill_detail_is_not_found_before_generation(skill_platform) -
 
     with pytest.raises(InsightNotFound):
         service.get(book_id=platform["book_id"], entity_id=CHARACTER_ID)
+
+
+def test_character_skill_refuses_a_stale_entity_alignment(skill_platform) -> None:
+    engine = skill_platform["engine"]
+    book_id = skill_platform["book_id"]
+    with engine.begin() as connection:
+        connection.execute(
+            update(analysis_artifacts)
+            .where(
+                analysis_artifacts.c.book_id == book_id,
+                analysis_artifacts.c.kind == "entity_alignment",
+            )
+            .values(status="stale")
+        )
+
+    service = CharacterSkillService(engine, skill_platform["data_root"])
+    with pytest.raises(InsightConflict, match="已过期"):
+        service.characters(book_id=book_id)
+
+
+def test_character_skill_still_accepts_a_degraded_entity_alignment(
+    skill_platform,
+) -> None:
+    engine = skill_platform["engine"]
+    book_id = skill_platform["book_id"]
+    with engine.begin() as connection:
+        connection.execute(
+            update(analysis_artifacts)
+            .where(
+                analysis_artifacts.c.book_id == book_id,
+                analysis_artifacts.c.kind == "entity_alignment",
+            )
+            .values(status="degraded")
+        )
+
+    service = CharacterSkillService(engine, skill_platform["data_root"])
+    # degraded 只表示覆盖不全，仍然是这一轮的证据，可以继续用。
+    assert [item["entityId"] for item in service.characters(book_id=book_id)]
+
+
+def test_latest_run_prefers_the_richest_evidence_over_the_newest_run(
+    skill_platform,
+) -> None:
+    """P3-6 的判据锁：count 最大优先，不是 created_at 最新优先。
+
+    真实反例：full 构建发布 1457 页，随后的 incremental 只发布 2 页。
+    若改成按时间取最新，角色档案的证据会从 1457 页塌到 2 页。
+    """
+    engine = skill_platform["engine"]
+    book_id = skill_platform["book_id"]
+    rich_run = "run-rich"
+    thin_run = "run-thin"
+    with engine.begin() as connection:
+        chapter_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        # run_id / source_asset_id 都有外键，先造出被引用的行。
+        asset_id = str(uuid.uuid4())
+        connection.execute(
+            insert(assets).values(
+                id=asset_id,
+                owner_user_id=str(uuid.uuid4()),
+                relative_path=f"objects/{asset_id}.webp",
+                mime_type="image/webp",
+                checksum="0" * 64,
+                byte_size=1,
+                integrity_status="ok",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        for run_id in (rich_run, thin_run):
+            connection.execute(
+                insert(analysis_runs).values(
+                    id=run_id,
+                    owner_user_id=str(uuid.uuid4()),
+                    book_id=book_id,
+                    job_id=None,
+                    scope="full",
+                    status="completed",
+                    config_json="{}",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        connection.execute(
+            insert(chapters).values(
+                id=chapter_id,
+                book_id=book_id,
+                ordinal=1,
+                title="第1話",
+                page_order_revision=1,
+                settings_memory_json="{}",
+                settings_memory_revision=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        page_ids: list[str] = []
+        for ordinal in range(1, 5):
+            page_id = str(uuid.uuid4())
+            page_ids.append(page_id)
+            connection.execute(
+                insert(pages).values(
+                    id=page_id,
+                    chapter_id=chapter_id,
+                    ordinal=ordinal,
+                    logical_source_path=f"chapter-1/{ordinal:03d}.webp",
+                    source_revision=1,
+                    document_revision=1,
+                    render_status="not_rendered",
+                    detection_state="unprocessed",
+                    page_style_defaults_json="{}",
+                    warnings_json="[]",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        # thin_run 更新（时间更晚），但只有 1 页已发布。
+        for index, page_id in enumerate(page_ids):
+            connection.execute(
+                insert(analysis_page_results).values(
+                    id=str(uuid.uuid4()),
+                    run_id=rich_run,
+                    page_id=page_id,
+                    source_asset_id=asset_id,
+                    source_checksum="0" * 64,
+                    page_id_snapshot=page_id,
+                    page_number_snapshot=index + 1,
+                    payload_json="{}",
+                    status="published",
+                    created_at=now - timedelta(days=1),
+                    updated_at=now - timedelta(days=1),
+                )
+            )
+        connection.execute(
+            insert(analysis_page_results).values(
+                id=str(uuid.uuid4()),
+                run_id=thin_run,
+                page_id=page_ids[0],
+                source_asset_id=asset_id,
+                source_checksum="0" * 64,
+                page_id_snapshot=page_ids[0],
+                page_number_snapshot=1,
+                payload_json="{}",
+                status="published",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    repository = CharacterSkillRepository(engine, skill_platform["data_root"])
+    with engine.connect() as connection:
+        assert repository.latest_run_id(connection, book_id) == rich_run
 
 
 def test_character_skill_list_hides_characters_below_the_page_threshold(skill_platform) -> None:

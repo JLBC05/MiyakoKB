@@ -9,6 +9,9 @@ from src.backend_v2.auth.repository import AuthRepository
 from src.backend_v2.runtime_profile import RuntimeProfile
 
 
+# 公开路径清单：只有这些不需要登录。契约文档 /openapi.json 不在此列——
+# 前端运行时不取它，只供开发期生成类型与排障，不该向未登录访客暴露完整
+# API 面（路径、参数、错误码）。
 _PUBLIC_API_PATHS = frozenset(
     {
         "/api/v2/health",

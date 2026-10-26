@@ -278,14 +278,16 @@ class AuthRepository:
             ).mappings().one_or_none()
         if row is None or row["password_hash"] is None:
             raise AuthError("invalid_credentials", "用户名或密码错误")
-        if row["status"] != "active":
-            raise AuthError("account_disabled", "账号已被禁用")
         try:
             valid = _PASSWORDS.verify(str(row["password_hash"]), password)
         except (VerifyMismatchError, InvalidHashError):
             valid = False
         if not valid:
             raise AuthError("invalid_credentials", "用户名或密码错误")
+        # 状态判定放在密码校验之后：否则任何人只要猜到用户名，就能用
+        # account_disabled 与 invalid_credentials 的差异枚举出账号是否存在。
+        if row["status"] != "active":
+            raise AuthError("account_disabled", "账号已被禁用")
         if _PASSWORDS.check_needs_rehash(str(row["password_hash"])):
             with self.engine.begin() as connection:
                 connection.execute(

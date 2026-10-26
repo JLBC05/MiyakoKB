@@ -2139,7 +2139,9 @@ class InsightVectorStore:
                 try:
                     client.delete_collection(name)
                 except Exception:
-                    pass
+                    # 清理旧向量集合属于尽力而为：删不掉会留下垃圾集合，
+                    # 但不该掩盖正在往上抛的原始失败，所以保留异常并记日志。
+                    LOGGER.warning("向量集合清理失败，可能遗留旧集合：%s", name, exc_info=True)
             raise
 
     def expected_collection_names(self, engine: Engine) -> set[str]:

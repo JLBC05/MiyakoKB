@@ -43,6 +43,12 @@ from src.backend_v2.storage.schema import process_epochs
 from src.backend_v2.worker.entrypoint import _insight_layer_handler
 from src.backend_v2.jobs.repository import JobItemSpec, JobQueueRepository, JobSpec
 
+# Ceiling for "the process finally came up".  Generous on purpose: a full-suite
+# run (hundreds of cases, many of them spawning interpreters) is much slower
+# than running this file alone, and a timeout here must mean "it never started"
+# rather than "the machine was busy".
+_PROCESS_START_TIMEOUT = 60.0
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT = PROJECT_ROOT / "saber_v2.py"
@@ -107,8 +113,19 @@ def _free_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _wait_until(predicate, timeout: float = 15.0) -> None:
-    deadline = time.monotonic() + timeout
+def _wait_until(predicate, timeout: float | None = None) -> None:
+    """Poll ``predicate`` until it holds.
+
+    The ceiling is deliberately loose: these cases spawn real launcher/API/
+    worker processes, and under a full-suite run they compete for CPU with the
+    rest of the suite.  A failure here must mean "the process never came up",
+    not "the machine was busy", so the deadline defaults to
+    ``_PROCESS_START_TIMEOUT`` instead of a tight 15s.
+    """
+
+    deadline = time.monotonic() + (
+        _PROCESS_START_TIMEOUT if timeout is None else timeout
+    )
     while time.monotonic() < deadline:
         if predicate():
             return

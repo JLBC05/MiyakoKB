@@ -21,12 +21,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import time
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Sequence
+
+LOGGER = logging.getLogger("saber.worker.entity_alignment")
 
 SAME = "SAME"
 DIFFERENT = "DIFFERENT"
@@ -124,7 +127,9 @@ def _generic_terms(category: str, path: str) -> frozenset[str]:
             if isinstance(extra, Sequence) and not isinstance(extra, (str, bytes)):
                 merged.update(str(item).strip() for item in extra if str(item).strip())
         except Exception:  # noqa: BLE001 - 词表缺失不应阻断对齐
-            pass
+            # 词表文件只是「额外补充」，读不出来就退回内置默认词表；
+            # 但要留下痕迹，否则用户改了词表却不生效时无从查起。
+            LOGGER.warning("通用词表读取失败，改用内置默认词表：%s", path, exc_info=True)
     frozen = frozenset(merged)
     _GENERIC_CACHE[key] = frozen
     return frozen
@@ -998,7 +1003,9 @@ async def run_request_batch(
                     try:
                         progress(done, len(shards))
                     except Exception:  # noqa: BLE001 - 进度回调不得影响裁决
-                        pass
+                        # 进度回调是观测层，抛异常不能拖垮正在跑的裁决；
+                        # 记 debug 便于排查「进度停了但任务还在跑」。
+                        LOGGER.debug("对齐进度回调失败，已忽略", exc_info=True)
 
     if shards:
         await asyncio.gather(*[_one(shard) for shard in shards])

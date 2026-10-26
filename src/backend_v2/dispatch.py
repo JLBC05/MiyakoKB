@@ -54,7 +54,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
-        help="Console log level. Detailed DEBUG logs are always kept in log files.",
+        help=(
+            "Console and product-file log level (default INFO). Pass DEBUG to keep "
+            "full model prompts in the product log; they always land in the "
+            "*-diagnostic.log file instead."
+        ),
     )
     return parser
 

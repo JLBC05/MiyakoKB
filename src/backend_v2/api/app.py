@@ -42,7 +42,8 @@ class ApiSettings:
     data_root: Path
     identity: RuntimeIdentity
     engine: Engine
-    host: str = "0.0.0.0"
+    # 默认只绑回环：要对外提供访问必须显式 --host 0.0.0.0，避免"启动即暴露"。
+    host: str = "127.0.0.1"
     port: int = 5000
     profile: RuntimeProfile = resolve_runtime_profile("local")
     public_host: str | None = None
