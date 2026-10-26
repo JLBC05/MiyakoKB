@@ -1555,6 +1555,71 @@ def test_asset_gc_restores_the_row_when_the_file_cannot_be_removed(
     assert restored["integrity_status"] == "missing"
 
 
+
+def test_font_upload_reader_rejects_oversized_payloads_without_buffering_them() -> None:
+    """字体上传必须分块读、超限即拒（审计 F3）。
+
+    旧实现是 `upload.stream.read()` 整读内存，local profile 没有配额兜底，
+    一个超大上传就能把进程顶掉。这里既断言「超限抛错」，也断言「没有把超限内容
+    读进列表」——后者才是内存安全的实质。
+    """
+    from src.backend_v2.settings.routes import _read_bounded
+
+    class _CountingStream:
+        def __init__(self, chunk: bytes, total: int) -> None:
+            self._chunk = chunk
+            self._remaining = total
+            self.reads = 0
+
+        def read(self, size: int) -> bytes:
+            self.reads += 1
+            if self._remaining <= 0:
+                return b""
+            take = min(size, self._remaining, len(self._chunk))
+            self._remaining -= take
+            return self._chunk[:take]
+
+    limit = 4
+    stream = _CountingStream(b"aaaa", 64)
+    with pytest.raises(ValueError) as caught:
+        _read_bounded(stream, limit)
+    assert "MB" in str(caught.value) or "上限" in str(caught.value)
+    # 首个 4 字节块刚好达限，第二块才触发拒绝：说明它是「边读边判」而不是「读完再判」。
+    assert stream.reads == 2
+
+    exact = _CountingStream(b"aaaa", 4)
+    assert _read_bounded(exact, limit) == b"aaaa"
+
+
+def test_local_import_limits_are_bounded_rather_than_absent() -> None:
+    """local profile 曾经 `max_container_entries`/解压上限全是 None（审计 F1）。
+
+    「没有上限」和「上限宽松」是两件事：漫画页永远碰不到这些数值，但压缩炸弹
+    会，而爆炸时用户只看到「导入卡死」。
+    """
+    from src.backend_v2.content.image_import import (
+        PUBLIC_IMPORT_SAFETY_LIMITS,
+        ImportSafetyLimits,
+    )
+
+    local = ImportSafetyLimits()
+    assert local.max_container_entries is not None
+    assert local.max_archive_uncompressed_bytes is not None
+    assert local.max_single_entry_bytes is not None
+    # 本地必须比 public 宽松，否则真实用户会被误伤。
+    assert local.max_archive_uncompressed_bytes > PUBLIC_IMPORT_SAFETY_LIMITS.max_archive_uncompressed_bytes
+    assert local.max_container_entries > PUBLIC_IMPORT_SAFETY_LIMITS.max_container_entries
+
+
+def test_local_profile_sets_a_finite_decompression_ceiling() -> None:
+    """PIL 的解压炸弹阈值在 local 下不能再是 None（审计 F1）。"""
+    from PIL import Image
+
+    from src.backend_v2.content import image_import
+
+    assert Image.MAX_IMAGE_PIXELS is not None
+    assert image_import._LOCAL_MAX_IMAGE_PIXELS > image_import._PUBLIC_MAX_IMAGE_PIXELS
+
 def test_integrity_scan_and_two_pass_gc_never_delete_referenced_assets(
     platform,
 ) -> None:

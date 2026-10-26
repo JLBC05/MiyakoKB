@@ -5,6 +5,7 @@ from __future__ import annotations
 from io import BytesIO
 import logging
 from pathlib import Path
+from typing import BinaryIO
 
 from flask import Blueprint, Response, jsonify, request
 from fontTools.ttLib import TTCollection, TTFont
@@ -69,6 +70,34 @@ def _uses_local_provider(value: object) -> bool:
     elif isinstance(value, list):
         return any(_uses_local_provider(child) for child in value)
     return False
+
+
+MAX_FONT_UPLOAD_BYTES = 32 * 1024 * 1024
+"""字体文件上限。
+
+字体是几百 KB 到几 MB 的二进制，32 MB 已经比任何正常字体大一个量级。过去这里是
+`upload.stream.read()` 一次性整读，没有任何上限——public profile 靠资产配额兜底，
+local profile 完全没有，一个超大上传就能把进程内存顶掉（审计 F3）。
+"""
+
+_FONT_READ_CHUNK = 1024 * 1024
+
+
+def _read_bounded(stream: BinaryIO, limit: int) -> bytes:
+    """分块读取，超限立刻拒绝，绝不把超大文件整个读进内存。"""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = stream.read(_FONT_READ_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise ValueError(
+                f"字体文件超过 {limit // (1024 * 1024)} MB 上限，请先压缩或换用更小的字体"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def create_settings_blueprint(
@@ -440,7 +469,7 @@ def create_settings_blueprint(
         upload = request.files.get("file")
         if upload is None:
             raise ValueError("multipart field 'file' is required")
-        payload = upload.stream.read()
+        payload = _read_bounded(upload.stream, MAX_FONT_UPLOAD_BYTES)
         if not payload:
             raise ValueError("font is empty")
         suffix = Path(upload.filename or "").suffix.lower()

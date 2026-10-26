@@ -81,6 +81,9 @@ export const useTaskCenterStore = defineStore('taskCenter', () => {
   const statusFilter = ref<'' | V2JobStatus>('')
   const kindFilter = ref<'' | V2Job['kind']>('')
   const bookFilter = ref('')
+  /** 历史分页游标：只有翻过一页以上才有值，`null` 表示后端已无更早批次。 */
+  const historyCursor = ref<string | null>(null)
+  const olderHistoryLoading = ref(false)
   let eventSource: EventSource | null = null
   let eventStreamOpenedOnce = false
   let reconcileTimer: ReturnType<typeof setTimeout> | null = null
@@ -169,6 +172,9 @@ export const useTaskCenterStore = defineStore('taskCenter', () => {
       }
       queue.value = result.items.filter(job => QUEUE_STATUSES.has(job.status))
       history.value = result.items.filter(job => HISTORY_JOB_STATUSES.has(job.status))
+      // 首屏刷新会把历史重置成最新一页，游标跟着归零；否则「加载更早」会拿着
+      // 上一次会话的游标，插进一批时间上错位的数据。
+      historyCursor.value = result.nextCursor ?? null
       queuePaused.value = result.queuePaused
       workerOnline.value = result.workerOnline
       executorBusy.value = result.executorBusy
@@ -192,6 +198,45 @@ export const useTaskCenterStore = defineStore('taskCenter', () => {
     })
     refreshPromise = request
     return request
+  }
+
+  /**
+   * 追加更早的历史批次（v0.2.x-7）。
+   *
+   * 旧实现一次性拉 `limit=200` 批，更早的任务在界面上永远看不到。这里按后端返回的
+   * `nextCursor` 逐页往后翻，已有行按 `jobId` 去重，避免首屏刷新与翻页并发时重行。
+   */
+  async function loadMoreHistory(): Promise<void> {
+    if (olderHistoryLoading.value) return
+    const cursor = historyCursor.value
+    if (!cursor) return
+    olderHistoryLoading.value = true
+    try {
+      const result = await jobsApi.list('all', { after: cursor })
+      const known = new Set(history.value.map(job => job.jobId))
+      const appended = result.items.filter(job => (
+        HISTORY_JOB_STATUSES.has(job.status) && !known.has(job.jobId)
+      ))
+      history.value = appendHistoryBatches(history.value, appended)
+      historyCursor.value = result.nextCursor ?? null
+      if (typeof result.eventCursor === 'number' && result.eventCursor > lastEventId.value) {
+        lastEventId.value = result.eventCursor
+      }
+    } finally {
+      olderHistoryLoading.value = false
+    }
+  }
+
+  function appendHistoryBatches(current: V2Job[], appended: V2Job[]): V2Job[] {
+    if (appended.length === 0) return current
+    return sortHistoryBatches([...current, ...appended])
+  }
+
+  function sortHistoryBatches(items: V2Job[]): V2Job[] {
+    return [...items].sort((left, right) => {
+      if (left.createdAt !== right.createdAt) return right.createdAt.localeCompare(left.createdAt)
+      return right.jobId.localeCompare(left.jobId)
+    })
   }
 
   function queueOrder(left: V2Job, right: V2Job): number {
@@ -493,6 +538,7 @@ export const useTaskCenterStore = defineStore('taskCenter', () => {
     projectionVersion = 0
     queue.value = []
     history.value = []
+    historyCursor.value = null
     queuePaused.value = false
     workerOnline.value = false
     executorBusy.value = false
@@ -755,6 +801,9 @@ export const useTaskCenterStore = defineStore('taskCenter', () => {
     statusFilter,
     kindFilter,
     bookFilter,
+    historyCursor,
+    olderHistoryLoading,
+    loadMoreHistory,
     activeCount,
     queuedCount,
     interruptedCount,

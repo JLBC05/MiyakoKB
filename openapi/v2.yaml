@@ -3900,11 +3900,14 @@ components:
       type: object
       additionalProperties: false
       required:
-        [items, queuePaused, eventCursor, workerOnline, executorBusy, waitingReason]
+        [items, nextCursor, queuePaused, eventCursor, workerOnline, executorBusy, waitingReason]
       properties:
         items:
           type: array
           items: {$ref: "#/components/schemas/Job"}
+        # 历史分页游标（v0.2.x-7）：把上一页的 nextCursor 原样回传成 ?after=，
+        # 就能接着往里翻。null 表示后面没有更早的批次；queue 作用域永远为 null。
+        nextCursor: {type: [string, "null"]}
         queuePaused: {type: boolean}
         eventCursor: {type: integer, minimum: 0}
         workerOnline: {type: boolean}

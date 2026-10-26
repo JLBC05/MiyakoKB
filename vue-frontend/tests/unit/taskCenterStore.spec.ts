@@ -144,6 +144,7 @@ describe('taskCenterStore snapshot reconciliation', () => {
     vi.stubGlobal('EventSource', FakeEventSource)
     mocks.list.mockResolvedValue({
       items: [],
+      nextCursor: null,
       queuePaused: false,
       eventCursor: 0,
       workerOnline: true,
@@ -854,5 +855,104 @@ describe('taskCenterStore snapshot reconciliation', () => {
 
     await store.resumeQueue()
     expect(store.queuePaused).toBe(false)
+  })
+})
+
+describe('taskCenterStore history paging', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    FakeEventSource.latest = null
+    vi.stubGlobal('EventSource', FakeEventSource)
+  })
+
+  function listResponse(options: {
+    items: V2Job[]
+    nextCursor?: string | null
+    eventCursor?: number
+  }) {
+    return {
+      items: options.items,
+      nextCursor: options.nextCursor ?? null,
+      queuePaused: false,
+      eventCursor: options.eventCursor ?? 0,
+      workerOnline: true,
+      executorBusy: false,
+      waitingReason: null,
+    }
+  }
+
+  it('appends an older page and keeps the newest batch first', async () => {
+    const store = useTaskCenterStore()
+    mocks.list.mockResolvedValueOnce(listResponse({
+      items: [makeJob({ jobId: 'new-1', status: 'completed', createdAt: '2026-10-26T08:00:00Z' })],
+      nextCursor: 'cursor-1',
+    }))
+
+    await store.refresh()
+    expect(store.historyCursor).toBe('cursor-1')
+
+    mocks.list.mockResolvedValueOnce(listResponse({
+      items: [
+        makeJob({ jobId: 'old-1', status: 'completed', createdAt: '2026-10-25T08:00:00Z' }),
+        // 首屏已经有的行，翻页时不能重复插入。
+        makeJob({ jobId: 'new-1', status: 'completed', createdAt: '2026-10-26T08:00:00Z' }),
+      ],
+      nextCursor: null,
+    }))
+
+    await store.loadMoreHistory()
+
+    expect(mocks.list).toHaveBeenLastCalledWith('all', { after: 'cursor-1' })
+    expect(store.history.map(job => job.jobId)).toEqual(['new-1', 'old-1'])
+    expect(store.historyCursor).toBeNull()
+  })
+
+  it('does nothing when the backend says there is no older page', async () => {
+    const store = useTaskCenterStore()
+    mocks.list.mockResolvedValueOnce(listResponse({ items: [], nextCursor: null }))
+    await store.refresh()
+
+    await store.loadMoreHistory()
+
+    // 只调用了 refresh 的那一次，没有多发请求。
+    expect(mocks.list).toHaveBeenCalledTimes(1)
+    expect(store.olderHistoryLoading).toBe(false)
+  })
+
+  it('resets the cursor when a fresh snapshot arrives', async () => {
+    const store = useTaskCenterStore()
+    mocks.list.mockResolvedValueOnce(listResponse({
+      items: [makeJob({ jobId: 'new-1', status: 'completed' })],
+      nextCursor: 'cursor-1',
+    }))
+    await store.refresh()
+    expect(store.historyCursor).toBe('cursor-1')
+
+    mocks.list.mockResolvedValueOnce(listResponse({
+      items: [makeJob({ jobId: 'new-2', status: 'completed' })],
+      nextCursor: null,
+    }))
+    await store.refresh()
+
+    expect(store.historyCursor).toBeNull()
+    expect(store.history.map(job => job.jobId)).toEqual(['new-2'])
+  })
+
+  it('drops a page that overlaps the current window instead of duplicating rows', async () => {
+    const store = useTaskCenterStore()
+    mocks.list.mockResolvedValueOnce(listResponse({
+      items: [makeJob({ jobId: 'shared', status: 'completed', createdAt: '2026-10-26T08:00:00Z' })],
+      nextCursor: 'cursor-1',
+    }))
+    await store.refresh()
+
+    mocks.list.mockResolvedValueOnce(listResponse({
+      items: [makeJob({ jobId: 'shared', status: 'completed', createdAt: '2026-10-26T08:00:00Z' })],
+      nextCursor: null,
+    }))
+    await store.loadMoreHistory()
+
+    expect(store.history.map(job => job.jobId)).toEqual(['shared'])
   })
 })

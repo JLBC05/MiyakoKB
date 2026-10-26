@@ -44,13 +44,22 @@ function replayHeaders(): Record<string, string> {
 export const jobsApi = {
   list(
     scope: 'queue' | 'history' | 'all',
-    filters: { status?: V2JobStatus; type?: V2Job['kind']; bookId?: string } = {},
+    filters: {
+      status?: V2JobStatus
+      type?: V2Job['kind']
+      bookId?: string
+      /** 上一页返回的不透明游标；只对 history/all 有意义。 */
+      after?: string | null
+      /** 单位是「批次」而不是行；后端上限 200。 */
+      limit?: number
+    } = {},
   ): Promise<JobListResponse> {
     const query = new URLSearchParams({ scope })
-    if (scope !== 'queue') query.set('limit', '200')
+    if (scope !== 'queue') query.set('limit', String(filters.limit ?? 200))
     if (filters.status) query.set('status', filters.status)
     if (filters.type) query.set('type', filters.type)
     if (filters.bookId) query.set('book_id', filters.bookId)
+    if (filters.after) query.set('after', filters.after)
     return apiClient.get(`/api/v2/jobs?${query}`)
   },
 

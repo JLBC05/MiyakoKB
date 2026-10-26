@@ -361,6 +361,10 @@ async function toggleQueuePause() {
   }
 }
 
+async function loadOlderHistory() {
+  await runAction(() => store.loadMoreHistory(), '已加载更早的任务')
+}
+
 async function clearHistory() {
   const confirmed = await confirmProductAction({
     title: '清空任务历史',
@@ -885,6 +889,17 @@ function analysisCreated(result: V2InsightAnalysisJobAccepted) {
               <p>暂无排队任务</p>
             </div>
           </template>
+
+          <div v-if="tab === 'history' && store.historyCursor" class="task-center__more">
+            <UiButton
+              size="xs"
+              variant="secondary"
+              :disabled="store.olderHistoryLoading"
+              @click="loadOlderHistory"
+            >
+              {{ store.olderHistoryLoading ? '正在读取更早的任务…' : '加载更早的任务' }}
+            </UiButton>
+          </div>
         </main>
       </aside>
     </OverlayLayer>
@@ -999,6 +1014,12 @@ function analysisCreated(result: V2InsightAnalysisJobAccepted) {
   flex: 1;
   padding: 16px 18px 32px;
   overflow: auto;
+}
+
+.task-center__more {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-3) 0 var(--space-4);
 }
 
 .task-center__empty {

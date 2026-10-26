@@ -2505,6 +2505,7 @@ export interface components {
         };
         JobList: {
             items: components["schemas"]["Job"][];
+            nextCursor: string | null;
             queuePaused: boolean;
             eventCursor: number;
             workerOnline: boolean;

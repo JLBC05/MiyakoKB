@@ -905,8 +905,8 @@ class InsightQAWorkerService:
                     if isinstance(raw_payload, str):
                         try:
                             payload = json.loads(raw_payload)
-                        except Exception:
-                            pass
+                        except Exception:  # noqa: BLE001 - 单页分析结果损坏时按空记录处理
+                            LOGGER.debug("问答候选页分析结果无法解析", exc_info=True)
                     elif isinstance(raw_payload, Mapping):
                         payload = dict(raw_payload)
                     pages_data.append({
@@ -1187,8 +1187,8 @@ class InsightQAWorkerService:
                 if isinstance(payload_raw, str):
                     try:
                         payload = json.loads(payload_raw)
-                    except Exception:
-                        pass
+                    except Exception:  # noqa: BLE001 - 单页证据损坏时按空记录处理
+                        LOGGER.debug("问答证据页分析结果无法解析", exc_info=True)
                 elif isinstance(payload_raw, Mapping):
                     payload = dict(payload_raw)
 

@@ -205,9 +205,16 @@ insight 面共 45 处，多数带 `noqa: BLE001` 注释且语义合理（词表�
 2. ~~一致性检查增加内容校验（抽样模式，P2-3）。~~ **已完成**（`d9cf031`）：默认抽样 32 个文件算 sha256，大小检查覆盖全部资产。
 3. ~~**unmerge_alias 页面归属修复**（管线 C，唯一数据质量缺陷）~~ **已完成**（`c78f89b`）：两边各留至少一页且维持 `total_frequency == len(pages)`；payload 哈希纵深防御（指纹建议项）仍待做。
 4. ~~rerank 降级 + generic 模式 degraded 透出（P3-4/P3-5）~~ **已完成**（`d9cf031`）：全局资料指纹失配区分「没有」与「已过期」，并走既有 degraded 通道透出；重排失败退回混合检索顺序。
-5. 实体裁决缓存真实现或删失实 docstring（管线 A，节省重复 token）；空 model admission 强制（管线 E）。
-6. 吞异常分级清理（P3-3）首轮；字体上传流式+上限（F3）；本地导入解压上限（F1）。
-7. 前端历史 cursor 分页。
+5. ~~实体裁决缓存真实现或删失实 docstring（管线 A，节省重复 token）；空 model admission 强制（管线 E）。~~ **已完成**：`AlignmentJudgeCache` 按 `<data_root>/llm_entity_judge_cache.<book_id>.json` 落盘、key = sha256(system+prompt)、只缓存成功结果、只认同一 (provider, model, base_url, 密钥指纹)；chat 段 admission 改为要求 model 非空，不再静默退化成「无 LLM」。
+6. ~~吞异常分级清理（P3-3）首轮；字体上传流式+上限（F3）；本地导入解压上限（F1）。~~ **已完成**：P3-3 首轮只给「完全无痕」的回退补 `LOGGER.debug`（实测 insight 面 58 处广谱 except，其中 25 处静默、33 处已有日志或把异常带进返回值，不是审计原文说的 45 处「多数带 noqa」）；字体上传改分块读 + 32 MB 上限；本地导入加有限解压上限（60,000 条目 / 8 GiB / 单文件 512 MB）与像素上限，不再等于「无上限」。
+7. ~~前端历史 cursor 分页。~~ **已完成**：后端 `list_jobs` 支持 `after`，返回 `nextCursor`，`limit` 单位仍是批次；前端任务中心底部加「加载更早的任务」，按游标逐页追加并按 `jobId` 去重。
+
+### v0.2.x 实施中发现的问题
+
+- **批次游标窗口必须多取一批**：`_batch_before_cursor` 用 `<=` 把游标批次留在窗口内（否则同批次的兄弟行会被两边同时滤掉），
+  于是外层 `_history_after_cursor` 必然整批排掉游标批次。窗口若只取 `limit` 个批次，每翻一页就少一整批，
+  最后一批还会提前丢掉游标——5 个批次只能翻出 3 个。修法是带游标时取 `limit + 1`。
+  这个缺陷在探针（手写分钟级间隔）里看不出来，只在连续 `create_batch`（毫秒级间隔）的测试里暴露。
 
 ### v0.3.x —— 知识质量
 1. 裁决 P3-1：日志分级开关。

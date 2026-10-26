@@ -105,6 +105,7 @@ def create_jobs_blueprint(
                     maximum=200,
                 ),
                 low_memory=low_memory(),
+                after=request.args.get("after"),
             )
         )
 

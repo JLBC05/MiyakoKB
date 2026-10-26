@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 from numbers import Real
 from pathlib import Path
 import re
@@ -659,6 +660,136 @@ class LLMBatchJudge:
     def make_key(category: str, name1: str, name2: str) -> str:
         s1, s2 = sorted([name1, name2])
         return f"{category}::{s1}::{s2}"
+
+
+class AlignmentJudgeCache:
+    """实体对齐裁决结果的持久缓存（按书隔离、按请求内容寻址）。
+
+    实体对齐的请求是纯函数：候选图与提示词版本相同，LLM 应当返回同一个裁决。
+    没有缓存时，同一本书每重建一次就重新支付一遍全部裁决 token（审计管线 A）。
+
+    缓存键只含「会被模型看到的东西」与「会改变答案的东西」：provider / model /
+    base_url，以及 api_key 的短指纹——换 key 往往意味着换配额与账号策略，答案可能
+    不同，但也不能把密钥明文写进磁盘。书内请求按 prompt 内容哈希寻址，所以新增或
+    删除实体只影响变化的那几个分片。
+
+    写入走「临时文件 + os.replace」，进程被杀时不会留下半个 JSON；任何读失败都视为
+    未命中，绝不让缓存挡在正确性前面。
+    """
+
+    __version__ = 1
+
+    def __init__(
+        self,
+        *,
+        client: Any,
+        path: Path,
+        scope: tuple[str, ...],
+    ) -> None:
+        self.client = client
+        self.path = path
+        self.scope = scope
+        self.hits = 0
+        self.misses = 0
+        self._entries: dict[str, Any] = {}
+        self._dirty = False
+        self._load()
+
+    @staticmethod
+    def default_path(data_root: Path | str | None, book_id: str | None) -> Path | None:
+        if data_root is None or not book_id:
+            return None
+        return Path(data_root) / f"llm_entity_judge_cache.{book_id}.json"
+
+    @staticmethod
+    def _fingerprint(secret: str) -> str:
+        if not secret:
+            return ""
+        return hashlib.sha256(secret.encode("utf-8")).hexdigest()[:12]
+
+    def _load(self) -> None:
+        try:
+            raw = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return
+        except OSError:
+            LOGGER.warning("实体裁决缓存不可读，本轮跳过缓存：%s", self.path, exc_info=True)
+            return
+        try:
+            document = json.loads(raw)
+        except ValueError:
+            LOGGER.warning("实体裁决缓存损坏，本轮忽略并重建：%s", self.path)
+            return
+        if not isinstance(document, dict) or document.get("version") != self.__version__:
+            return
+        if tuple(document.get("scope") or ()) != self.scope:
+            # 换了供应商或模型：旧裁决不再代表「同一模型的答案」，直接丢弃。
+            return
+        entries = document.get("entries")
+        if isinstance(entries, dict):
+            self._entries = dict(entries)
+
+    def _persist(self) -> None:
+        if not self._dirty:
+            return
+        document = {
+            "version": self.__version__,
+            "scope": list(self.scope),
+            "entries": self._entries,
+        }
+        payload = json.dumps(document, ensure_ascii=False, sort_keys=True)
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(payload, encoding="utf-8")
+            os.replace(temporary, self.path)
+        except OSError:
+            LOGGER.warning("实体裁决缓存写入失败（不影响本轮结果）：%s", self.path, exc_info=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return
+        self._dirty = False
+
+    @staticmethod
+    def _key(prompt: str, system: str | None) -> str:
+        digest = hashlib.sha256()
+        digest.update(b"entity-alignment/1\x00")
+        digest.update((system or "").encode("utf-8"))
+        digest.update(b"\x00")
+        digest.update(prompt.encode("utf-8"))
+        return digest.hexdigest()
+
+    async def generate_json(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        validator: Any = None,
+    ) -> Any:
+        key = self._key(prompt, system)
+        cached = self._entries.get(key)
+        if isinstance(cached, dict) and "payload" in cached:
+            self.hits += 1
+            payload = cached["payload"]
+            return validator(payload) if validator is not None else payload
+        self.misses += 1
+        payload = await self.client.generate_json(
+            prompt=prompt,
+            system=system,
+            validator=validator,
+        )
+        # 只缓存成功结果：失败的请求必须下次真的重问，而不是缓存成一个坏答案。
+        self._entries[key] = {"payload": payload}
+        self._dirty = True
+        return payload
+
+    def stats(self) -> dict[str, int]:
+        return {"hits": self.hits, "misses": self.misses, "entries": len(self._entries)}
+
+    def close(self) -> None:
+        self._persist()
 
 
 def _alignment_progress(message: str, done: int | None, total: int | None) -> None:
@@ -3407,6 +3538,7 @@ class InsightDerivedRepository:
         entity_slug_map_config: Mapping[str, Mapping[str, str]] | None = None,
         llm_callable: Callable[[str], str] | None = None,
         llm_judge: "LLMBatchJudge | None" = None,
+        judge_cache_path: Path | None = None,
         run_id: str | None = None,
         slug_mode: str | None = None,
         staged: bool = False,
@@ -3428,6 +3560,9 @@ class InsightDerivedRepository:
         dependency_fingerprint 为所属 run 的输入指纹：暂存产物必须与同一 run 的其他
         产物使用同一指纹（否则 finalize_run 判定 staged generations 不一致），因此
         staged 调用必须显式传入；未传时退化为产物内容哈希（仅适用于独立 job）。
+
+        judge_cache_path 指向裁决缓存文件：同一本书重建时命中缓存的分片不再请求模型
+        （审计管线 A）。缓存只存成功的裁决，且按 provider/model/api_key 指纹划隔离域。
         """
         # entity_slug_map 只接受调用方显式注入，缺失时退化为纯拼音（不再隐式读盘）
         slug_map = dict(entity_slug_map_config) if entity_slug_map_config else {}
@@ -3450,8 +3585,12 @@ class InsightDerivedRepository:
                         effective_slug_mode = ac.get("slugMode") or ac.get("slug_mode")
                         if not effective_slug_mode and isinstance(cfg_obj, Mapping):
                             effective_slug_mode = cfg_obj.get("slugMode") or cfg_obj.get("slug_mode")
-                except Exception:
-                    pass
+                except Exception:  # noqa: BLE001 - 配置损坏时回退默认拼音模式
+                    LOGGER.debug(
+                        "读取 run 配置里的 slugMode 失败，回退拼音模式: run_id=%s",
+                        run_id,
+                        exc_info=True,
+                    )
             if not effective_slug_mode:
                 effective_slug_mode = "pinyin"
             effective_slug_mode = str(effective_slug_mode).strip().lower()
@@ -3472,8 +3611,8 @@ class InsightDerivedRepository:
             )
             try:
                 select_query = select_query.with_for_update()
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 - SQLite 不支持行锁，退化为无锁读取
+                LOGGER.debug("当前数据库不支持 FOR UPDATE，读取退化为无锁", exc_info=True)
 
             existing_artifact = connection.execute(select_query).mappings().one_or_none()
 
@@ -3489,8 +3628,12 @@ class InsightDerivedRepository:
                     existing_alias_map = dict(existing_payload.get("alias_map", {}))
                     # 兼容读取 auto_merge_log 或老版本的 pending_review_queue
                     existing_auto_merge_log = list(existing_payload.get("auto_merge_log", []))
-                except Exception:
-                    pass
+                except Exception:  # noqa: BLE001 - 旧产物不可解析时从空集开始重建
+                    LOGGER.debug(
+                        "读取现有实体对齐产物失败，按首次对齐处理: book_id=%s",
+                        book_id,
+                        exc_info=True,
+                    )
 
             # 若已有产物的 slug_mode 与当前 effective_slug_mode 不一致，或者处于 pinyin 模式但存在旧的 _pinyin_ 前缀实体：
             # 执行旧数据平滑升级，将旧 ID 彻底替换为新模式下的合法 ID，杜绝新旧 ID 并存
@@ -3695,9 +3838,25 @@ class InsightDerivedRepository:
 
                 decisions: dict[str, str] = {}
                 judge_stats = None
+                judge_cache = None
+                judge_client = llm_judge.client
+                if judge_cache_path is not None and judge_client is not None:
+                    judge_cache = AlignmentJudgeCache(
+                        client=judge_client,
+                        path=Path(judge_cache_path),
+                        scope=(
+                            str(getattr(judge_client, "provider", "") or ""),
+                            str(getattr(getattr(judge_client, "config", None), "model", "") or ""),
+                            str(getattr(getattr(judge_client, "config", None), "base_url", "") or ""),
+                            AlignmentJudgeCache._fingerprint(
+                                str(getattr(getattr(judge_client, "config", None), "api_key", "") or "")
+                            ),
+                        ),
+                    )
+                    judge_client = judge_cache
                 try:
                     decisions, _component_decisions, judge_stats = run_alignment_sync(
-                        client=llm_judge.client,
+                        client=judge_client,
                         graph=alignment_graph,
                         shards=shards,
                         config=alignment_config,
@@ -3705,6 +3864,16 @@ class InsightDerivedRepository:
                     )
                 except Exception as _judge_err:  # noqa: BLE001 - 裁决失败不得中断对齐
                     print(f"[align_entities] 批量裁决失败，本轮不做语义合并: {_judge_err}")
+                finally:
+                    if judge_cache is not None:
+                        # 只有真正跑过的分片才值得落盘；中途被杀时留下的半个文件也由
+                        # tmp+replace 兜住，这里只需要把内存里的新结果写出去。
+                        judge_cache.close()
+                        if judge_cache.hits or judge_cache.misses:
+                            print(
+                                "[align_entities] 裁决缓存："
+                                f"命中 {judge_cache.hits}，未命中 {judge_cache.misses}"
+                            )
                 outcome = apply_decisions(graph=alignment_graph, decisions=decisions)
                 alignment_clusters = outcome.clusters
                 alignment_blocked = outcome.blocked
@@ -4243,8 +4412,8 @@ class InsightDerivedRepository:
             )
             try:
                 select_query = select_query.with_for_update()
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 - SQLite 不支持行锁，退化为无锁读取
+                LOGGER.debug("当前数据库不支持 FOR UPDATE，读取退化为无锁", exc_info=True)
 
             existing_artifact = connection.execute(select_query).mappings().one_or_none()
             if existing_artifact is None:
@@ -4277,7 +4446,12 @@ class InsightDerivedRepository:
                 raw_val = alias_det.pop(target_name)
                 try:
                     detached_freq = int(str(raw_val).split()[0])
-                except Exception:
+                except Exception:  # noqa: BLE001 - 别名频次格式异常时按 1 次处理
+                    LOGGER.debug(
+                        "别名频次无法解析，按 1 次处理: alias=%s value=%r",
+                        target_name,
+                        raw_val,
+                    )
                     detached_freq = 1
             if "original_names" in source_entity:
                 source_entity["original_names"] = [o for o in source_entity["original_names"] if o != target_name]
@@ -5636,6 +5810,7 @@ class InsightDerivedWorkerService:
         self.algorithms = algorithms or ProviderDerivedAlgorithms()
         self.vector_store = vector_store or InsightVectorStore(data_root)
         self.entity_slug_map = load_entity_slug_map(data_root / ENTITY_SLUG_MAP_FILENAME)
+        self.data_root = Path(data_root)
 
     def handle(
         self,
@@ -5933,6 +6108,10 @@ class InsightDerivedWorkerService:
                         staged=False if _standalone_alignment else staging_run,
                         dependency_fingerprint=frozen.fingerprint,
                         llm_judge=self._alignment_judge(config, book_id=frozen.book_id),
+                        judge_cache_path=AlignmentJudgeCache.default_path(
+                            self.data_root,
+                            frozen.book_id,
+                        ),
                         progress=_alignment_progress,
                     )
                 except Exception as exc:  # noqa: BLE001 - 对齐失败必须让分析结果继续发布
@@ -6053,7 +6232,8 @@ class InsightDerivedWorkerService:
     def _alignment_judge(self, config: Mapping[str, Any], book_id: str | None = None) -> "LLMBatchJudge | None":
         """按当前 Insight chat 配置构建实体对齐语义裁决器；解析失败回退默认裁决器。
 
-        book_id 用于按书隔离裁决缓存（llm_entity_judge_cache.<book_id>.json）。
+        book_id 只用于日志与错误信息定位，不再暗示裁决器自带缓存：缓存由调用方通过
+        align_entities 的 judge_cache_path 注入（AlignmentJudgeCache）。
         """
         try:
             chat_config = frozen_chat_config(config)

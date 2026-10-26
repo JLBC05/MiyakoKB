@@ -406,6 +406,106 @@ def test_history_list_limit_counts_batches_not_member_jobs(job_platform) -> None
     assert len(history["items"]) == 4
 
 
+def test_history_cursor_walks_every_batch_once_without_gaps(job_platform) -> None:
+    """审计 v0.2.x-7：历史只给 limit 条，更早的批次前端根本看不到。
+
+    这里固定住游标的三个性质：按批次窗口推进、不重不漏、与单页顺序一致。
+    """
+    engine, repository, _book, _chapter, _worker_epoch_id = job_platform
+    batches = 5
+    members = 2
+    for index in range(batches):
+        result = repository.create_batch(
+            display_name=f"cursor batch {index}",
+            specs=[
+                JobSpec(
+                    kind="export",
+                    config={"batch": index, "member": member},
+                    items=(JobItemSpec(page_id=None, step_kinds=("package",)),),
+                )
+                for member in range(members)
+            ],
+        )
+        now = utcnow()
+        with engine.begin() as connection:
+            for job_id in result["jobIds"]:
+                _set_stored_job_status(
+                    connection,
+                    str(job_id),
+                    "completed",
+                    queue_rank=None,
+                    finished_at=now,
+                    updated_at=now,
+                )
+
+    seen_jobs: list[str] = []
+    seen_batches: list[str] = []
+    cursor = None
+    pages = 0
+    while True:
+        page = repository.list_jobs(scope="history", limit=2, after=cursor)
+        pages += 1
+        page_batches = [str(item["batchId"]) for item in page["items"]]
+        assert len(set(page_batches)) <= 2, "a page must not exceed limit batches"
+        seen_jobs.extend(str(item["jobId"]) for item in page["items"])
+        for batch_id in page_batches:
+            if batch_id not in seen_batches:
+                seen_batches.append(batch_id)
+        cursor = page.get("nextCursor")
+        if not cursor:
+            break
+        assert pages <= batches + 1, "cursor failed to make progress"
+
+    assert len(seen_batches) == batches
+    assert len(seen_jobs) == len(set(seen_jobs)) == batches * members
+
+    single = repository.list_jobs(scope="history", limit=200)["items"]
+    assert [str(row["jobId"]) for row in single] == seen_jobs
+
+
+def test_history_cursor_rejects_a_malformed_value(job_platform) -> None:
+    _engine, repository, _book, _chapter, _worker_epoch_id = job_platform
+
+    for bad in ("not-base64!!", "YWJj"):
+        with pytest.raises(ValueError):
+            repository.list_jobs(scope="history", limit=5, after=bad)
+
+    # 空串等于「没给游标」：前端拼 ``?after=`` 时很常见，不该炸。
+    page = repository.list_jobs(scope="history", limit=5, after="")
+    assert "items" in page
+
+
+def test_history_last_page_reports_no_next_cursor(job_platform) -> None:
+    engine, repository, _book, _chapter, _worker_epoch_id = job_platform
+    result = repository.create_batch(
+        display_name="cursor single batch",
+        specs=[
+            JobSpec(
+                kind="export",
+                config={"member": member},
+                items=(JobItemSpec(page_id=None, step_kinds=("package",)),),
+            )
+            for member in range(2)
+        ],
+    )
+    now = utcnow()
+    with engine.begin() as connection:
+        for job_id in result["jobIds"]:
+            _set_stored_job_status(
+                connection,
+                str(job_id),
+                "completed",
+                queue_rank=None,
+                finished_at=now,
+                updated_at=now,
+            )
+
+    page = repository.list_jobs(scope="history", limit=2)
+    assert page.get("nextCursor") is None
+    fewer = repository.list_jobs(scope="history", limit=200)
+    assert fewer.get("nextCursor") is None
+
+
 def test_queue_list_is_not_truncated_by_history_batch_limit(job_platform) -> None:
     _engine, repository, _book, _chapter, _worker_epoch_id = job_platform
     result = repository.create_batch(

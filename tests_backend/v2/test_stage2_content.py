@@ -109,16 +109,23 @@ def _image_bytes(
     return output.getvalue()
 
 
-def test_large_image_policy_has_no_byte_or_pixel_dimension_gate() -> None:
+def test_local_image_policy_keeps_a_generous_ceiling_instead_of_no_ceiling() -> None:
+    """本地导入此前完全没有像素/结构上限（审计 F1）。
+
+    「不设限」和「限得很宽」在正常使用上等价，但在压缩炸弹面前完全不同：前者会
+    把进程内存顶掉，后者只会在畸形输入上拒绝。这条用例固定住「有上限、且比 public
+    宽松」这个折中，防止有人把上限改回 None。
+    """
     limits = ImportSafetyLimits()
 
-    assert Image.MAX_IMAGE_PIXELS is None
-    assert not hasattr(limits, "max_image_bytes")
-    assert not hasattr(limits, "max_container_bytes")
+    assert Image.MAX_IMAGE_PIXELS is not None
+    assert Image.MAX_IMAGE_PIXELS > 50_000_000
+    assert limits.max_archive_uncompressed_bytes is not None
+    assert limits.max_container_entries is not None
+    assert limits.max_single_entry_bytes is not None
+    # 这些「按字节维度」的旧字段不应凭空出现：上限走的是 ImportSafetyLimits。
     assert not hasattr(limits, "max_expanded_bytes")
-    assert not hasattr(limits, "max_archive_entries")
     assert not hasattr(limits, "max_container_pages")
-    assert not hasattr(limits, "max_html_bytes")
 
 
 def test_public_image_upload_stops_at_the_current_asset_budget(

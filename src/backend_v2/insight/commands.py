@@ -508,6 +508,7 @@ def validate_insight_job_requirements(
         config.get("chat"),
         capability=CHAT_CAPABILITY,
         label="漫画分析 LLM",
+        require_model=True,
     )
     _validate_provider_section(
         config.get("embedding"),
@@ -521,7 +522,14 @@ def _validate_provider_section(
     *,
     capability: str,
     label: str,
+    require_model: bool = False,
 ) -> None:
+    """校验单个 provider 段。
+
+    require_model=True 表示「没有模型名这段配置就没有意义」：LLM 段缺模型时
+    LLMBatchJudge 会 enable=False，实体对齐静默退化成纯规则合并（审计管线 E），
+    所以这类段必须在准入时就拒绝，而不是靠 manifest 的 requires_model 兜底。
+    """
     if not isinstance(value, Mapping):
         raise ValueError(f"{label} 配置无效，请重新设置")
     section = dict(value)
@@ -553,7 +561,7 @@ def _validate_provider_section(
     model_name = section.get("model_name")
     if model_name is not None and not isinstance(model_name, str):
         raise ValueError(f"{label} 模型名称无效，请重新保存设置")
-    if manifest.requires_model and (
+    if (require_model or manifest.requires_model) and (
         not isinstance(model_name, str) or not model_name.strip()
     ):
         raise ValueError(

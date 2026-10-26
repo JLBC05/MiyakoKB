@@ -6405,6 +6405,150 @@ def _alignment_request_payload(prompt: str) -> dict:
     return json.loads(prompt[opening:closing])
 
 
+
+def test_alignment_judge_cache_replays_decisions_without_asking_the_model_again(
+    insight_platform,
+    tmp_path,
+) -> None:
+    """同一份候选图第二次对齐必须命中缓存，而不是再付一遍裁决 token（管线 A）。
+
+    缓存存在的唯一理由就是「同样的输入不再问第二遍」。这条用例既证明命中，
+    也证明命中后返回的裁决与首次完全一致（否则省了 token 却答错了）。
+    """
+    from src.backend_v2.insight.derived import AlignmentJudgeCache
+
+    calls: list[str] = []
+
+    class _CountingClient:
+        class config:  # noqa: N801 - mirrors ChatClient surface
+            model = "judge-model"
+            base_url = "https://judge.invalid/v1"
+            api_key = "secret-key"
+
+        provider = "custom"
+
+        @staticmethod
+        async def generate_json(*, prompt: str, system: str, validator=None):  # noqa: ANN001
+            calls.append(prompt)
+            return {"verdict": "cached-answer"}
+
+    cache_path = Path(tmp_path) / "llm_entity_judge_cache.book.json"
+    scope = (
+        _CountingClient.provider,
+        _CountingClient.config.model,
+        _CountingClient.config.base_url,
+        AlignmentJudgeCache._fingerprint(_CountingClient.config.api_key),
+    )
+
+    first = AlignmentJudgeCache(client=_CountingClient(), path=cache_path, scope=scope)
+    assert first.misses == 0 and first.hits == 0
+    import asyncio
+
+    asyncio.run(
+        first.generate_json(prompt="同一个提示词", system="同一个系统提示")
+    )
+    first.close()
+    assert len(calls) == 1
+    assert first.misses == 1 and first.hits == 0
+    assert cache_path.exists() is True
+
+    # 模拟下一次对齐：新实例读盘命中，不再请求模型。
+    second = AlignmentJudgeCache(client=_CountingClient(), path=cache_path, scope=scope)
+    replayed = asyncio.run(
+        second.generate_json(prompt="同一个提示词", system="同一个系统提示")
+    )
+    assert len(calls) == 1, "缓存命中不得再请求模型"
+    assert second.hits == 1 and second.misses == 0
+    assert replayed == {"verdict": "cached-answer"}, "命中后必须原样回放首次的裁决"
+
+
+def test_alignment_judge_cache_discards_entries_from_another_provider(
+    tmp_path,
+) -> None:
+    """换了供应商/模型就必须全部重问：旧答案是别的模型给的，不能冒充（管线 A）。"""
+    import asyncio
+
+    from src.backend_v2.insight.derived import AlignmentJudgeCache
+
+    calls: list[str] = []
+
+    class _Client:
+        @staticmethod
+        async def generate_json(*, prompt: str, system: str, validator=None):  # noqa: ANN001
+            calls.append(prompt)
+            return {"verdict": len(calls)}
+
+    cache_path = Path(tmp_path) / "cache.json"
+    gemini_scope = ("gemini", "gemini-2.0-flash", "", "")
+    deepseek_scope = ("deepseek", "deepseek-flash", "https://api.deepseek.com/v1", "abc123")
+
+    original = AlignmentJudgeCache(client=_Client(), path=cache_path, scope=gemini_scope)
+    asyncio.run(original.generate_json(prompt="p", system=None))
+    original.close()
+    assert calls == ["p"]
+
+    switched = AlignmentJudgeCache(client=_Client(), path=cache_path, scope=deepseek_scope)
+    asyncio.run(switched.generate_json(prompt="p", system=None))
+    assert calls == ["p", "p"], "换供应商后同一提示词必须重新裁决"
+    assert switched.misses == 1 and switched.hits == 0
+
+
+def test_alignment_judge_cache_treats_a_corrupt_file_as_a_miss(tmp_path) -> None:
+    """缓存文件损坏时只能当未命中，不能让对齐因为缓存而失败（管线 A）。"""
+    import asyncio
+
+    from src.backend_v2.insight.derived import AlignmentJudgeCache
+
+    cache_path = Path(tmp_path) / "cache.json"
+    cache_path.write_text("{ this is not json", encoding="utf-8")
+
+    class _Client:
+        @staticmethod
+        async def generate_json(*, prompt: str, system: str, validator=None):  # noqa: ANN001
+            return {"ok": True}
+
+    cache = AlignmentJudgeCache(
+        client=_Client(),
+        path=cache_path,
+        scope=("custom", "m", "", ""),
+    )
+    assert cache.hits == 0
+    assert asyncio.run(cache.generate_json(prompt="p", system=None)) == {"ok": True}
+    cache.close()
+    assert json.loads(cache_path.read_text(encoding="utf-8"))["entries"]
+
+
+def test_insight_job_admission_rejects_a_chat_provider_without_a_model() -> None:
+    """chat 段缺模型会让 LLMBatchJudge 静默关掉，实体对齐退化成纯规则（管线 E）。"""
+    from src.backend_v2.insight.commands import (
+        _validate_provider_section as validate_section,
+        validate_insight_job_requirements,
+    )
+
+    def _section(**overrides):
+        section = {
+            "provider": "deepseek",
+            "model_name": "deepseek-flash",
+            "credentialVersionId": "cred-1",
+        }
+        section.update(overrides)
+        return section
+
+    validate_section(_section(), capability="chat", label="漫画分析 LLM")
+    pytest.raises(ValueError, validate_section, _section(model_name=""), capability="chat",
+                  label="漫画分析 LLM", require_model=True)
+
+    with pytest.raises(ValueError) as caught:
+        validate_insight_job_requirements(
+            {
+                "vlm": _section(model_name="deepseek-flash"),
+                "chat": _section(model_name=""),
+                "embedding": _section(model_name="text-embedding-3-small"),
+            },
+            scope="full",
+        )
+    assert "模型名称" in str(caught.value)
+
 def test_unmerge_alias_does_not_copy_the_source_entities_pages(
     insight_platform,
 ) -> None:
@@ -6431,7 +6575,7 @@ def test_unmerge_alias_does_not_copy_the_source_entities_pages(
 
         class client:  # noqa: N801 - mirrors LLMBatchJudge surface
             @staticmethod
-            async def generate_json(*, prompt: str, system: str):  # noqa: ANN001
+            async def generate_json(*, prompt: str, system: str, validator=None):  # noqa: ANN001
                 payload = _alignment_request_payload(prompt)
                 response: dict = {"components": []}
                 for component in payload["components"]:

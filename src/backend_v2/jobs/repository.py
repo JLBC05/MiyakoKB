@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import base64
 import json
 import hashlib
 from typing import Any, Callable, Mapping, Sequence
@@ -579,6 +580,151 @@ def _job_secret_values(connection: Connection, job_id: str) -> tuple[str, ...]:
     return tuple(sorted(values, key=len, reverse=True))
 
 
+_JOB_CURSOR_ERROR = "invalid job history cursor"
+
+
+def _distinct_batch_count(rows: Sequence[Mapping[str, Any]]) -> int:
+    return len({row.get("batch_id") for row in rows if row.get("batch_id") is not None})
+
+
+def _encode_job_cursor(row: Mapping[str, Any]) -> str:
+    """把一行的排序键打包成不透明游标。
+
+    只用排序键，不含任何用户数据：客户端拿到的是一串 base64 的元组，既不能
+    反推出别的任务，也不会因为多点了一次「加载更多」就错页。
+    """
+    batch_created = row.get("batch_created_at")
+    finished_at = row.get("finished_at")
+    created_at = row.get("created_at")
+    payload = [
+        batch_created.isoformat() if hasattr(batch_created, "isoformat") else None,
+        row.get("batch_id"),
+        finished_at.isoformat() if hasattr(finished_at, "isoformat") else None,
+        created_at.isoformat() if hasattr(created_at, "isoformat") else None,
+        row.get("id"),
+    ]
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii")
+
+
+def _decode_job_cursor(value: str) -> tuple[Any, ...]:
+    """解析游标；任何形状异常都拒绝，而不是悄悄返回第一页（那会让前端死循环）。"""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(_JOB_CURSOR_ERROR)
+    try:
+        raw = base64.urlsafe_b64decode(value.encode("ascii"))
+        payload = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(_JOB_CURSOR_ERROR) from exc
+    if not isinstance(payload, list) or len(payload) != 5:
+        raise ValueError(_JOB_CURSOR_ERROR)
+    return tuple(payload)
+
+
+def _cursor_time(value: Any) -> str | None:
+    """把游标里的 ISO 字符串还原成与 SQLite DATETIME 列同格式的字面量。
+
+    列里存的是 ``2026-10-26 06:59:09.265039``（空格分隔、带微秒）。若用
+    ``func.datetime()`` 转换，SQLite 会截成 ``2026-10-26 06:59:09``——秒以下精度
+    丢失后，同一秒内的行在字符串比较里全部判等，游标会跳窗或漏行。
+    """
+    if value in (None, ""):
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+def _nulls_last_descending(column, value: Any):
+    """desc 排序下 NULL 在最末：游标为 NULL 时只剩「非 NULL」，否则按值比较。"""
+    literal = _cursor_time(value)
+    if literal is None:
+        return column.is_not(None)
+    return or_(column < literal, column.is_(None))
+
+
+def _history_after_cursor(
+    *,
+    batch_created: Any,
+    batch_id: Any,
+    finished_at: Any,
+    created_at: Any,
+    job_id: Any,
+    batch_table=job_batches,
+    job_table=jobs,
+):
+    """构造「严格排在游标之后」的过滤条件，逐级比较排序键。
+
+    子查询必须传自己的孩子别名（``batch_table`` / ``job_table``），否则
+    SQLAlchemy 会把它和外层的 ``jobs`` / ``job_batches`` 自动关联，报
+    ``Select statement returned no FROM clauses due to auto-correlation``。
+    """
+    batch_creation = batch_table.c.created_at
+    cursor_created = _cursor_time(batch_created)
+    created_clause = _nulls_last_descending(job_table.c.created_at, created_at)
+    finished_clause = _nulls_last_descending(job_table.c.finished_at, finished_at)
+    if cursor_created is None:
+        return (
+            batch_creation.is_(None) & created_clause & (job_table.c.id < job_id)
+        )
+    return or_(
+        batch_creation < cursor_created,
+        and_(batch_creation == cursor_created, batch_table.c.id < batch_id),
+        and_(
+            batch_creation == cursor_created,
+            batch_table.c.id == batch_id,
+            finished_clause,
+            created_clause,
+            job_table.c.id < job_id,
+        ),
+    )
+
+
+def _batch_before_cursor(*, batch_created: Any, batch_id: Any, batch_table):
+    """批次窗口：游标批次自身必须留在窗口里（用 ``<=``）。
+
+    这里刻意不排除游标批次：同批次里排在游标之后的兄弟任务还要发，外层再用完整
+    游标把「已发过的行」剔掉。若这里用严格 ``<``，剩下的兄弟行会被两边同时过滤
+    掉，整批就凭空消失。
+    """
+    batch_creation = batch_table.c.created_at
+    cursor_created = _cursor_time(batch_created)
+    if cursor_created is None:
+        return batch_creation.is_(None) & (batch_table.c.id <= batch_id)
+    return or_(
+        batch_creation < cursor_created,
+        and_(batch_creation == cursor_created, batch_table.c.id <= batch_id),
+    )
+
+
+def _lone_interrupted_after_cursor(
+    *,
+    finished_at: Any,
+    created_at: Any,
+    job_id: Any,
+    job_table=jobs,
+):
+    """无批次任务没有批次排序键，只按 (finished_at, created_at, id) 比较。"""
+    finished_column = job_table.c.finished_at
+    created_column = job_table.c.created_at
+    finished_literal = _cursor_time(finished_at)
+    created_clause = _nulls_last_descending(created_column, created_at)
+    if finished_literal is None:
+        return finished_column.is_(None) & created_clause & (job_table.c.id < job_id)
+    return (
+        or_(
+            finished_column < finished_literal,
+            finished_column.is_(None),
+            (finished_column == finished_literal) & created_clause,
+        )
+        & (job_table.c.id < job_id)
+    )
+
+
 class JobQueueRepository:
     """Own all queue ordering, transition, checkpoint, and lock transactions."""
 
@@ -1019,6 +1165,7 @@ class JobQueueRepository:
         book_id: str | None = None,
         limit: int = 200,
         low_memory: bool = False,
+        after: str | None = None,
     ) -> dict[str, object]:
         if scope not in {"queue", "history", "all"}:
             raise ValueError("scope must be queue, history, or all")
@@ -1029,6 +1176,8 @@ class JobQueueRepository:
             raise ValueError("unsupported job status")
         if kind is not None and kind not in JOB_KINDS:
             raise ValueError("unsupported job type")
+        # `after` 是上一页最后一条的不透明游标；只有历史这种「按创建时间倒序」的分页
+        # 才有意义，queue 永远只有一小撮活动任务，不给它加。
         filters = [jobs.c.owner_user_id == effective_owner_id()]
         if status is not None:
             filters.append(jobs.c.status == status)
@@ -1047,6 +1196,9 @@ class JobQueueRepository:
                 select(
                     jobs,
                     job_batches.c.display_name.label("batch_display_name"),
+                    # 游标需要批次创建时间才能按批次窗口翻页；缺这一列时
+                    # `_encode_job_cursor` 会把 batch_created 永远写成 None。
+                    job_batches.c.created_at.label("batch_created_at"),
                     exists().where(
                         chapter_write_locks.c.job_id == jobs.c.id
                     ).label("holds_chapter_lock"),
@@ -1055,6 +1207,20 @@ class JobQueueRepository:
                 .where(scope_condition, *filters)
             )
             if selected_scope == "history":
+                # 游标要在三条子查询之前解析：子查询各自带 limit，如果只有外层
+                # 按游标过滤，下一页会丢掉被子查询截断掉的老批次。
+                cursor_key = _decode_job_cursor(after) if after else None
+                cursor_clause = (
+                    _history_after_cursor(
+                        batch_created=cursor_key[0],
+                        batch_id=cursor_key[1],
+                        finished_at=cursor_key[2],
+                        created_at=cursor_key[3],
+                        job_id=cursor_key[4],
+                    )
+                    if cursor_key is not None
+                    else None
+                )
                 interrupted_jobs = jobs.alias("interrupted_jobs")
                 interrupted_batch_ids = select(
                     interrupted_jobs.c.batch_id
@@ -1063,66 +1229,112 @@ class JobQueueRepository:
                     interrupted_jobs.c.owner_user_id == effective_owner_id(),
                     interrupted_jobs.c.batch_id.is_not(None),
                 )
+                limited_batches_x = job_batches.alias("limited_batches")
+                limited_jobs_x = jobs.alias("limited_jobs")
                 limited_batch_ids = (
-                    select(job_batches.c.id)
-                    .join(jobs, jobs.c.batch_id == job_batches.c.id)
+                    select(limited_batches_x.c.id)
+                    .join(
+                        limited_jobs_x,
+                        limited_jobs_x.c.batch_id == limited_batches_x.c.id,
+                    )
                     .where(
-                        jobs.c.status.in_(TERMINAL_JOB_STATUSES),
-                        jobs.c.owner_user_id == effective_owner_id(),
-                        job_batches.c.id.not_in(interrupted_batch_ids),
+                        limited_jobs_x.c.status.in_(TERMINAL_JOB_STATUSES),
+                        limited_jobs_x.c.owner_user_id == effective_owner_id(),
+                        limited_batches_x.c.id.not_in(interrupted_batch_ids),
                         *filters,
                     )
-                    .group_by(job_batches.c.id, job_batches.c.created_at)
+                    .group_by(limited_batches_x.c.id, limited_batches_x.c.created_at)
                     .order_by(
-                        job_batches.c.created_at.desc(),
-                        job_batches.c.id.desc(),
+                        limited_batches_x.c.created_at.desc(),
+                        limited_batches_x.c.id.desc(),
                     )
-                    .limit(limit)
+                    # 带游标时多取一个批次：游标批次本身会被外层
+                    # `_history_after_cursor` 整批排掉，只取 limit 个的话，
+                    # 每翻一页就少一整批，最后一批还会提前丢掉游标。
+                    .limit(limit + 1 if after else limit)
                 )
+                if cursor_clause is not None:
+                    # 只按批次键收窄：一个批次要整批发出来，用含 job 键的完整游标
+                    # 会把同批次里排在游标之前的兄弟任务挤出窗口。
+                    limited_batch_ids = limited_batch_ids.where(
+                        _batch_before_cursor(
+                            batch_created=cursor_key[0],
+                            batch_id=cursor_key[1],
+                            batch_table=limited_batches_x,
+                        )
+                    )
                 # audit P2-1：``limit`` 只约束过 ``limited_batch_ids``，裸
                 # ``jobs.status == "interrupted"`` 这一支没有上限——历史里只要
                 # 攒下大批 interrupted 任务，每次翻历史都会把它们全部拉回来。
                 # 这里把 interrupted 也收进同一个受 ``limit`` 约束的子查询：
                 # 取最近 ``limit`` 个 interrupted 批次的 id + 最近 ``limit`` 个
                 # 无批次的 interrupted 任务 id。
+                interrupted_batches_x = job_batches.alias("interrupted_batches")
                 interrupted_batches = (
-                    select(job_batches.c.id)
+                    select(interrupted_batches_x.c.id)
                     .where(
-                        job_batches.c.id.in_(interrupted_batch_ids),
+                        interrupted_batches_x.c.id.in_(interrupted_batch_ids),
                     )
                     .order_by(
-                        job_batches.c.created_at.desc(),
-                        job_batches.c.id.desc(),
+                        interrupted_batches_x.c.created_at.desc(),
+                        interrupted_batches_x.c.id.desc(),
                     )
-                    .limit(limit)
+                    .limit(limit + 1 if after else limit)
                 )
+                if cursor_clause is not None:
+                    # 这些批次只有排序键（无同批次终态任务），按批次键比较即可。
+                    interrupted_batches = interrupted_batches.where(
+                        _batch_before_cursor(
+                            batch_created=cursor_key[0],
+                            batch_id=cursor_key[1],
+                            batch_table=interrupted_batches_x,
+                        )
+                    )
+                lone_jobs_x = jobs.alias("lone_interrupted_jobs")
                 lone_interrupted = (
-                    select(jobs.c.id)
+                    select(lone_jobs_x.c.id)
                     .where(
-                        jobs.c.status == "interrupted",
-                        jobs.c.owner_user_id == effective_owner_id(),
-                        jobs.c.batch_id.is_(None),
+                        lone_jobs_x.c.status == "interrupted",
+                        lone_jobs_x.c.owner_user_id == effective_owner_id(),
+                        lone_jobs_x.c.batch_id.is_(None),
                         *filters,
                     )
                     .order_by(
-                        jobs.c.finished_at.desc(),
-                        jobs.c.created_at.desc(),
-                        jobs.c.id.desc(),
+                        lone_jobs_x.c.finished_at.desc(),
+                        lone_jobs_x.c.created_at.desc(),
+                        lone_jobs_x.c.id.desc(),
                     )
                     .limit(limit)
                 )
+                if cursor_clause is not None:
+                    # 无批次任务：批次排序键恒为 NULL，只能按 (finished, created, id) 比。
+                    lone_interrupted = lone_interrupted.where(
+                        _lone_interrupted_after_cursor(
+                            finished_at=cursor_key[2],
+                            created_at=cursor_key[3],
+                            job_id=cursor_key[4],
+                            job_table=lone_jobs_x,
+                        )
+                    )
                 statement = statement.where(
                     or_(
                         jobs.c.id.in_(lone_interrupted),
                         jobs.c.batch_id.in_(interrupted_batches),
                         jobs.c.batch_id.in_(limited_batch_ids),
                     )
-                ).order_by(
+                )
+                if cursor_clause is not None:
+                    statement = statement.where(cursor_clause)
+                statement = statement.order_by(
                     job_batches.c.created_at.desc(),
                     job_batches.c.id.desc(),
                     jobs.c.finished_at.desc(),
                     jobs.c.created_at.desc(),
+                    jobs.c.id.desc(),
                 )
+                # `limit` 的单位是「批次」而不是「行」：一个批次里的任务数是不定的，
+                # 按行截断会让同一批次被切到两页、前端分组出现半个批次。审计 P2-1
+                # 要的是「不要全量拉回」，这一点由三条子查询各自的 limit 保证。
             else:
                 statement = statement.order_by(
                     jobs.c.queue_rank.asc(),
@@ -1150,9 +1362,16 @@ class JobQueueRepository:
                 connection,
                 low_memory=low_memory,
             )
+            items = [self._job_dto(row) for row in rows]
+            next_cursor = None
+            if scope in {"history", "all"} and rows:
+                # limit 的单位是批次：只有「看到满 limit 个批次」才可能还有下一页。
+                if _distinct_batch_count(rows) >= limit:
+                    next_cursor = _encode_job_cursor(rows[-1])
             return {
-                "items": [self._job_dto(row) for row in rows],
+                "items": items,
                 "eventCursor": event_cursor,
+                "nextCursor": next_cursor,
                 **runtime,
             }
 

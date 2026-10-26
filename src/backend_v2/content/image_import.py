@@ -26,21 +26,35 @@ FORMAT_DETAILS: dict[str, tuple[str, str]] = {
     "TIFF": ("tiff", "image/tiff"),
 }
 
-# Local mode keeps the original unrestricted artwork workflow. Public-facing
-# profiles retain a generous decompression-bomb ceiling to protect the host.
+# Public-facing profiles keep the tight decompression-bomb ceiling. Local mode used
+# to leave this as None (unlimited) on the argument that desktop users import their
+# own artwork; a single crafted page could then decode to hundreds of GB and take the
+# process down. Local now gets a ceiling an order of magnitude above real manga pages
+# (audit F1) instead of nothing.
+_PUBLIC_MAX_IMAGE_PIXELS = 50_000_000
+_LOCAL_MAX_IMAGE_PIXELS = 400_000_000
 Image.MAX_IMAGE_PIXELS = (
-    50_000_000
+    _PUBLIC_MAX_IMAGE_PIXELS
     if os.environ.get("SABER_V2_PROFILE", "local") == "public"
-    else None
+    else _LOCAL_MAX_IMAGE_PIXELS
 )
 
 
 @dataclass(frozen=True, slots=True)
 class ImportSafetyLimits:
+    """导入路径的结构性上限。
+
+    这些值过去在 local profile 全是 None（不设防），理由是「桌面用户导入自己的漫画」。
+    问题是「没有上限」和「上限宽松」是两回事：一个压缩炸弹或误选的大文件，可以把
+    进程内存直接顶掉，而用户看到的现象只是「导入卡死」。审计 F1 要求 local 也套上
+    数值——这里给的是远高于真实漫画页的量级，正常使用永远不会碰到。
+    """
+
     max_compression_ratio: float = 1000.0
     stream_chunk_bytes: int = 1024 * 1024
-    max_container_entries: int | None = None
-    max_archive_uncompressed_bytes: int | None = None
+    max_container_entries: int | None = 60_000
+    max_archive_uncompressed_bytes: int | None = 8 * 1024 * 1024 * 1024
+    max_single_entry_bytes: int | None = 512 * 1024 * 1024
 
 
 PUBLIC_IMPORT_SAFETY_LIMITS = ImportSafetyLimits(
@@ -340,6 +354,14 @@ class ImageImportService:
                 if not chunk:
                     break
                 incoming_bytes = byte_size + len(chunk)
+                if self.limits.max_single_entry_bytes is not None and (
+                    incoming_bytes > self.limits.max_single_entry_bytes
+                ):
+                    raise ValueError(
+                        "单个文件超过 "
+                        f"{self.limits.max_single_entry_bytes // (1024 * 1024)} MB 上限，"
+                        "请检查是否选错了文件"
+                    )
                 if upload_budget is not None:
                     upload_budget.check(incoming_bytes)
                 digest.update(chunk)
