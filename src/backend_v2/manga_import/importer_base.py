@@ -33,7 +33,7 @@ from src.backend_v2.manga_import.source_tag import find_imported_book
 from src.backend_v2.storage.schema import books, chapters, page_assets, pages
 from src.backend_v2.timestamps import utcnow
 
-# 与 docs/audit-report-saber-translator.md 的 P1-1 分类保持一致：
+# P1-1 的问题分类（导入可部分成功）：
 #   source_*    源数据本身有问题（目录不存在、文件名不合规、压缩包损坏）
 #   storage_*   落盘/发布资产失败（单页可跳过，章级视情况继续）
 #   book_*      整本书级别的前置问题（标题为空、章节序号冲突）
