@@ -44,6 +44,10 @@ from src.backend_v2.insight.page_schema import (
     normalize_page_analysis,
 )
 from src.backend_v2.insight.qa import (
+    DEFAULT_QA_TOP_K,
+    PAGE_CANDIDATE_INTERLEAVE_BATCH,
+    ENTITY_EVIDENCE_PAGES_PER_ENTITY,
+    ENTITY_EVIDENCE_SCORE,
     DefaultQAApiAlgorithms,
     DefaultQARetrievalAlgorithms,
     InsightQACommandService,
@@ -56,6 +60,7 @@ from src.backend_v2.insight.qa import (
     entity_page_candidates,
     page_locations,
     retrieval_diagnostics,
+    _interleave_by_source,
     validate_retrieval_candidates,
 )
 from src.backend_v2.insight.repository import (
@@ -6948,6 +6953,158 @@ def test_qa_page_locations_map_run_numbers_to_chapter_identity(
     # 页号存在但页面已不在库里时不得编造章节归属。
     assert locations[3]["chapterOrdinal"] is None
     assert locations[3]["pageInChapter"] is None
+
+
+def test_qa_entity_evidence_is_capped_per_entity_and_scored_below_vectors(
+    insight_platform,
+) -> None:
+    """实体出场页不得无限追加，也不得与真正的向量命中等分。
+
+    实测回归：主角实体记录上百个出场页时，原来逐页追加且「hybridScore=1.0」，
+    普通问答会收到 191 条实体引用而只有 5 条页面引用，模型的引用列表被实体出场页
+    淹没，反而看不到真正相关的页面。这里锁住两个约束：每实体只取最早的若干个
+    出场页，且分数严格低于典型向量命中。
+    """
+    platform = insight_platform
+    page_ids = list(platform["page_ids"])
+    # 夹具只导入 2 页；这里用合成的 snapshot 页验证配额，不需要真实资产。
+    assert len(page_ids) >= 2
+    numbers = list(range(1, 9))
+    snapshot_pages = [
+        {
+            "pageId": page_ids[index % len(page_ids)] if index < len(page_ids) else f"synthetic-{number}",
+            "pageNumber": number,
+            "analysis": {"page_summary": f"第 {number} 页"},
+        }
+        for index, number in enumerate(numbers)
+    ]
+    page_by_number = {
+        row["pageNumber"]: row["pageId"] for row in snapshot_pages
+    }
+    locations = {
+        number: {"pageId": page_id}
+        for number, page_id in page_by_number.items()
+    }
+    resolved_entities = {
+        "matched_entities": [
+            {
+                "entity_id": "entity-1",
+                "canonical_name": "虎杖悠仁",
+                "category": "characters",
+                "pages": numbers,
+            }
+        ],
+        "is_structured_query": False,
+    }
+
+    candidates = entity_page_candidates(
+        resolved_entities,
+        snapshot_pages=snapshot_pages,
+        locations=locations,
+    )
+    assert len(candidates) == ENTITY_EVIDENCE_PAGES_PER_ENTITY
+    # 只保留最早的出场位置：问「第一次出现」时它必须在这里。
+    assert [row["pageNumber"] for row in candidates] == [1, 2, 3, 4]
+    assert {row["hybridScore"] for row in candidates} == {ENTITY_EVIDENCE_SCORE}
+    assert ENTITY_EVIDENCE_SCORE < 1.0
+
+    # 显式关掉后不再贡献任何候选。
+    assert (
+        entity_page_candidates(
+            resolved_entities,
+            snapshot_pages=snapshot_pages,
+            locations=locations,
+            limit_per_entity=0,
+        )
+        == []
+    )
+
+
+def test_qa_page_candidates_survive_high_scoring_events(
+    insight_platform,
+) -> None:
+    """高分事件候选不得把页面候选整体挤出候选窗口。
+
+    审计实测：第 1 话前 17 名候选里 17 条是 event、只有 3 条是 page，而事件候选的
+    分数系统性偏高；若纯按分数截断 topK，答案所需的页面根本进不了上下文。
+    """
+    assert PAGE_CANDIDATE_INTERLEAVE_BATCH >= 1
+
+    def row(kind: str, score: float, index: int) -> dict[str, object]:
+        return {
+            "id": f"{kind}-{index}",
+            "type": kind,
+            "pageId": None,
+            "pageNumber": None,
+            "document": f"{kind} {index}",
+            "hybridScore": score,
+        }
+
+    events = [row("event", 0.70 - index * 0.01, index) for index in range(6)]
+    pages = [row("page", 0.40 - index * 0.01, index) for index in range(3)]
+    merged = _interleave_by_source(events + pages)
+
+    assert len(merged) == len(events) + len(pages)
+    # 交错后前 4 条必然同时含两个来源，纯按分数时 page 会被排到最后。
+    assert {merged[0]["type"], merged[2]["type"]} == {"event", "page"}
+    assert [item["id"] for item in merged[:5]] == [
+        "event-0",
+        "event-1",
+        "page-0",
+        "page-1",
+        "event-2",
+    ]
+    assert [item["id"] for item in _interleave_by_source(pages)] == [
+        "page-0",
+        "page-1",
+        "page-2",
+    ]
+    assert _interleave_by_source([]) == []
+
+
+def test_qa_default_top_k_covers_pages_ranked_below_the_first_few(
+    insight_platform,
+    monkeypatch,
+) -> None:
+    """默认 topK 必须宽于「正确页排在第 6-10 位」的常见情形。
+
+    实测回归：默认 5 时，「虎杖悠仁第一次吃下宿傩手指」的正确页在向量检索里排第 8，
+    整页进不了候选，模型只能回答「资料不足」。
+    """
+    assert DEFAULT_QA_TOP_K >= 10
+    captured: dict[str, object] = {}
+    service = InsightQACommandService(insight_platform["engine"])
+
+    class Snapshot:
+        source_run_id = None
+        fingerprint = "fingerprint"
+
+    monkeypatch.setattr(service.settings, "resolve_insight", lambda **_kwargs: {})
+    monkeypatch.setattr(service.derived, "snapshot", lambda **_kwargs: Snapshot())
+    monkeypatch.setattr(
+        service.derived,
+        "qa_status",
+        lambda **_kwargs: {"available": True, "generation": 1},
+    )
+
+    def create_vector_query(**kwargs):
+        captured.update(kwargs)
+        return "request-id", "connection-token"
+
+    monkeypatch.setattr(
+        service.repository,
+        "create_vector_query",
+        create_vector_query,
+    )
+
+    handle = service.create(
+        book_id=str(insight_platform["book"]["id"]),
+        command={"question": "虎杖悠仁第一次吃下宿傩手指是在第几话第几页？"},
+    )
+
+    assert handle.options["topK"] == DEFAULT_QA_TOP_K
+    # candidateLimit = topK * 6，候选宽度必须同步放宽，否则 topK 调大也不会多召回。
+    assert captured["request_payload"]["candidateLimit"] == DEFAULT_QA_TOP_K * 6
 
 
 def test_qa_entity_evidence_pages_become_citable_candidates(

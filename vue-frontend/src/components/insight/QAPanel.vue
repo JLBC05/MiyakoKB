@@ -30,7 +30,10 @@ const questionInput = ref('')
 const useParentChild = ref(true)
 const useReasoning = ref(true)
 const useReranker = ref(true)
-const topK = ref(5)
+// Top K 是「页面证据」的宽度。设为 5 时，实测第 1 题（第一次吃下宿傩手指，
+// 正确页第 1 话第 46 页）在向量检索里排第 8，进不了候选，模型只能答「资料不足」。
+// 10 能覆盖这类「正确答案页排在 6-10 位」的常见情形，同时不至于让引用列表太长。
+const topK = ref(10)
 const threshold = ref(0)
 const isRebuildingEmbeddings = ref(false)
 const rebuildTaskId = ref<string | null>(null)

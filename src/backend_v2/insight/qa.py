@@ -181,6 +181,21 @@ DEFAULT_QA_MODE = "generic"
 QA_MODES = frozenset({"generic", "exact", "global"})
 # 通用模式为全库材料预留的候选条数（在页面候选配额之外）。
 GENERIC_GLOBAL_CANDIDATE_LIMIT = 2
+# 页面候选与事件候选按排名交错合并时，每个来源在两个来源之间各取几条。
+# 审计实测：事件候选的 hybridScore 系统性偏高（前 17 名里有 17 条 event、只有 3 条 page），
+# 纯按分数截断 topK 会让答案所需的页面根本进不了上下文，模型只能凭实体知识库作答而
+# 放弃引用页面。交错后两种证据各有保底名额。
+PAGE_CANDIDATE_INTERLEAVE_BATCH = 2
+# 默认页面证据宽度（topK）。5 太窄：实测「虎杖悠仁第一次吃下宿傩手指」的正确页
+# （第 1 话第 46 页）在向量检索里排第 8，会整页进不了候选，模型只能答「资料不足」。
+DEFAULT_QA_TOP_K = 10
+# 每个命中实体最多向候选里贡献多少个「出场页」。
+# 实体知识的出场页是全书所有出现位置（主角可达上百页），无限追加会把真正相关的
+# 页面证据挤出引用列表：实测第 6 题 191 条实体引用 vs 5 条页面引用，模型的引用
+# 列表被实体出场页淹没。只保留最早的若干位置即可覆盖「第一次出场」类提问。
+ENTITY_EVIDENCE_PAGES_PER_ENTITY = 4
+# 实体出场页的证据分。它不是与问题相关性的度量，给满分（1.0）会压过真正的向量命中。
+ENTITY_EVIDENCE_SCORE = 0.35
 # 全局资料不可用的两种原因必须区分：没有做过全局分析，与做过了但已随重新分析过期。
 _GLOBAL_CONTEXT_MISSING = "missing"
 _GLOBAL_CONTEXT_STALE = "stale"
@@ -1002,7 +1017,9 @@ class InsightQAWorkerService:
             book_id=book_id,
             dependency_fingerprint=request_payload["dependencyFingerprint"],
         )
-        merged = artifacts[:GENERIC_GLOBAL_CANDIDATE_LIMIT] + candidates
+        merged = artifacts[:GENERIC_GLOBAL_CANDIDATE_LIMIT] + _interleave_by_source(
+            candidates
+        )
         if global_issue is not None:
             stale_reason = (
                 "全局概览资料已过期（书籍已重新分析），本次回答仅基于页面证据。"
@@ -1930,7 +1947,10 @@ class InsightQACommandService:
             raise ValueError("mode must be generic, exact or global")
         if mode not in QA_MODES:
             raise ValueError("mode must be generic, exact or global")
-        top_k = command.get("topK", 5)
+        # 默认页面证据宽度。5 太窄：实测「虎杖悠仁第一次吃下宿傩手指」的正确页
+        # （第 1 话第 46 页）在向量检索里排第 8，会整页进不了候选，模型只能答
+        # 「资料不足」。10 能覆盖「正确答案页排在 6-10 位」这一常见情形。
+        top_k = command.get("topK", DEFAULT_QA_TOP_K)
         if isinstance(top_k, bool) or not isinstance(top_k, int):
             raise ValueError("topK must be an integer")
         if top_k < 1:
@@ -2050,6 +2070,41 @@ class InsightQACommandService:
     ) -> None:
         """Validate global QA context if present; graceful degradation allows fallback."""
         return
+
+
+def _interleave_by_source(
+    candidates: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """按来源交错页面与事件候选，避免高分事件挤掉全部页面证据。
+
+    两个来源各自保持原有分数顺序，只是按 ``PAGE_CANDIDATE_INTERLEAVE_BATCH``
+    轮流取条目；来源不足时把剩下的直接追加，因此不会丢候选。
+    """
+    ordered = [_candidate(row) for row in candidates]
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in ordered:
+        buckets.setdefault(str(row["type"]), []).append(row)
+    if len(buckets) < 2:
+        return ordered
+    # 交错的来源顺序按各自首条候选的分数决定，分数高的先出。
+    order = [
+        name
+        for name in sorted(buckets, key=lambda name: (-buckets[name][0]["hybridScore"], name))
+    ]
+    cursor = {name: 0 for name in order}
+    merged: list[dict[str, Any]] = []
+    while True:
+        progressed = False
+        for name in order:
+            start = cursor[name]
+            take = buckets[name][start : start + PAGE_CANDIDATE_INTERLEAVE_BATCH]
+            if not take:
+                continue
+            progressed = True
+            cursor[name] = start + len(take)
+            merged.extend(take)
+        if not progressed:
+            return merged
 
 
 def select_candidates(
@@ -2243,14 +2298,23 @@ def entity_page_candidates(
     *,
     snapshot_pages: Sequence[Mapping[str, Any]],
     locations: Mapping[int, Mapping[str, Any]] | None = None,
+    limit_per_entity: int = ENTITY_EVIDENCE_PAGES_PER_ENTITY,
 ) -> list[dict[str, Any]]:
     """Build candidates for the pages an entity knowledge entry points at.
 
     The entity knowledge base records「出现页码」but those pages were never part of
     the retrieved material, so the model could only answer page numbers without
     any page evidence behind them. These candidates make that evidence citable.
+
+    `limit_per_entity` 限制每个实体贡献的出場页数量。实体知识的「出场页」是全书
+    所有出现位置，一个主角能有上百页；全部塞进候选会把真正与问题相关的页面证据
+    挤到引用列表末尾（实测第 6 题 191 条实体引用 vs 5 条页面引用）。这里只保留
+    最早的若干个「首次出场」位置——问「第一次出现」时它们正是需要的，其余交给
+    向量检索按相关性挑。
     """
     if not isinstance(resolved_entities, Mapping) or not locations:
+        return []
+    if limit_per_entity < 1:
         return []
     by_page_id: dict[str, Mapping[str, Any]] = {}
     for item in snapshot_pages:
@@ -2268,9 +2332,14 @@ def entity_page_candidates(
     for entity in matched:
         if not isinstance(entity, Mapping):
             continue
-        for value in entity.get("pages") or []:
-            if isinstance(value, bool) or not isinstance(value, int):
-                continue
+        page_numbers = [
+            value
+            for value in (entity.get("pages") or [])
+            if isinstance(value, int) and not isinstance(value, bool)
+        ]
+        # 取最早的若干个位置（知识库里的 pages 已按出场顺序排列，这里再排序一次
+        # 以免上游顺序变化导致行为漂移）。
+        for value in sorted(page_numbers)[:limit_per_entity]:
             info = locations.get(value)
             if not isinstance(info, Mapping):
                 continue
@@ -2291,7 +2360,10 @@ def entity_page_candidates(
                     "pageId": page_id,
                     "pageNumber": value,
                     "document": _page_document(value, analysis),
-                    "hybridScore": 1.0,
+                    # 实体出场页是「间接证据」：它是实体出现过的地方，不等于与当前
+                    # 问题相关。给满分会让它压过真正命中问题的向量候选，因此降到
+                    # 略低于典型向量命中的水平。
+                    "hybridScore": ENTITY_EVIDENCE_SCORE,
                 }
             )
     return candidates
