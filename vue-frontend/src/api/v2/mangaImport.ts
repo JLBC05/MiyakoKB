@@ -62,6 +62,8 @@ export interface VeneraImportDetail {
   skippedChapters?: ImportedChapterRef[]
   issues?: ImportIssue[]
   summary?: ImportIssueSummary
+  /** 导入后立刻做的完整性核对；`ok` 为 null 表示核对本身没能跑起来（见 error）。 */
+  integrity?: IntegrityReport | null
 }
 
 export interface VeneraImportResponse {
@@ -139,6 +141,8 @@ export interface LocalImportedBook {
   skippedChapters?: ImportedChapterRef[]
   issues?: ImportIssue[]
   summary?: ImportIssueSummary
+  /** 导入后立刻做的完整性核对；`ok` 为 null 表示核对本身没能跑起来（见 error）。 */
+  integrity?: AggregateIntegrityReport | null
 }
 
 export interface LocalConfirmResponse {
@@ -160,6 +164,12 @@ export async function confirmLocalImport(books: LocalBookConfirmPayload[]): Prom
   return apiClient.post<LocalConfirmResponse>('/api/v2/import/local/confirm', {
     books,
   })
+}
+
+/** 核对失败时后端只降级：`ok` 为 null，并给出 error。 */
+export type AggregateIntegrityReport = Omit<Partial<IntegrityReport>, 'ok'> & {
+  ok: boolean | null
+  error?: string
 }
 
 export interface IntegrityChapterVerdict {

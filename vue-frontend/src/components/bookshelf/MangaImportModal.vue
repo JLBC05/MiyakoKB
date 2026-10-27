@@ -19,6 +19,7 @@ import {
   type LocalBookPreview,
   type LocalBookConfirmPayload,
   type ImportIssue,
+  type AggregateIntegrityReport,
   type IntegrityReport,
 } from '@/api/v2/mangaImport'
 import { getV2Settings, saveV2SettingsTransaction } from '@/api/v2/settings'
@@ -71,6 +72,22 @@ function summarizeIssues(
     ? `成功 ${ok} 部，部分失败 ${partial} 部${failed > 0 ? `，失败 ${failed} 部` : ''}`
     : `成功导入 ${ok} 部漫画`
   return lines.length > 0 ? `${head}：${lines[0]}` : head
+}
+
+/**
+ * 导入响应里自带核对结果时的提示文案。丢件为 0 时返回 null（交给原汇总文案），
+ * 有丢件才替换，因为这正是用户最需要立刻知道的事。
+ */
+function describeIntegrity(report: IntegrityReport | null | undefined): string | null {
+  if (!report || report.ok === null) return null
+  if (report.lost.length === 0 && report.problems.length === 0) return null
+  const lost = report.lost.length
+  const unreadable = report.problems.length
+  const first = report.lost[0]?.label ?? report.problems[0]?.label ?? ''
+  const parts: string[] = ['导入完成，但核对发现问题']
+  if (lost > 0) parts.push(`丢件 ${lost} 章`)
+  if (unreadable > 0) parts.push(`读取失败 ${unreadable} 章`)
+  return `${parts.join('、')}：${first}`
 }
 
 const emit = defineEmits<{
@@ -253,8 +270,15 @@ async function handleImport() {
     importSubText.value = summarizeIssues(res.details, res.partial, res.failed)
 
     await new Promise(r => setTimeout(r, 600))
+    // 导入响应里已经带了核对结果：导入完成后直接把第一本的报告摊开，
+    // 用户不用再手动点「核对导入完整性」。
+    const firstIntegrity = res.details.find(d => d.integrity && d.book_id)?.integrity ?? null
+    if (firstIntegrity && firstIntegrity.ok !== null) {
+      integrityTarget.value = res.details.find(d => d.integrity && d.book_id)?.title ?? ''
+      integrityReport.value = firstIntegrity as IntegrityReport
+    }
     if (res.imported > 0 || res.partial > 0) {
-      showToast(summarizeIssues(res.details, res.partial, res.failed), 'success')
+      showToast(describeIntegrity(firstIntegrity) ?? summarizeIssues(res.details, res.partial, res.failed), 'success')
       emit('imported')
       emit('close')
     } else {
@@ -377,8 +401,19 @@ async function handleConfirmLocal() {
     importSubText.value = summarizeIssues(res.imported_books, res.partial, res.failed)
 
     await new Promise(r => setTimeout(r, 600))
+    // 本地导入同样自带核对结果：直接摊开第一本的报告。
+    const firstLocal = res.imported_books.find(b => b.integrity && b.book_id)
+    const localReport = (firstLocal?.integrity ?? null) as AggregateIntegrityReport | null
+    if (localReport && localReport.ok !== null) {
+      integrityTarget.value = firstLocal?.title ?? ''
+      integrityReport.value = localReport as IntegrityReport
+    }
     if ((res.imported ?? 0) > 0 || (res.partial ?? 0) > 0) {
-      showToast(summarizeIssues(res.imported_books, res.partial, res.failed), 'success')
+      showToast(
+        describeIntegrity(localReport as IntegrityReport | null) ??
+          summarizeIssues(res.imported_books, res.partial, res.failed),
+        'success'
+      )
       emit('imported')
       emit('close')
     } else {

@@ -6508,6 +6508,37 @@ components:
           type: array
           items: {type: string}
         ok: {type: boolean}
+    ImportIntegrityAttachment:
+      type: [object, "null"]
+      additionalProperties: false
+      description: |
+        The same report `POST /import/integrity-check` returns, attached to each import
+        result so the caller does not need a second round trip. `ok` is `null` only when
+        the check itself could not run (field `error` explains why) — a check failure
+        never changes the import status.
+      properties:
+        source: {type: string, enum: [venera, local]}
+        target: {type: string}
+        bookId: {type: [string, "null"]}
+        filesystemChapters: {type: integer, minimum: 0}
+        importedChapters: {type: integer, minimum: 0}
+        lost:
+          type: array
+          items: {$ref: "#/components/schemas/ImportChapterVerdict"}
+        incomplete:
+          type: array
+          items: {$ref: "#/components/schemas/ImportChapterVerdict"}
+        notDownloaded:
+          type: array
+          items: {$ref: "#/components/schemas/ImportChapterVerdict"}
+        problems:
+          type: array
+          items: {$ref: "#/components/schemas/ImportChapterVerdict"}
+        notes:
+          type: array
+          items: {type: string}
+        ok: {type: [boolean, "null"]}
+        error: {type: string}
     ImportIssue:
       type: object
       additionalProperties: false
@@ -6567,6 +6598,7 @@ components:
           type: array
           items: {$ref: "#/components/schemas/ImportIssue"}
         summary: {$ref: "#/components/schemas/ImportIssueSummary"}
+        integrity: {$ref: "#/components/schemas/ImportIntegrityAttachment"}
     VeneraImportResult:
       type: object
       additionalProperties: false
@@ -6671,6 +6703,7 @@ components:
           type: array
           items: {$ref: "#/components/schemas/ImportIssue"}
         summary: {$ref: "#/components/schemas/ImportIssueSummary"}
+        integrity: {$ref: "#/components/schemas/ImportIntegrityAttachment"}
     LocalImportResult:
       type: object
       additionalProperties: false

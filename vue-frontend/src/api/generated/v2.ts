@@ -3892,6 +3892,27 @@ export interface components {
             notes: string[];
             ok: boolean;
         };
+        /**
+         * @description The same report `POST /import/integrity-check` returns, attached to each import
+         *     result so the caller does not need a second round trip. `ok` is `null` only when
+         *     the check itself could not run (field `error` explains why) — a check failure
+         *     never changes the import status.
+         */
+        ImportIntegrityAttachment: {
+            /** @enum {string} */
+            source?: "venera" | "local";
+            target?: string;
+            bookId?: string | null;
+            filesystemChapters?: number;
+            importedChapters?: number;
+            lost?: components["schemas"]["ImportChapterVerdict"][];
+            incomplete?: components["schemas"]["ImportChapterVerdict"][];
+            notDownloaded?: components["schemas"]["ImportChapterVerdict"][];
+            problems?: components["schemas"]["ImportChapterVerdict"][];
+            notes?: string[];
+            ok?: boolean | null;
+            error?: string;
+        } | null;
         /** @description One concrete thing that went wrong during an import, at a precise granularity. */
         ImportIssue: {
             /** @enum {string} */
@@ -3934,6 +3955,7 @@ export interface components {
             skippedChapters?: components["schemas"]["ImportSkippedChapter"][];
             issues: components["schemas"]["ImportIssue"][];
             summary: components["schemas"]["ImportIssueSummary"];
+            integrity?: components["schemas"]["ImportIntegrityAttachment"];
         };
         VeneraImportResult: {
             imported: number;
@@ -4000,6 +4022,7 @@ export interface components {
             skippedChapters?: components["schemas"]["ImportSkippedChapter"][];
             issues: components["schemas"]["ImportIssue"][];
             summary: components["schemas"]["ImportIssueSummary"];
+            integrity?: components["schemas"]["ImportIntegrityAttachment"];
         };
         LocalImportResult: {
             /** @enum {string} */

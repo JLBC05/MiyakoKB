@@ -304,11 +304,6 @@ def _write_chapter_dir(base_dir: Path, directory: str, uuid: str, pages: int) ->
 # --------------------------------------------------------------------------
 
 
-# --------------------------------------------------------------------------
-# 导入完整性核对（以文件系统为准，未下载不算丢件）
-# --------------------------------------------------------------------------
-
-
 def _confirm_book(client, title: str, chapters: list[dict]) -> str:
     response = client.post(
         "/api/v2/import/local/confirm",
@@ -505,6 +500,159 @@ def test_venera_import_is_idempotent_on_retry(env, tmp_path: Path) -> None:
             select(books.c.id).where(books.c.owner_user_id == LOCAL_USER_ID, books.c.kind == "library")
         ).all()
         assert len(imported_books) == 1
+
+
+def test_local_import_response_carries_an_integrity_report(env, tmp_path: Path) -> None:
+    """导入响应里直接带核对结果，用户不必再手动点一次「核对」。"""
+
+    folder = tmp_path / "inline"
+    _write_pages(folder / "ch1", 3)
+    _write_pages(folder / "ch2", 2)
+
+    response = env["client"].post(
+        "/api/v2/import/local/confirm",
+        json={
+            "books": [
+                _book_payload(
+                    "内联核对样书",
+                    [
+                        {"title": "第1话", "ordinal": 1, "source_type": "folder", "source_path": str(folder / "ch1")},
+                        {"title": "第2话", "ordinal": 2, "source_type": "folder", "source_path": str(folder / "ch2")},
+                    ],
+                )
+            ]
+        },
+    )
+    assert response.status_code == 200, response.get_data(as_text=True)
+    entry = response.get_json()["imported_books"][0]
+    assert entry["status"] == "success"
+
+    integrity = entry["integrity"]
+    assert integrity is not None, entry
+    assert integrity["ok"] is True
+    assert integrity["filesystemChapters"] == 2
+    assert integrity["importedChapters"] == 2
+    assert integrity["lost"] == []
+
+
+def test_local_import_integrity_reports_pages_missing_from_the_database(env, tmp_path: Path) -> None:
+    """磁盘上有、库里没有的页要被点出来（这是核对的全部意义）。"""
+
+    from src.backend_v2.storage.schema import pages as pages_table
+
+    folder = tmp_path / "partial"
+    _write_pages(folder / "ch1", 3)
+    _write_pages(folder / "ch2", 3)
+
+    response = env["client"].post(
+        "/api/v2/import/local/confirm",
+        json={
+            "books": [
+                _book_payload(
+                    "缺页样书",
+                    [
+                        {"title": "第1话", "ordinal": 1, "source_type": "folder", "source_path": str(folder / "ch1")},
+                        {"title": "第2话", "ordinal": 2, "source_type": "folder", "source_path": str(folder / "ch2")},
+                    ],
+                )
+            ]
+        },
+    )
+    entry = response.get_json()["imported_books"][0]
+    book_id = str(entry["book_id"])
+
+    # 模拟「导入时漏了一页」：删掉第 2 话的第 3 页。
+    with env["engine"].begin() as conn:
+        chapter_id = conn.execute(
+            select(chapters.c.id).where(chapters.c.book_id == book_id, chapters.c.ordinal == 2)
+        ).scalar_one()
+        third = conn.execute(
+            select(pages_table.c.id).where(pages_table.c.chapter_id == chapter_id, pages_table.c.ordinal == 3)
+        ).scalar_one()
+        conn.execute(pages_table.delete().where(pages_table.c.id == third))
+
+    rerun = env["client"].post(
+        "/api/v2/import/local/confirm",
+        json={
+            "books": [
+                _book_payload(
+                    "缺页样书",
+                    [
+                        {"title": "第1话", "ordinal": 1, "source_type": "folder", "source_path": str(folder / "ch1")},
+                        {"title": "第2话", "ordinal": 2, "source_type": "folder", "source_path": str(folder / "ch2")},
+                    ],
+                )
+            ]
+        },
+    )
+    integrity = rerun.get_json()["imported_books"][0]["integrity"]
+    assert integrity is not None
+    # 续传会把漏掉的页补回来，所以这次应当仍然 ok —— 证明核对把「补页」也认了。
+    assert integrity["ok"] is True, integrity
+
+
+def test_venera_import_response_carries_an_integrity_report(env, tmp_path: Path) -> None:
+    """Venera 导入同样在响应里带核对；登记但磁盘没有的章节进 notDownloaded。"""
+
+    base = tmp_path / "venera-inline"
+    _write_venera_library(
+        base,
+        directory="inline",
+        downloaded=["u1", "u2"],
+        chapters_map={"默認": {"u1": "第1话", "u2": "第2话"}},
+    )
+    _write_chapter_dir(base, "inline", "u1", 2)
+    # u2 的目录故意不创建 —— 这是「未下载」，不是丢件。
+
+    import src.backend_v2.manga_import.routes as routes_module
+
+    original = routes_module.resolve_venera_base_dir
+    routes_module.resolve_venera_base_dir = lambda engine: (base, "setting")
+    try:
+        response = env["client"].post("/api/v2/import/venera", json={"comic_ids": ["comic-1"]})
+    finally:
+        routes_module.resolve_venera_base_dir = original
+
+    detail = response.get_json()["details"][0]
+    integrity = detail["integrity"]
+    assert integrity is not None, detail
+    assert integrity["ok"] is True
+    assert integrity["filesystemChapters"] == 1
+    assert integrity["lost"] == []
+    assert [item["ordinal"] for item in integrity["notDownloaded"]] == [2]
+
+
+def test_import_integrity_failure_does_not_fail_the_import(env, monkeypatch) -> None:
+    """核对是附加信息：它自己出错时只降级，不能把成功的导入变成失败。"""
+
+    import src.backend_v2.manga_import.routes as routes_module
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("disk vanished")
+
+    monkeypatch.setattr(routes_module, "probe_local_paths", _boom)
+
+    import tempfile
+
+    folder = Path(tempfile.mkdtemp(prefix="integrity-boom-")) / "ch1"
+    _write_pages(folder, 2)
+
+    response = env["client"].post(
+        "/api/v2/import/local/confirm",
+        json={
+            "books": [
+                _book_payload(
+                    "核对失败样书",
+                    [{"title": "第1话", "ordinal": 1, "source_type": "folder", "source_path": str(folder)}],
+                )
+            ]
+        },
+    )
+    assert response.status_code == 200, response.get_data(as_text=True)
+    entry = response.get_json()["imported_books"][0]
+    assert entry["status"] == "success"
+    assert entry["integrity"]["ok"] is None
+    assert "disk vanished" in entry["integrity"]["error"]
 
 
 def test_venera_library_returns_structured_error_when_apath_missing(env, monkeypatch) -> None:

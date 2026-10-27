@@ -171,6 +171,81 @@ def _match_venera_directory(paths: list[Path]) -> tuple[Path, str] | None:
     return None
 
 
+def _integrity_for_venera(
+    *,
+    engine: object,
+    base_dir: Path,
+    comic_id: str,
+    book_id: str | None,
+) -> dict[str, Any] | None:
+    """导入后立刻核对一本书，把结果挂进导入响应。
+
+    口径与 ``POST /import/integrity-check`` 完全一致（同一套 ``integrity``
+    函数），区别只在**不抛出**：核对本身失败不能把已经成功的导入变成失败，
+    所以这里把异常收成 ``{"ok": None, "error": "..."}``。
+
+    ``book_id`` 为空（导入彻底失败）时直接返回 ``None`` —— 没有书就没有可
+    对照的东西。
+    """
+
+    if not book_id:
+        return None
+    try:
+        probes, notes = probe_venera_comic(base_dir, comic_id)
+        detail = _get_venera_comic_detail(base_dir, comic_id) or {}
+        downloaded = list(detail.get("downloaded_chapters") or [])
+        on_disk = {item.ordinal for item in probes}
+        unmapped = [
+            index for index in range(1, len(downloaded) + 1) if index not in on_disk
+        ]
+        report = check_import_integrity(
+            engine=engine,
+            book_id=book_id,
+            probes=probes,
+            source="venera",
+            target=str(detail.get("title") or comic_id),
+            notes=notes,
+            unmapped_ordinals=unmapped,
+        )
+        return report.to_payload()
+    except Exception as error:  # noqa: BLE001 - 核对失败不影响导入结果
+        return {"ok": None, "error": f"{type(error).__name__}: {error}"}
+
+
+def _integrity_for_local(
+    *,
+    engine: object,
+    paths: list[str],
+    book_id: str | None,
+) -> dict[str, Any] | None:
+    """本地导入后的核对；路径指向 Venera 漫画目录时自动改走 Venera 口径。"""
+
+    if not book_id:
+        return None
+    try:
+        resolved = [_expand_user_path(str(item)) for item in paths]
+        venera_hit = _match_venera_directory(resolved)
+        if venera_hit is not None:
+            base_dir, comic_id = venera_hit
+            return _integrity_for_venera(
+                engine=engine,
+                base_dir=base_dir,
+                comic_id=comic_id,
+                book_id=book_id,
+            )
+        probes = probe_local_paths(resolved)
+        report = check_import_integrity(
+            engine=engine,
+            book_id=book_id,
+            probes=probes,
+            source="local",
+            target=", ".join(str(item) for item in resolved),
+        )
+        return report.to_payload()
+    except Exception as error:  # noqa: BLE001 - 核对失败不影响导入结果
+        return {"ok": None, "error": f"{type(error).__name__}: {error}"}
+
+
 def _get_venera_comic_detail(base_dir: Path, comic_id: str) -> dict[str, Any] | None:
     db_path = venera_local_db_path(base_dir)
     if not db_path.exists():
@@ -326,6 +401,14 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
                 partial_count += 1
             else:
                 failed_count += 1
+            # 导入完立刻核对：把「磁盘有、库里没有」的章节在响应里直接透出来，
+            # 用户不必再手动点一次核对。核对失败只降级，不影响导入状态。
+            result["integrity"] = _integrity_for_venera(
+                engine=engine,
+                base_dir=base_dir,
+                comic_id=comic_id,
+                book_id=result.get("book_id"),
+            )
             details.append(result)
 
         return jsonify({
@@ -440,6 +523,8 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
             return _error("validation_error", "books 必须是非空数组", 400)
 
         imported_books: list[dict[str, Any]] = []
+        # 每本书自己的源路径，用于导入后核对（books[i] 的 paths 与 imported_books[i] 一一对应）。
+        source_paths: list[list[str]] = []
         for index, book_data in enumerate(books_payload, start=1):
             if not isinstance(book_data, dict):
                 imported_books.append(
@@ -448,6 +533,7 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
                         ValueError("books 数组的每一项都必须是对象"),
                     )
                 )
+                source_paths.append([])
                 continue
             try:
                 imported_books.append(
@@ -460,6 +546,25 @@ def create_manga_import_blueprint(*, data_root: Path, engine: object) -> Bluepri
                 )
             except Exception as error:  # noqa: BLE001 - 单本失败不打断整批
                 imported_books.append(_crash_result(f"book#{index}", error))
+
+            raw_paths = book_data.get("paths") if isinstance(book_data, dict) else None
+            if not isinstance(raw_paths, list) or not raw_paths:
+                raw_paths = [
+                    str(item.get("source_path"))
+                    for item in (book_data.get("chapters") or [])
+                    if isinstance(item, dict) and item.get("source_path")
+                ]
+            source_paths.append([str(item) for item in raw_paths])
+
+        # 本地导入同样在响应里带上核对结果；路径缺失时核对照常跳过。
+        for entry, paths in zip(imported_books, source_paths):
+            if not isinstance(entry, dict) or not paths:
+                continue
+            entry["integrity"] = _integrity_for_local(
+                engine=engine,
+                paths=paths,
+                book_id=entry.get("book_id"),
+            )
 
         statuses = [str(item.get("status") or "failed") for item in imported_books]
         if all(value == "failed" for value in statuses):
