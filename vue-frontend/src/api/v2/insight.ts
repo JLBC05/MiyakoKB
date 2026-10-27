@@ -268,6 +268,7 @@ export function getBooksKnowledgeStatus(): Promise<BooksKnowledgeStatusResponse>
 export type V2InsightCharacterSkill = components['schemas']['InsightCharacterSkill']
 export type V2InsightCharacterSkillStatus = components['schemas']['InsightCharacterSkillStatus']
 export type V2InsightCharacterSkillCharacter = components['schemas']['InsightCharacterSkillCharacter']
+export type V2InsightCharacterSkillBatch = components['schemas']['InsightCharacterSkillBatch']
 export type V2InsightLorebook = components['schemas']['InsightLorebook']
 export type V2DistillKind = 'skill' | 'card'
 
@@ -315,6 +316,44 @@ export function getInsightCharacterSkillStatus(
 ): Promise<V2InsightCharacterSkillStatus> {
   return apiClient.get(
     `${ROOT}/books/${encodeURIComponent(bookId)}/character-skills/${encodeURIComponent(entityId)}/status${kindSuffix(options.kind)}`
+  )
+}
+
+/** 批量蒸馏：串行逐个角色执行，同一本书同一类型同时只允许一个批次。 */
+export function buildInsightCharacterSkillsBatch(
+  bookId: string,
+  command: {
+    entityIds?: string[]
+    minPages?: number
+    maxVisionPages?: number
+    limit?: number
+    kind?: V2DistillKind
+  } = {}
+): Promise<V2InsightCharacterSkillBatch> {
+  return apiClient.post(
+    `${ROOT}/books/${encodeURIComponent(bookId)}/character-skills/batch`,
+    command,
+    { headers: { 'Idempotency-Key': newIdempotencyKey() } }
+  )
+}
+
+export function getInsightCharacterSkillsBatchStatus(
+  bookId: string,
+  options: { kind?: V2DistillKind } = {}
+): Promise<V2InsightCharacterSkillBatch> {
+  return apiClient.get(
+    `${ROOT}/books/${encodeURIComponent(bookId)}/character-skills/batch${kindSuffix(options.kind)}`
+  )
+}
+
+export function stopInsightCharacterSkillsBatch(
+  bookId: string,
+  options: { kind?: V2DistillKind } = {}
+): Promise<V2InsightCharacterSkillBatch> {
+  return apiClient.post(
+    `${ROOT}/books/${encodeURIComponent(bookId)}/character-skills/batch/stop${kindSuffix(options.kind)}`,
+    {},
+    { headers: { 'Idempotency-Key': newIdempotencyKey() } }
   )
 }
 

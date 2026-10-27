@@ -2207,6 +2207,74 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/ValidationError"}
+  /insight/books/{book_id}/character-skills/batch:
+    get:
+      tags: [insight]
+      operationId: getInsightCharacterSkillsBatchStatus
+      summary: Read the state of the book's character batch distillation.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+        - name: kind
+          in: query
+          required: false
+          description: Which batch to read (character_skill or character_card).
+          schema: {type: string, enum: [character_skill, character_card], default: character_skill}
+      responses:
+        "200":
+          description: Current batch state; `idle` before the first batch of this kind.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightCharacterSkillBatch"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+    post:
+      tags: [insight, jobs]
+      operationId: buildInsightCharacterSkillsBatch
+      summary: Distill several characters one after another in the same book.
+      description: |
+        Runs strictly sequentially so a single provider rate limit cannot be
+        saturated. Only one batch per book and kind may run at a time; a second
+        request while one is running returns the running batch unchanged.
+        Without `entityIds` the batch takes the characters matching `minPages`,
+        newest page coverage first, capped by `limit`.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/InsightCharacterSkillBatchCommand"}
+      responses:
+        "202":
+          description: Batch accepted; poll the batch status route for progress.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightCharacterSkillBatch"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+  /insight/books/{book_id}/character-skills/batch/stop:
+    post:
+      tags: [insight, jobs]
+      operationId: stopInsightCharacterSkillsBatch
+      summary: Ask the running batch to stop after the character in flight.
+      parameters:
+        - $ref: "#/components/parameters/BookId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: kind
+          in: query
+          required: false
+          description: Which batch to read (character_skill or character_card).
+          schema: {type: string, enum: [character_skill, character_card], default: character_skill}
+      responses:
+        "200":
+          description: Batch state after the stop request.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InsightCharacterSkillBatch"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/ValidationError"}
   /insight/books/{book_id}/character-skills/{entity_id}:
     get:
       tags: [insight]
@@ -5635,6 +5703,47 @@ components:
         startedAt: {type: string, nullable: true}
         finishedAt: {type: string, nullable: true}
         error: {type: string, nullable: true}
+    InsightCharacterSkillBatch:
+      type: object
+      additionalProperties: false
+      required: [bookId, status, done, total, succeeded, failed, entityIds, failures]
+      properties:
+        bookId: {type: string}
+        kind: {type: string, enum: [character_skill, character_card, lorebook]}
+        label: {type: string}
+        status: {type: string, enum: [idle, running, stopped, completed]}
+        stage: {type: string, nullable: true}
+        done: {type: integer, minimum: 0}
+        total: {type: integer, minimum: 0}
+        succeeded: {type: integer, minimum: 0}
+        failed: {type: integer, minimum: 0}
+        currentEntityId: {type: string, nullable: true}
+        entityIds:
+          type: array
+          items: {type: string}
+        failures:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [entityId, error]
+            properties:
+              entityId: {type: string}
+              error: {type: string}
+        startedAt: {type: string, nullable: true}
+        finishedAt: {type: string, nullable: true}
+        error: {type: string, nullable: true}
+    InsightCharacterSkillBatchCommand:
+      type: object
+      additionalProperties: false
+      properties:
+        entityIds:
+          type: array
+          items: {type: string}
+        minPages: {type: integer, minimum: 0}
+        maxVisionPages: {type: integer, minimum: 1}
+        limit: {type: integer, minimum: 1, maximum: 500}
+        kind: {type: string, enum: [character_skill, character_card]}
     InsightLorebookBuildCommand:
       type: object
       additionalProperties: false

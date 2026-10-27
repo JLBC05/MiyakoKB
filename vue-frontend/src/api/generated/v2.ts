@@ -1609,6 +1609,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/insight/books/{book_id}/character-skills/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the state of the book's character batch distillation. */
+        get: operations["getInsightCharacterSkillsBatchStatus"];
+        put?: never;
+        /**
+         * Distill several characters one after another in the same book.
+         * @description Runs strictly sequentially so a single provider rate limit cannot be
+         *     saturated. Only one batch per book and kind may run at a time; a second
+         *     request while one is running returns the running batch unchanged.
+         *     Without `entityIds` the batch takes the characters matching `minPages`,
+         *     newest page coverage first, capped by `limit`.
+         */
+        post: operations["buildInsightCharacterSkillsBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insight/books/{book_id}/character-skills/batch/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask the running batch to stop after the character in flight. */
+        post: operations["stopInsightCharacterSkillsBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/insight/books/{book_id}/character-skills/{entity_id}": {
         parameters: {
             query?: never;
@@ -3389,6 +3431,36 @@ export interface components {
             startedAt?: string | null;
             finishedAt?: string | null;
             error?: string | null;
+        };
+        InsightCharacterSkillBatch: {
+            bookId: string;
+            /** @enum {string} */
+            kind?: "character_skill" | "character_card" | "lorebook";
+            label?: string;
+            /** @enum {string} */
+            status: "idle" | "running" | "stopped" | "completed";
+            stage?: string | null;
+            done: number;
+            total: number;
+            succeeded: number;
+            failed: number;
+            currentEntityId?: string | null;
+            entityIds: string[];
+            failures: {
+                entityId: string;
+                error: string;
+            }[];
+            startedAt?: string | null;
+            finishedAt?: string | null;
+            error?: string | null;
+        };
+        InsightCharacterSkillBatchCommand: {
+            entityIds?: string[];
+            minPages?: number;
+            maxVisionPages?: number;
+            limit?: number;
+            /** @enum {string} */
+            kind?: "character_skill" | "character_card";
         };
         InsightLorebookBuildCommand: {
             maxEntities?: number;
@@ -7371,6 +7443,95 @@ export interface operations {
             };
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    getInsightCharacterSkillsBatchStatus: {
+        parameters: {
+            query?: {
+                /** @description Which batch to read (character_skill or character_card). */
+                kind?: "character_skill" | "character_card";
+            };
+            header?: never;
+            path: {
+                book_id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current batch state; `idle` before the first batch of this kind. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightCharacterSkillBatch"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    buildInsightCharacterSkillsBatch: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable key for this normalized command and target scope. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                book_id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InsightCharacterSkillBatchCommand"];
+            };
+        };
+        responses: {
+            /** @description Batch accepted; poll the batch status route for progress. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightCharacterSkillBatch"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    stopInsightCharacterSkillsBatch: {
+        parameters: {
+            query?: {
+                /** @description Which batch to read (character_skill or character_card). */
+                kind?: "character_skill" | "character_card";
+            };
+            header: {
+                /** @description Stable key for this normalized command and target scope. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                book_id: components["parameters"]["BookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Batch state after the stop request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightCharacterSkillBatch"];
+                };
+            };
+            404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
         };
     };

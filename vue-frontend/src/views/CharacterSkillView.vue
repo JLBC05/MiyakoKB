@@ -10,15 +10,19 @@ import UiNumberField from '@/components/ui/UiNumberField.vue'
 import { getBookDetail } from '@/api/bookshelf'
 import {
   buildInsightCharacterSkill,
+  buildInsightCharacterSkillsBatch,
   buildInsightLorebook,
   characterSkillArchiveUrl,
   getInsightCharacterSkill,
   getInsightCharacterSkillStatus,
+  getInsightCharacterSkillsBatchStatus,
   getInsightLorebook,
   getInsightLorebookStatus,
   listInsightCharacterSkills,
   lorebookArchiveUrl,
+  stopInsightCharacterSkillsBatch,
   type V2InsightCharacterSkill,
+  type V2InsightCharacterSkillBatch,
   type V2InsightCharacterSkillStatus,
   type V2InsightLorebook,
 } from '@/api/v2/insight'
@@ -70,12 +74,16 @@ const lorebook = ref<V2InsightLorebook | null>(null)
 const lorebookTask = ref<V2InsightCharacterSkillStatus | null>(null)
 const isLorebookLoading = ref(false)
 const isLorebookExporting = ref(false)
+const batch = ref<V2InsightCharacterSkillBatch | null>(null)
+const isBatchStarting = ref(false)
 
 let loadSequence = 0
 let skillSequence = 0
 let lorebookSequence = 0
+let batchSequence = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let lorebookTimer: ReturnType<typeof setInterval> | null = null
+let batchTimer: ReturnType<typeof setInterval> | null = null
 let isMounted = false
 
 const selectedCharacter = computed(
@@ -88,6 +96,20 @@ const progressPercent = computed(() => {
   const value = task.value
   if (!value || !value.total) return 0
   return Math.min(100, Math.round((value.done / value.total) * 100))
+})
+
+const isBatchRunning = computed(() => batch.value?.status === 'running')
+
+const batchProgressPercent = computed(() => {
+  const value = batch.value
+  if (!value || !value.total) return 0
+  return Math.min(100, Math.round((value.done / value.total) * 100))
+})
+
+const batchCurrentName = computed(() => {
+  const entityId = batch.value?.currentEntityId
+  if (!entityId) return ''
+  return characters.value.find(item => item.entityId === entityId)?.name ?? entityId
 })
 
 const activeDoc = computed(() => (activeKind.value === 'card' ? card.value : skill.value))
@@ -325,7 +347,9 @@ async function loadBook(targetBookId: string): Promise<void> {
   isLoading.value = true
   error.value = null
   stopPolling()
+  stopBatchPolling()
   task.value = null
+  batch.value = null
   skill.value = null
   try {
     const [book, rows] = await Promise.all([
@@ -426,6 +450,71 @@ async function buildSkill(): Promise<void> {
   }
 }
 
+function stopBatchPolling(): void {
+  if (batchTimer) {
+    clearInterval(batchTimer)
+    batchTimer = null
+  }
+}
+
+function startBatchPolling(): void {
+  stopBatchPolling()
+  batchTimer = setInterval(() => {
+    void pollBatchStatus()
+  }, 3000)
+}
+
+async function pollBatchStatus(): Promise<void> {
+  const sequence = ++batchSequence
+  try {
+    const current = await getInsightCharacterSkillsBatchStatus(bookId.value, {
+      kind: activeKind.value,
+    })
+    if (!isMounted || sequence !== batchSequence) return
+    batch.value = current
+    if (current.status !== 'running') {
+      stopBatchPolling()
+      // 批量结束后列表里的"已生成"标记会变，刷新一次。
+      await refreshCharacters()
+    }
+  } catch {
+    if (!isMounted || sequence !== batchSequence) return
+    stopBatchPolling()
+  }
+}
+
+async function startBatch(): Promise<void> {
+  if (!bookId.value || isBatchStarting.value || isBatchRunning.value) return
+  actionError.value = null
+  isBatchStarting.value = true
+  try {
+    // 按当前"最少出场页数"筛选，后端按出场页数从多到少取。
+    const started = await buildInsightCharacterSkillsBatch(bookId.value, {
+      minPages: minPages.value ?? 0,
+      kind: activeKind.value,
+    })
+    batch.value = started
+    if (started.status === 'running') startBatchPolling()
+    else await refreshCharacters()
+  } catch (buildError) {
+    actionError.value = buildError instanceof Error ? buildError.message : '批量蒸馏启动失败'
+  } finally {
+    if (isMounted) isBatchStarting.value = false
+  }
+}
+
+async function stopBatch(): Promise<void> {
+  if (!bookId.value) return
+  actionError.value = null
+  try {
+    batch.value = await stopInsightCharacterSkillsBatch(bookId.value, {
+      kind: activeKind.value,
+    })
+  } catch (stopError) {
+    actionError.value = stopError instanceof Error ? stopError.message : '停止失败'
+  }
+}
+
 async function exportSkill(): Promise<void> {
   const row = selectedCharacter.value
   if (!row || !bookId.value || isExporting.value) return
@@ -458,8 +547,10 @@ onUnmounted(() => {
   loadSequence += 1
   skillSequence += 1
   lorebookSequence += 1
+  batchSequence += 1
   stopPolling()
   stopLorebookPolling()
+  stopBatchPolling()
 })
 
 watch(activeKind, () => {
@@ -520,7 +611,51 @@ watch(
             aria-label="最少出场页数"
           />
         </label>
+        <div class="character-skill-batch">
+          <UiButton
+            v-if="!isBatchRunning"
+            size="sm"
+            variant="secondary"
+            :disabled="!bookId || !characters.length || isBatchStarting"
+            @click="startBatch"
+          >
+            {{ isBatchStarting ? '正在启动…' : `批量蒸馏 ${kindLabel}` }}
+          </UiButton>
+          <UiButton v-else size="sm" variant="ghost" @click="stopBatch">停止批量</UiButton>
+        </div>
       </section>
+
+      <ProductStatusBanner
+        v-if="isBatchRunning"
+        class="character-skill-banner"
+        tone="neutral"
+        :title="`正在批量蒸馏 ${kindLabel}（${batch?.done ?? 0}/${batch?.total ?? 0}）`"
+        aria-live="polite"
+      >
+        当前角色：{{ batchCurrentName || '准备中' }} · 已成功 {{ batch?.succeeded ?? 0 }} 个、失败
+        {{ batch?.failed ?? 0 }} 个（{{ batchProgressPercent }}%）。一次只跑一个角色，避免撞上供应商
+        限流。
+      </ProductStatusBanner>
+
+      <ProductStatusBanner
+        v-else-if="batch && batch.status === 'stopped'"
+        class="character-skill-banner"
+        tone="neutral"
+        title="批量蒸馏已停止"
+      >
+        已完成 {{ batch.done }}/{{ batch.total }} 个角色（成功 {{ batch.succeeded }}、失败
+        {{ batch.failed }}），可以再次启动继续。
+      </ProductStatusBanner>
+
+      <ProductStatusBanner
+        v-else-if="batch && batch.status === 'completed'"
+        class="character-skill-banner"
+        :tone="batch.failed ? 'warning' : 'success'"
+        :title="`批量蒸馏完成：成功 ${batch.succeeded} 个、失败 ${batch.failed} 个`"
+      >
+        <span v-if="!batch.failed">全部角色都已生成{{ kindLabel }}，可在左侧逐个查看。</span>
+        <span v-else>失败的角色可以单独重试，列表里的标记已刷新。</span>
+      </ProductStatusBanner>
 
       <ProductStatusBanner
         v-if="isLoading"
@@ -883,6 +1018,13 @@ watch(
 
 .character-skill-filter__input {
   width: 96px;
+}
+
+.character-skill-batch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .character-skill-banner {

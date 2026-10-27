@@ -1804,6 +1804,11 @@ def _task_key(book_id: str, kind: str, entity_id: str) -> str:
     return f"{book_id}:{kind}:{entity_id}"
 
 
+def _batch_key(book_id: str, kind: str) -> str:
+    """批量蒸馏的键：一本书同一 kind 同时只允许一个批次在跑。"""
+    return f"{book_id}:{kind}"
+
+
 _UNSAFE_FILENAME_CHARS = frozenset('\\/:*?"<>|')
 
 
@@ -1971,6 +1976,8 @@ class CharacterSkillService:
         self.data_root = Path(data_root)
         self.repository = CharacterSkillRepository(engine, self.data_root)
         self._tasks: dict[str, dict[str, Any]] = {}
+        self._batches: dict[str, dict[str, Any]] = {}
+        self._batch_stop: set[str] = set()
         self._guard = threading.Lock()
 
     # ---- 查询 ----------------------------------------------------------
@@ -2102,7 +2109,158 @@ class CharacterSkillService:
         ).start()
         return dict(task)
 
+    def start_batch(
+        self,
+        *,
+        book_id: str,
+        entity_ids: list[str],
+        max_vision_pages: int = DEFAULT_MAX_VISION_PAGES,
+        kind: str = CHARACTER_SKILL_KIND,
+    ) -> dict[str, Any]:
+        """批量蒸馏：串行逐个执行，同一本书同一 kind 同时只允许一个批次。"""
+        if kind not in (CHARACTER_SKILL_KIND, CHARACTER_CARD_KIND):
+            raise ValueError(f"不支持的蒸馏类型：{kind}")
+        targets = [str(item) for item in entity_ids if str(item).strip()]
+        if not targets:
+            raise ValueError("entityIds 不能为空")
+        limit = max(1, min(int(max_vision_pages or DEFAULT_MAX_VISION_PAGES), MAX_VISION_PAGES))
+        known = {item["entityId"] for item in self.repository.characters(book_id=book_id)}
+        unknown = [item for item in targets if item not in known]
+        if unknown:
+            raise InsightNotFound(f"角色不存在：{', '.join(unknown[:3])}")
+        batch_key = _batch_key(book_id, kind)
+        with self._guard:
+            existing = self._batches.get(batch_key)
+            if existing is not None and existing.get("status") == "running":
+                return dict(existing)
+            vlm_config, chat_config = self._runtime_configs(book_id)
+            batch = {
+                "bookId": book_id,
+                "kind": kind,
+                "label": DISTILL_KIND_LABELS.get(kind, kind),
+                "status": "running",
+                "stage": "queued",
+                "done": 0,
+                "total": len(targets),
+                "succeeded": 0,
+                "failed": 0,
+                "currentEntityId": None,
+                "entityIds": list(targets),
+                "failures": [],
+                "startedAt": utcnow().isoformat(timespec="seconds"),
+                "error": None,
+            }
+            self._batches[batch_key] = batch
+        threading.Thread(
+            target=self._run_batch,
+            args=(batch_key, book_id, targets, limit, vlm_config, chat_config, kind),
+            name=f"distill-batch-{kind}",
+            daemon=True,
+        ).start()
+        return dict(batch)
+
+    def batch_status(self, *, book_id: str, kind: str = CHARACTER_SKILL_KIND) -> dict[str, Any]:
+        batch_key = _batch_key(book_id, kind)
+        with self._guard:
+            batch = self._batches.get(batch_key)
+            if batch is not None:
+                return dict(batch)
+        return {
+            "bookId": book_id,
+            "kind": kind,
+            "status": "idle",
+            "stage": None,
+            "done": 0,
+            "total": 0,
+        }
+
+    def stop_batch(self, *, book_id: str, kind: str = CHARACTER_SKILL_KIND) -> dict[str, Any]:
+        """请求停止批次：只设置标记，当前角色跑完后在下一个角色前退出。"""
+        batch_key = _batch_key(book_id, kind)
+        with self._guard:
+            batch = self._batches.get(batch_key)
+            if batch is None:
+                return self.batch_status(book_id=book_id, kind=kind)
+            if batch.get("status") == "running":
+                self._batch_stop.add(batch_key)
+            return dict(batch)
+
     # ---- 内部 ----------------------------------------------------------
+
+    def _run_batch(
+        self,
+        batch_key: str,
+        book_id: str,
+        entity_ids: list[str],
+        limit: int,
+        vlm_config: Any,
+        chat_config: Any,
+        kind: str,
+    ) -> None:
+        builder = CharacterSkillBuilder(
+            self.repository,
+            vlm_config=vlm_config,
+            chat_config=chat_config,
+        )
+        for index, entity_id in enumerate(entity_ids):
+            with self._guard:
+                if batch_key in self._batch_stop:
+                    self._batch_stop.discard(batch_key)
+                    batch = self._batches.get(batch_key) or {}
+                    batch.update(
+                        {
+                            "status": "stopped",
+                            "stage": "stopped",
+                            "currentEntityId": None,
+                            "finishedAt": utcnow().isoformat(timespec="seconds"),
+                        }
+                    )
+                    self._batches[batch_key] = batch
+                    return
+                batch = self._batches.get(batch_key)
+                if batch is not None:
+                    batch.update({"stage": "running", "done": index, "currentEntityId": entity_id})
+            key = _task_key(book_id, kind, entity_id)
+            with self._guard:
+                self._tasks[key] = {
+                    "bookId": book_id,
+                    "entityId": entity_id,
+                    "kind": kind,
+                    "label": DISTILL_KIND_LABELS.get(kind, kind),
+                    "status": "running",
+                    "stage": "queued",
+                    "done": 0,
+                    "total": 3,
+                    "startedAt": utcnow().isoformat(timespec="seconds"),
+                    "error": None,
+                }
+            # 复用单角色执行体：它负责写 task 终态；串行调用保证不会并发打供应商。
+            self._run(key, book_id, entity_id, limit, vlm_config, chat_config, kind)
+            with self._guard:
+                result = self._tasks.get(key) or {}
+                batch = self._batches.get(batch_key) or {}
+                if result.get("status") == "ready":
+                    batch["succeeded"] = int(batch.get("succeeded") or 0) + 1
+                else:
+                    batch["failed"] = int(batch.get("failed") or 0) + 1
+                    failures = list(batch.get("failures") or [])
+                    failures.append(
+                        {"entityId": entity_id, "error": result.get("error") or "unknown"}
+                    )
+                    batch["failures"] = failures[:50]
+                batch["done"] = index + 1
+                self._batches[batch_key] = batch
+        with self._guard:
+            batch = self._batches.get(batch_key) or {}
+            batch.update(
+                {
+                    "status": "completed",
+                    "stage": "done",
+                    "currentEntityId": None,
+                    "finishedAt": utcnow().isoformat(timespec="seconds"),
+                }
+            )
+            self._batches[batch_key] = batch
 
     def _run(
         self,

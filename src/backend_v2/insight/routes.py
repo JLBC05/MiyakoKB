@@ -424,6 +424,68 @@ def create_insight_blueprint(
             202,
         )
 
+    @blueprint.post("/books/<book_id>/character-skills/batch")
+    def build_character_skill_batch(book_id: str):
+        """批量蒸馏：串行逐个角色执行，需显式给出 entityIds 或 minPages 由后端筛选。"""
+        _require_idempotency_key()
+        command = _json_body(
+            allowed_keys={"entityIds", "minPages", "maxVisionPages", "kind", "limit"}
+        )
+        raw_kind = str(command.get("kind") or "skill").strip().lower()
+        if raw_kind == "card":
+            kind = CHARACTER_CARD_KIND
+        elif raw_kind == "skill":
+            kind = CHARACTER_SKILL_KIND
+        else:
+            raise ValueError("kind must be one of skill, card")
+        raw_limit = command.get("maxVisionPages")
+        max_vision_pages = (
+            DEFAULT_MAX_VISION_PAGES
+            if raw_limit is None
+            else _integer_value(raw_limit, "maxVisionPages", minimum=1, maximum=MAX_VISION_PAGES)
+        )
+        entity_ids = command.get("entityIds")
+        if entity_ids is not None:
+            if not isinstance(entity_ids, list) or not entity_ids:
+                raise ValueError("entityIds must be a non-empty array")
+            targets = [str(item).strip() for item in entity_ids if str(item).strip()]
+        else:
+            min_pages = _integer_value(
+                command.get("minPages", 0), "minPages", minimum=0, maximum=100000
+            )
+            candidates = character_skills.characters(book_id=book_id, min_pages=min_pages)
+            targets = [str(item["entityId"]) for item in candidates]
+        max_batch = _integer_value(
+            command.get("limit", len(targets)), "limit", minimum=1, maximum=500
+        )
+        targets = targets[:max_batch]
+        if not targets:
+            raise ValueError("no characters matched")
+        return (
+            jsonify(
+                character_skills.start_batch(
+                    book_id=book_id,
+                    entity_ids=targets,
+                    max_vision_pages=max_vision_pages,
+                    kind=kind,
+                )
+            ),
+            202,
+        )
+
+    @blueprint.get("/books/<book_id>/character-skills/batch")
+    def character_skill_batch_status(book_id: str) -> Response:
+        return jsonify(
+            character_skills.batch_status(book_id=book_id, kind=_distill_kind())
+        )
+
+    @blueprint.post("/books/<book_id>/character-skills/batch/stop")
+    def stop_character_skill_batch(book_id: str):
+        _require_idempotency_key()
+        return jsonify(
+            character_skills.stop_batch(book_id=book_id, kind=_distill_kind())
+        )
+
     @blueprint.get("/books/<book_id>/character-skills/<entity_id>")
     def get_character_skill(book_id: str, entity_id: str) -> Response:
         return jsonify(

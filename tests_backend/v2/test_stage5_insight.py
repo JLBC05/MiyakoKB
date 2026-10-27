@@ -77,7 +77,11 @@ from src.backend_v2.insight.repository import (
     InsightRepository,
 )
 from src.backend_v2.insight.routes import create_insight_blueprint
-from src.backend_v2.insight.worker import InsightAnalysisWorkerService
+from src.backend_v2.insight.worker import (
+    InsightAnalysisWorkerService,
+    _chapter_spans,
+    _mentions_page,
+)
 from src.backend_v2.jobs.repository import (
     AttemptFenced,
     JobQueueRepository,
@@ -145,6 +149,7 @@ class FakeInsightAlgorithms:
         self.fail_page = fail_page
         self.calls: list[int] = []
         self.batches: list[tuple[int, ...]] = []
+        self.chapter_spans: list[tuple[tuple[int, ...], ...]] = []
         self.previous_batches: list[tuple[tuple[int, ...], ...]] = []
 
     def analyze_batch(
@@ -154,10 +159,14 @@ class FakeInsightAlgorithms:
         page_numbers: Sequence[int],
         previous_batches: Sequence[Sequence[Mapping[str, Any]]],
         config: Mapping[str, Any],
+        chapter_spans: Sequence[Mapping[str, Any]] = (),
     ) -> Mapping[str, Any]:
         assert len(image_bytes) == len(page_numbers)
         self.calls.extend(page_numbers)
         self.batches.append(tuple(page_numbers))
+        self.chapter_spans.append(
+            tuple(tuple(int(page) for page in span.get("pageNumbers") or ()) for span in chapter_spans)
+        )
         self.previous_batches.append(
             tuple(
                 tuple(int(page["page_number_snapshot"]) for page in batch)
@@ -6147,12 +6156,15 @@ def _enable_knowledge_mode(platform) -> None:
 class EntityAwareInsightAlgorithms(FakeInsightAlgorithms):
     """假 VLM：页面结果附带实体，用于验证实体知识网络链路。"""
 
-    def analyze_batch(self, image_bytes, *, page_numbers, previous_batches, config):
+    def analyze_batch(
+        self, image_bytes, *, page_numbers, previous_batches, config, chapter_spans=()
+    ):
         payload = super().analyze_batch(
             image_bytes,
             page_numbers=page_numbers,
             previous_batches=previous_batches,
             config=config,
+            chapter_spans=chapter_spans,
         )
         return {
             **payload,
@@ -7422,3 +7434,228 @@ def test_qa_entity_evidence_pages_become_citable_candidates(
     assert "（全书第 7 页）" in context
     assert "[回答要求]" in context
     assert "第 X 话 第 Y 页" in context
+
+def test_answer_context_warns_when_an_event_span_crosses_chapters() -> None:
+    """跨话事件必须在上下文里报出区间跨了哪几话。
+
+    实测「五条悟突然现身天台」的区间是全书第 51~55 页：51~53 页属第 1 话（画的是
+    宿傩天台狂叫），54~55 页属第 2 话（五条悟才真的现身）。只给区间起点会让模型
+    答「五条悟第一次登场是第 1 话第 51 页」，所以区间必须显式按话拆开。
+    """
+
+    locations = {
+        51: {"chapterOrdinal": 1, "pageInChapter": 51},
+        52: {"chapterOrdinal": 1, "pageInChapter": 52},
+        53: {"chapterOrdinal": 1, "pageInChapter": 53},
+        54: {"chapterOrdinal": 2, "pageInChapter": 1},
+        55: {"chapterOrdinal": 2, "pageInChapter": 2},
+    }
+    candidates = [
+        {
+            "id": "event-1-0",
+            "type": "event",
+            "pageId": "page-51",
+            "pageNumber": 51,
+            "pageNumbers": [51, 52, 53, 54, 55],
+            "document": "五条悟突然现身天台，介入伏黑惠与虎杖悠仁的对峙现场",
+            "hybridScore": 0.9,
+        }
+    ]
+
+    context = _answer_context(candidates, None, locations=locations)
+    assert "区间横跨" in context
+    assert "第 1 话第 51~53 页" in context
+    assert "第 2 话第 1~2 页" in context
+    # 模型必须被告知不能默认算在起点页所在那一话。
+    assert "动作未必发生在起点页" in context
+    assert "不要默认算在起点页所在那一话" in context
+
+
+def test_answer_context_marks_a_single_chapter_event_span_as_contained() -> None:
+    """区间没有跨话时也要说明覆盖范围，避免把区间当成单页原文。"""
+
+    locations = {
+        51: {"chapterOrdinal": 1, "pageInChapter": 51},
+        52: {"chapterOrdinal": 1, "pageInChapter": 52},
+        53: {"chapterOrdinal": 1, "pageInChapter": 53},
+    }
+    candidates = [
+        {
+            "id": "event-2-0",
+            "type": "event",
+            "pageId": "page-51",
+            "pageNumber": 51,
+            "pageNumbers": [51, 52, 53],
+            "document": "两面宿傩站在天台俯瞰城镇夜景",
+            "hybridScore": 0.9,
+        }
+    ]
+
+    context = _answer_context(candidates, None, locations=locations)
+    block = context.split("[回答要求]")[0]
+    assert "区间仅覆盖第 1 话第 51~53 页" in block
+    assert "区间横跨" not in block
+
+
+def test_answer_context_leaves_page_candidates_without_a_span_note() -> None:
+    """页面候选是单页原文，不能挂区间说明。"""
+
+    locations = {7: {"chapterOrdinal": 1, "pageInChapter": 7}}
+    candidates = [
+        {
+            "id": "page-7",
+            "type": "page",
+            "pageId": "page-7",
+            "pageNumber": 7,
+            "document": "宿傩展开领域",
+            "hybridScore": 0.8,
+        }
+    ]
+
+    context = _answer_context(candidates, None, locations=locations)
+    block = context.split("[回答要求]")[0]
+    assert "区间" not in block
+    assert "第 1 话 第 7 页（全书第 7 页）" in block
+
+
+def test_chapter_spans_marks_each_chapter_run_in_page_order() -> None:
+    """跨话批次必须被切成「连续同章」的若干段，顺序即页序。"""
+
+    spans = _chapter_spans(
+        [
+            {"chapter_id": "ch-1", "page_number_snapshot": 51},
+            {"chapter_id": "ch-1", "page_number_snapshot": 52},
+            {"chapter_id": "ch-1", "page_number_snapshot": 53},
+            {"chapter_id": "ch-2", "page_number_snapshot": 55},
+            {"chapter_id": "ch-2", "page_number_snapshot": 56},
+        ]
+    )
+    assert spans == [
+        {"chapterId": "ch-1", "pageNumbers": [51, 52, 53]},
+        {"chapterId": "ch-2", "pageNumbers": [55, 56]},
+    ]
+
+
+def test_chapter_spans_keeps_a_single_segment_for_one_chapter() -> None:
+    spans = _chapter_spans(
+        [
+            {"chapter_id": "ch-1", "page_number_snapshot": 1},
+            {"chapter_id": "ch-1", "page_number_snapshot": 2},
+        ]
+    )
+    assert spans == [{"chapterId": "ch-1", "pageNumbers": [1, 2]}]
+
+
+def test_mentions_page_never_reads_the_chapter_index_as_a_page() -> None:
+    """「第 2 话第 3 页」里的 2 是话序，不能当成页码 2。"""
+
+    assert _mentions_page("第 2 话第 3 页", 3) is True
+    assert _mentions_page("第 2 话第 3 页", 2) is False
+    assert _mentions_page("第 51 页宿傩狂叫", 51) is True
+    assert _mentions_page("P.51 出现异变", 51) is True
+    assert _mentions_page("五条悟突然现身天台", 51) is False
+
+
+class _CrossChapterEventAlgorithms(FakeInsightAlgorithms):
+    """故意让跨话批次里的第一个页面返回引用「外话」页码的事件。
+
+    真实模型在看不到章节边界时就会这样写：把第 1 话末尾与第 2 话开头合并成
+    一条事件，summary 里同时出现两话的页码。
+    """
+
+    def analyze_batch(
+        self, image_bytes, *, page_numbers, previous_batches, config, chapter_spans=()
+    ):
+        payload = super().analyze_batch(
+            image_bytes,
+            page_numbers=page_numbers,
+            previous_batches=previous_batches,
+            config=config,
+            chapter_spans=chapter_spans,
+        )
+        spans = [tuple(int(page) for page in span.get("pageNumbers") or ()) for span in chapter_spans]
+        if len(spans) <= 1:
+            return payload
+        # 把「本段之外」的第一页写进第一页的事件 summary，模拟跨话合并。
+        other_pages = [page for span in spans[1:] for page in span]
+        first = spans[0][0]
+        pages = []
+        for page in payload["pages"]:
+            if int(page["page_number"]) == first and other_pages:
+                events = list(page.get("key_events") or [])
+                events.append(
+                    {
+                        "summary": f"宿傩狂叫后紧接着在第 {other_pages[0]} 页展开领域",
+                        "importance": "major",
+                    }
+                )
+                page = {**page, "key_events": events}
+            pages.append(page)
+        return {**payload, "pages": pages}
+
+
+def test_cross_chapter_event_is_rejected_and_the_batch_retries(
+    insight_platform,
+) -> None:
+    """跨话批次里出现引用外话页码的事件时，整批必须被拒绝并重试。
+
+    A1 的核心不变式：一条 key_events 只能描述一个章节内的事。模型跨话合并时
+    summary 会同时出现两话页码，必须由校验层拦下，而不是落库后被检索层截断。
+    """
+
+    platform = insight_platform
+    second_chapter = ContentRepository(platform["engine"]).create_chapter(
+        book_id=str(platform["book"]["id"]),
+        title="Second Chapter",
+    )
+    for index, color in enumerate(((210, 190, 190), (190, 210, 190)), 3):
+        _import_insight_test_page(
+            platform,
+            chapter_id=str(second_chapter["id"]),
+            logical_path=f"cross-page-{index}.png",
+            color=color,
+            idempotency_key=f"cross-page-{index}",
+        )
+    with platform["engine"].begin() as connection:
+        row = connection.execute(
+            select(
+                app_settings.c.payload_json,
+                app_settings.c.revision,
+            ).where(app_settings.c.domain == "insight")
+        ).mappings().one()
+        payload = json.loads(row["payload_json"])
+        batch = payload.setdefault("analysis", {}).setdefault("batch", {})
+        batch["pagesPerBatch"] = 4
+        # 刻意不用 chapter_based：该预设按章节切批，批次永远不会跨话，
+        # 也就测不到跨话事件的拒绝逻辑。standard 预设按页数窗口切批，
+        # 4 页窗口跨过 2 页 + 2 页的两章边界。
+        connection.execute(
+            update(app_settings)
+            .where(app_settings.c.domain == "insight")
+            .values(
+                payload_json=json.dumps(payload, separators=(",", ":")),
+                revision=int(row["revision"]) + 1,
+            )
+        )
+
+    InsightAnalysisCommandService(platform["engine"]).create_analysis_job(
+        command={"bookId": str(platform["book"]["id"]), "scope": "full"},
+        idempotency_key="cross-chapter-event",
+    )
+    algorithms = _CrossChapterEventAlgorithms()
+    assert _run_job(platform, algorithms) in {"completed_with_errors", "failed"}
+    first_batch = algorithms.batches[0]
+    assert len(first_batch) == 4
+    spans = algorithms.chapter_spans[0]
+    assert len(spans) == 2
+    assert sum(len(span) for span in spans) == 4
+    # 拒绝真的发生过的最强证据：越界那一页没有落库。
+    with platform["engine"].begin() as connection:
+        persisted = {
+            int(row["page_number_snapshot"])
+            for row in connection.execute(
+                select(analysis_page_results.c.page_number_snapshot)
+            ).mappings()
+        }
+    assert spans[0][0] not in persisted
+

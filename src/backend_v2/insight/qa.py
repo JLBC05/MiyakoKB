@@ -2816,6 +2816,42 @@ def _format_pages_list(pages: Sequence[Any]) -> str:
     return ", ".join(str(p) for p in sorted_pages[:25]) + f"... 等共 {len(sorted_pages)} 页"
 
 
+def _span_chapter_note(
+    span: Sequence[Any],
+    locations: Mapping[int, Mapping[str, Any]] | None,
+) -> str:
+    """把事件区间按话分组，告诉模型这段区间到底跨了哪几话。
+
+    实测「五条悟突然现身天台」的区间是全书第 51~55 页：51~53 页属第 1 话（画的是
+    宿傩天台狂叫），54~55 页属第 2 话（五条悟才真的现身）。只把区间起点挂成
+    「第 1 话 第 51 页」会让模型把动作算到第 1 话头上，所以区间信息必须显式写出来。
+    """
+    if not locations:
+        return ""
+    by_chapter: dict[int, list[int]] = {}
+    for value in span:
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        info = locations.get(value)
+        if not isinstance(info, Mapping):
+            continue
+        chapter = info.get("chapterOrdinal")
+        page_in_chapter = info.get("pageInChapter")
+        if chapter is None or page_in_chapter is None:
+            continue
+        by_chapter.setdefault(int(chapter), []).append(int(page_in_chapter))
+    if not by_chapter:
+        return ""
+    parts = []
+    for chapter in sorted(by_chapter):
+        pages = sorted(by_chapter[chapter])
+        rendered = f"{pages[0]}~{pages[-1]}" if len(pages) > 1 else str(pages[0])
+        parts.append(f"第 {chapter} 话第 {rendered} 页")
+    if len(parts) == 1:
+        return f"（区间仅覆盖{parts[0]}）"
+    return f"（区间横跨 {'、'.join(parts)}，动作未必发生在起点页，须按内容判断在第几话）"
+
+
 def _location_label(
     number: Any,
     locations: Mapping[int, Mapping[str, Any]] | None,
@@ -2900,6 +2936,12 @@ def _answer_context(
                 if row.get("pageId")
                 else str(row.get("id", "全局资料"))
             )
+            # 事件候选的 pageId 只是区间起点；把区间按话拆开写出来，模型才不会把
+            # 「区间里某页发生的事」算成起点页所在那一话的事。
+            if row.get("type") == "event":
+                note = _span_chapter_note(row.get("pageNumbers") or [], locations)
+                if note:
+                    location = f"{location} {note}"
             parent = row.get("parentContext", [])
             parent_text = (
                 f"\n父级摘要：{_json(parent)}"
@@ -2918,6 +2960,8 @@ def _answer_context(
         sections.append(
             "[回答要求]\n"
             "- 引用证据时写明「第 X 话 第 Y 页」；资料只给出全书页码时，按「页话对应」换算后再回答。\n"
+            "- 标注「区间横跨多话」的资料是跨页摘要：它描述的动作可能发生在区间内任一页，"
+            "不要默认算在起点页所在那一话；同一件事有明确单页资料时以单页资料为准。\n"
             "- 资料中没有依据的内容必须回答「知识库中没有相关依据」，不得凭常识补全或猜测页码。"
         )
 

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import io
 import json
 from pathlib import Path
+import time
 import uuid
 from urllib.parse import unquote
 import zipfile
@@ -42,6 +43,7 @@ from src.backend_v2.storage.seeding import seed_system_records
 
 CHARACTER_ID = "character_hu_zhang_you_ren"
 ITEM_ID = "item_su_ku_na_finger"
+SECOND_CHARACTER_ID = "character_fu_hei_hui"
 
 
 def _alignment_payload() -> str:
@@ -73,6 +75,19 @@ def _alignment_payload() -> str:
                     "pages": [1],
                     "valid_chapters": [""],
                     "confidence": 0.8,
+                    "concept_types": [],
+                    "original_names": [],
+                },
+                {
+                    "entity_id": SECOND_CHARACTER_ID,
+                    "canonical_name": "伏黑惠",
+                    "category": "characters",
+                    "aliases": [],
+                    "alias_details": [],
+                    "total_frequency": 5,
+                    "pages": [1, 2],
+                    "valid_chapters": [""],
+                    "confidence": 0.9,
                     "concept_types": [],
                     "original_names": [],
                 },
@@ -162,7 +177,7 @@ def test_character_skills_list_only_character_entities(skill_platform) -> None:
 
     characters = service.characters(book_id=platform["book_id"])
 
-    assert [item["entityId"] for item in characters] == [CHARACTER_ID]
+    assert [item["entityId"] for item in characters] == [CHARACTER_ID, SECOND_CHARACTER_ID]
     only = characters[0]
     assert only["name"] == "虎杖悠仁"
     assert only["aliases"] == ["虎杖"]
@@ -402,7 +417,10 @@ def test_character_skill_list_hides_characters_below_the_page_threshold(skill_pl
     client = app.test_client()
     base = f"/api/v2/insight/books/{platform['book_id']}/character-skills"
 
-    assert [item["entityId"] for item in client.get(base).get_json()["characters"]] == [CHARACTER_ID]
+    assert [item["entityId"] for item in client.get(base).get_json()["characters"]] == [
+        CHARACTER_ID,
+        SECOND_CHARACTER_ID,
+    ]
     filtered = client.get(f"{base}?minPages=4")
     assert filtered.status_code == 200
     assert filtered.get_json()["characters"] == []
@@ -430,7 +448,10 @@ def test_character_skill_routes_expose_list_detail_and_status(skill_platform) ->
 
     listed = client.get(base)
     assert listed.status_code == 200
-    assert [item["entityId"] for item in listed.get_json()["characters"]] == [CHARACTER_ID]
+    assert [item["entityId"] for item in listed.get_json()["characters"]] == [
+        CHARACTER_ID,
+        SECOND_CHARACTER_ID,
+    ]
 
     status = client.get(f"{base}/{CHARACTER_ID}/status")
     assert status.status_code == 200
@@ -605,3 +626,195 @@ def test_skill_archive_filename_falls_back_and_sanitizes() -> None:
 
     with pytest.raises(InsightNotFound):
         build_skill_archive({"entityId": CHARACTER_ID, "files": {}})
+
+
+# ---- 批量蒸馏 ---------------------------------------------------------
+
+
+def _wait_batch(service, book_id: str, *, timeout: float = 15.0) -> dict:
+    """轮询批次状态直到离开 running/queued，避免依赖线程名。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = service.batch_status(book_id=book_id)
+        if status.get("status") not in ("running", "queued"):
+            return status
+        time.sleep(0.02)
+    raise AssertionError(f"batch did not finish in {timeout}s: {service.batch_status(book_id=book_id)}")
+
+
+def _stub_configs(service) -> None:
+    """夹具没有供应商凭据；批量编排逻辑与凭据无关，直接打桩。"""
+    service._runtime_configs = lambda book_id: (object(), object())  # type: ignore[assignment]
+
+
+def _install_fake_run(service, *, failing: set[str] | None = None, seen: list[str] | None = None):
+    """把单角色执行体换成打桩版本：只记录顺序，不联网、不写产物。"""
+    boom = set(failing or ())
+
+    def fake_run(key, book_id, entity_id, limit, vlm_config, chat_config, kind) -> None:
+        if seen is not None:
+            seen.append(entity_id)
+        if entity_id in boom:
+            service._tasks[key] = {
+                "bookId": book_id,
+                "entityId": entity_id,
+                "kind": kind,
+                "status": "failed",
+                "stage": "failed",
+                "done": 0,
+                "total": 0,
+                "error": "boom",
+            }
+            return
+        service._tasks[key] = {
+            "bookId": book_id,
+            "entityId": entity_id,
+            "kind": kind,
+            "status": "ready",
+            "stage": "done",
+            "done": 1,
+            "total": 1,
+            "revision": 1,
+        }
+
+    service._run = fake_run  # type: ignore[assignment]
+
+
+def test_batch_runs_characters_one_by_one_in_the_given_order(skill_platform) -> None:
+    platform = skill_platform
+    service = CharacterSkillService(platform["engine"], platform["data_root"])
+    _stub_configs(service)
+    seen: list[str] = []
+    _install_fake_run(service, seen=seen)
+
+    started = service.start_batch(
+        book_id=platform["book_id"],
+        entity_ids=[SECOND_CHARACTER_ID, CHARACTER_ID],
+    )
+
+    # 打桩执行体是瞬时的，start_batch 返回时批次可能已经跑完；只断言入参形状。
+    assert started["total"] == 2
+    assert started["entityIds"] == [SECOND_CHARACTER_ID, CHARACTER_ID]
+
+    # 串行且保持传入顺序：不能并发，也不能重排。
+    final = _wait_batch(service, platform["book_id"])
+    assert seen == [SECOND_CHARACTER_ID, CHARACTER_ID]
+    assert final["status"] == "completed"
+    assert final["done"] == 2
+    assert final["succeeded"] == 2
+    assert final["failed"] == 0
+    assert final["currentEntityId"] is None
+
+
+def test_batch_keeps_going_after_one_character_fails(skill_platform) -> None:
+    platform = skill_platform
+    service = CharacterSkillService(platform["engine"], platform["data_root"])
+    _stub_configs(service)
+    seen: list[str] = []
+    _install_fake_run(service, failing={CHARACTER_ID}, seen=seen)
+
+    service.start_batch(
+        book_id=platform["book_id"],
+        entity_ids=[CHARACTER_ID, SECOND_CHARACTER_ID],
+    )
+    final = _wait_batch(service, platform["book_id"])
+
+    assert final["status"] == "completed"
+    assert final["succeeded"] == 1
+    assert final["failed"] == 1
+    assert final["failures"][0]["entityId"] == CHARACTER_ID
+    # 失败不能中断后续角色
+    assert seen == [CHARACTER_ID, SECOND_CHARACTER_ID]
+
+
+def test_batch_status_is_idle_before_any_batch(skill_platform) -> None:
+    platform = skill_platform
+    service = CharacterSkillService(platform["engine"], platform["data_root"])
+
+    status = service.batch_status(book_id=platform["book_id"])
+
+    assert status["status"] == "idle"
+    assert status["total"] == 0
+
+
+def test_batch_rejects_empty_and_unknown_entities(skill_platform) -> None:
+    platform = skill_platform
+    service = CharacterSkillService(platform["engine"], platform["data_root"])
+    _stub_configs(service)
+
+    with pytest.raises(ValueError):
+        service.start_batch(book_id=platform["book_id"], entity_ids=[])
+    with pytest.raises(InsightNotFound):
+        service.start_batch(
+            book_id=platform["book_id"], entity_ids=["character_not_here"]
+        )
+
+
+def test_batch_stop_finishes_after_the_current_character(skill_platform) -> None:
+    platform = skill_platform
+    service = CharacterSkillService(platform["engine"], platform["data_root"])
+    _stub_configs(service)
+    seen: list[str] = []
+
+    def fake_run(key, book_id, entity_id, limit, vlm_config, chat_config, kind) -> None:
+        seen.append(entity_id)
+        # 跑第一个角色时请求停止：当前角色跑完，下一个角色不再开始。
+        service.stop_batch(book_id=book_id)
+        service._tasks[key] = {
+            "bookId": book_id,
+            "entityId": entity_id,
+            "kind": kind,
+            "status": "ready",
+            "stage": "done",
+            "done": 1,
+            "total": 1,
+        }
+
+    service._run = fake_run  # type: ignore[assignment]
+    service.start_batch(
+        book_id=platform["book_id"],
+        entity_ids=[CHARACTER_ID, SECOND_CHARACTER_ID],
+    )
+    final = _wait_batch(service, platform["book_id"])
+
+    assert seen == [CHARACTER_ID]
+    assert final["status"] == "stopped"
+    assert final["done"] == 1
+
+
+def test_batch_routes_accept_ids_and_report_status(skill_platform) -> None:
+    platform = skill_platform
+    app = Flask("character-skill-batch-test")
+    app.register_blueprint(
+        create_insight_blueprint(
+            engine=platform["engine"],
+            data_root=platform["data_root"],
+            profile=resolve_runtime_profile("local"),
+        )
+    )
+    client = app.test_client()
+    base = f"/api/v2/insight/books/{platform['book_id']}/character-skills/batch"
+
+    without_key = client.post(base, json={"entityIds": [CHARACTER_ID]})
+    assert without_key.status_code == 422
+
+    blank = client.post(
+        base,
+        headers={"Idempotency-Key": str(uuid.uuid4())},
+        json={"entityIds": []},
+    )
+    assert blank.status_code == 422
+
+    unknown = client.post(
+        base,
+        headers={"Idempotency-Key": str(uuid.uuid4())},
+        json={"entityIds": ["character_not_here"]},
+    )
+    assert unknown.status_code == 404
+
+    status = client.get(base)
+    assert status.status_code == 200
+    assert status.get_json()["status"] == "idle"
+
+    # 成功启动路径在服务层用例覆盖：路由测试的夹具没有供应商凭据，
+    # 走到 _runtime_configs 会被 422 拦下（与单角色路由行为一致）。

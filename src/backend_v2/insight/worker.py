@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import Mapping, Sequence
 import hashlib
 import json
+import os
+import re
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -36,6 +37,55 @@ from src.shared.user_logging import json_details, log_result, user_log
 LOGGER = logging.getLogger("saber.worker.insight_analysis")
 
 
+def _mentions_page(text: str, page_number: int) -> bool:
+    """Whether ``text`` names ``page_number`` as a page reference.
+
+    只认「第 N 页」「N 页」「P.N」这类明确的页码写法，避免把「第 2 话第 3 页」
+    里的 2（话序）误判成页码 2。
+    """
+
+    if not text or page_number < 1:
+        return False
+    number = re.escape(str(page_number))
+    patterns = (
+        rf"第\s*{number}\s*页",
+        rf"(?<![\d话話第]){number}\s*页",
+        rf"[Pp]\.?\s*{number}(?![\d])",
+    )
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
+def _chapter_spans(
+    pending_targets: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the per-chapter runs covered by a batch, in page order.
+
+    一个新批次可以跨过章节边界（页分析按页数窗口切批，与章节无关）。模型看不到
+    边界时会把「第 1 话末尾 + 第 2 话开头」的情节写成一条事件，``pageNumbers``
+    横跨两话，检索层只能把它截断到起始章，于是「第 2 话发生了什么」永远答不出来
+    （审计报告 v0.3.x「已知局限」与 v0.4.0 A1）。
+
+    这里只做分组，不改动批次本身：给出每段连续同章页面的话序、话名与页范围，
+    供提示词声明边界、供校验层拒绝跨越边界的 key_events。
+    """
+
+    spans: list[dict[str, Any]] = []
+    for target in pending_targets:
+        chapter_id = target.get("chapter_id")
+        chapter_id = str(chapter_id) if chapter_id else None
+        page_number = int(target["page_number_snapshot"])
+        if spans and spans[-1]["chapterId"] == chapter_id:
+            spans[-1]["pageNumbers"].append(page_number)
+            continue
+        spans.append(
+            {
+                "chapterId": chapter_id,
+                "pageNumbers": [page_number],
+            }
+        )
+    return spans
+
+
 class InsightAlgorithms(Protocol):
     def analyze_batch(
         self,
@@ -44,6 +94,7 @@ class InsightAlgorithms(Protocol):
         page_numbers: Sequence[int],
         previous_batches: Sequence[Sequence[Mapping[str, Any]]],
         config: Mapping[str, Any],
+        chapter_spans: Sequence[Mapping[str, Any]] = (),
     ) -> Mapping[str, Any]: ...
 
 
@@ -57,6 +108,7 @@ class ProviderInsightAlgorithms:
         page_numbers: Sequence[int],
         previous_batches: Sequence[Sequence[Mapping[str, Any]]],
         config: Mapping[str, Any],
+        chapter_spans: Sequence[Mapping[str, Any]] = (),
     ) -> Mapping[str, Any]:
         from src.core.manga_insight.vlm_client import VLMClient
         from src.shared.memory_errors import is_memory_allocation_error
@@ -124,10 +176,44 @@ class ProviderInsightAlgorithms:
             forbidden = "scene、mood、panels、dialogues、speaker_name、original_text、translated_text、characters 或 character_mentions"
             extraction_rules = f"{common_guidelines}\n"
 
+        def build_chapter_section(pages: Sequence[int]) -> str:
+            """Declare chapter boundaries so events never span two chapters.
+
+            只在批次确实跨话时才追加，单话批次保持提示词原样（不引入无谓的
+            变动，也不必为它付出额外 token）。
+            """
+
+            if len(chapter_spans) <= 1:
+                return ""
+            boundaries = [
+                list(span.get("pageNumbers") or []) for span in chapter_spans
+            ]
+            boundaries = [span for span in boundaries if span]
+            if len(boundaries) <= 1:
+                return ""
+            lines = [
+                f"- 第 {index + 1} 段：第 {span[0]}-{span[-1]} 页"
+                for index, span in enumerate(boundaries)
+            ]
+            return (
+                "\n\n【本批跨话说明（强制）】\n"
+                f"本批 {len(pages)} 页跨越了 {len(boundaries)} 个章节，按页序分段为：\n"
+                + "\n".join(lines)
+                + "\n严格规则：\n"
+                "  1. 上述每一段都是**独立的一话**，分属不同章节，不是同一话的延续。\n"
+                "  2. key_events 的 summary 只能描述**单个段内**发生的事，"
+                "**严禁**把两段的情节合并成一条事件。\n"
+                "  3. 同一事件在不同段各有推进时，必须拆成多条事件，"
+                "分别挂在各自所在的页上。\n"
+                "  4. page_summary 同理：每页只写本页所属那一段的情节，"
+                "不要引用另一段的内容作为本页正在发生的事。\n"
+            )
+
         def build_prompt(pages: Sequence[int]) -> str:
             prompt = base_prompt.replace("{page_count}", str(len(pages)))
             prompt = prompt.replace("{start_page}", str(pages[0]))
             prompt = prompt.replace("{end_page}", str(pages[-1]))
+            prompt += build_chapter_section(pages)
             if previous_context:
                 prompt += (
                     f"\n\n【前文概要（前{len(previous_batches)}批内容）】\n"
@@ -160,6 +246,42 @@ class ProviderInsightAlgorithms:
 
         client = VLMClient(vlm_config)
 
+        def cross_chapter_event_pages(
+            pages: Sequence[Mapping[str, Any]],
+        ) -> list[int]:
+            """Return page numbers whose key_events name a page of another chapter.
+
+            模型偶尔无视提示词里的边界声明，仍写出「第 1 话末尾 + 第 2 话开头」
+            合一的 summary。这类事件的确定特征是在 summary 里同时引用本段之外
+            的页码；检出后按页重试一次，把整段事件约束在本话内。只拦这一种情况，
+            不做通用的整批重试，避免放大单页失败。
+            """
+
+            if len(chapter_spans) <= 1:
+                return []
+            chapter_of: dict[int, str | None] = {}
+            for span in chapter_spans:
+                for value in span.get("pageNumbers") or []:
+                    chapter_of[int(value)] = span.get("chapterId")
+            if len(set(chapter_of.values())) <= 1:
+                return []
+            offenders: list[int] = []
+            for page in pages:
+                number = int(page.get("page_number") or 0)
+                own = chapter_of.get(number)
+                for event in page.get("key_events") or []:
+                    summary = str(event.get("summary") or "")
+                    for other, other_chapter in chapter_of.items():
+                        if other == number or other_chapter == own:
+                            continue
+                        if _mentions_page(summary, other):
+                            offenders.append(number)
+                            break
+                    else:
+                        continue
+                    break
+            return offenders
+
         async def run_chunk(
             chunk_pages: Sequence[int],
             chunk_images: Sequence[bytes],
@@ -183,7 +305,14 @@ class ProviderInsightAlgorithms:
                 missing = [number for number in chunk_pages if number not in valid_pages]
                 if missing:
                     raise ValueError(f"页面 {missing} 尚无有效结果；" + "; ".join(errors))
-                return {"pages": [valid_pages[number] for number in chunk_pages]}
+                pages = [valid_pages[number] for number in chunk_pages]
+                offenders = cross_chapter_event_pages(pages)
+                if offenders:
+                    raise ValueError(
+                        f"页面 {offenders} 的关键事件引用了本话之外的页码，"
+                        "事件必须只描述本话内容"
+                    )
+                return {"pages": pages}
 
             try:
                 return await client.analyze_batch(
@@ -434,6 +563,7 @@ class InsightAnalysisWorkerService:
                 page_numbers=page_numbers,
                 previous_batches=previous_batches,
                 config=algorithm_config,
+                chapter_spans=_chapter_spans(pending_targets),
             )
             raw_pages = raw.get("pages") if isinstance(raw, Mapping) else None
             if not isinstance(raw_pages, list):
