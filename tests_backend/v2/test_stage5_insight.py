@@ -47,6 +47,12 @@ from src.backend_v2.insight.page_schema import (
 from src.backend_v2.insight.qa import (
     DEFAULT_QA_TOP_K,
     PAGE_CANDIDATE_BATCH,
+    CHAPTER_FILL_SCORE,
+    chapter_page_candidates,
+    _citation_excerpt,
+    _record_excerpt,
+    _span_within_start_chapter,
+    chapters_in_question,
     EVENT_CANDIDATE_BATCH,
     ENTITY_EVIDENCE_PAGES_PER_ENTITY,
     ENTITY_EVIDENCE_SCORE,
@@ -7052,13 +7058,14 @@ def test_qa_event_citations_expand_to_every_page_in_the_span() -> None:
     ]
     citations = citations_for(candidates, engine=None, page_lookup=lookup)
     assert [row["globalPageNumber"] for row in citations] == [51, 52, 53, 54, 55]
-    assert [row["source"] for row in citations] == ["page", "event", "event", "event", "event"]
+    # 事件派生的引用一律标 event：区间起点页未必是事件实际发生的页。
+    assert [row["source"] for row in citations] == ["event", "event", "event", "event", "event"]
     # 展开出来的引用必须带上真实章内位置，前端才能跳到那一页。
     assert [row["pageInChapter"] for row in citations] == [1, 2, 3, 4, 5]
     assert {row["chapterOrdinal"] for row in citations} == {2}
     # 不给 page_lookup 时保持旧行为（单条引用），保证向后兼容。
     legacy = citations_for(candidates, engine=None)
-    assert [(row["pageId"], row["source"]) for row in legacy] == [("page-51", "page")]
+    assert [(row["pageId"], row["source"]) for row in legacy] == [("page-51", "event")]
 
 
 def test_qa_event_span_parsing_rejects_broken_metadata() -> None:
@@ -7110,8 +7117,8 @@ def test_qa_page_candidates_keep_their_source_when_an_event_also_covers_them() -
         by_page.setdefault(row["globalPageNumber"], []).append(row["source"])
     # 第 2 页有真正的页面候选，不能被事件展开抢走身份（这是本用例的核心回归）。
     assert by_page[2] == ["page"], "页面候选不能被事件展开抢走身份"
-    # 事件自身挂的起点页仍是真实起点页，算 page；只有区间中段标 event。
-    assert by_page[1] == ["page"]
+    # 事件自身挂的起点页也标 event：该页未必是事件实际发生的页。
+    assert by_page[1] == ["event"]
     assert by_page[3] == ["event"]
     assert len(citations) == 3, "每页只应有一条引用"
 
@@ -7143,6 +7150,122 @@ def test_page_vector_document_carries_entities_and_events() -> None:
     # 缺少结构化字段时退化为纯摘要，不抛错。
     assert build_page_vector_document({"page_summary": "只有摘要"}, "只有摘要") == "只有摘要"
     assert build_page_vector_document({"characters": "not-a-list"}, "兜底") == "兜底"
+
+
+def test_page_citations_prefer_the_stored_summary_over_the_enriched_document() -> None:
+    """引用必须引用本页真正写的内容，不能用拼过事件摘要的召回文档。
+
+    实测回归：第 1 话第 51 页画的是宿傩在天台狂叫，但向量文档拼进了第 2 话那条
+    「五条悟突然现身天台」的事件摘要；模型读到该摘要，把五条悟的登场话答成第 1
+    话。索引里单独存档 page_summary 后，引用恢复成页面原文。
+    """
+    assert _record_excerpt("角色：宿傩\n事件：五条悟突然现身天台", {"page_summary": "宿傩俯瞰城镇灯火"}) == "宿傩俯瞰城镇灯火"
+    # 旧代次索引没有 page_summary 时退回原 document，不炸。
+    assert _record_excerpt("角色：宿傩", {}) == "角色：宿傩"
+    assert _record_excerpt("角色：宿傩", {"page_summary": "   "}) == "角色：宿傩"
+    # 打分用召回文档，展示用 excerpt；两者互不干扰。
+    row = {"document": "角色：宿傩\n事件：五条悟突然现身天台", "excerpt": "宿傩俯瞰城镇灯火"}
+    assert _citation_excerpt(row, {}) == "宿傩俯瞰城镇灯火"
+    assert _citation_excerpt({"document": "角色：宿傩"}, {"page_summary": "宿傩狂叫"}) == "宿傩狂叫"
+    assert _citation_excerpt({"document": "角色：宿傩"}, {}) == "角色：宿傩"
+
+
+def test_event_span_citations_declare_themselves_as_span_summaries() -> None:
+    """区间展开出来的页必须自报「跨页区间摘要」，不能伪装成本页原文。
+
+    实测回归：事件「五条悟突然现身天台」区间是 [51..55]，展开后第 1 话第 51~53
+    页都被挂上这句文案；模型据此把「五条悟第一次登场」答成第 1 话第 51 页，而那
+    一页实际画的是宿傩在天台狂叫。加前缀后模型能看出这不是本页内容。
+    """
+    locations = {
+        number: {"pageId": f"page-{number}", "pageNumber": number, "pageInChapter": number, "chapterOrdinal": 1}
+        for number in (51, 52, 53)
+    }
+    candidates = [
+        {
+            "id": "event-start",
+            "type": "event",
+            "pageId": "page-51",
+            "pageNumber": 51,
+            "document": "五条悟突然现身天台",
+            "hybridScore": 0.9,
+            "pageNumbers": [51, 52, 53],
+        }
+    ]
+    citations = citations_for(candidates, engine=None, page_lookup=locations)
+    by_page = {row["globalPageNumber"]: row for row in citations}
+    # 起点页保持原文，不加前缀。
+    assert by_page[51]["excerpt"] == "五条悟突然现身天台"
+    # 区间中段自报家门。
+    for number in (52, 53):
+        excerpt = by_page[number]["excerpt"]
+        assert "跨页区间摘要" in excerpt, excerpt
+        assert excerpt.endswith("五条悟突然现身天台")
+
+
+def test_event_spans_never_expand_across_a_chapter_boundary() -> None:
+    # 事件区间按页数窗口切分，会跨过章节边界：实测「五条悟突然现身天台」的区间是
+    # [51..55]，而第 1 话到第 53 页结束。原样展开会把第 1 话第 51 页（宿傩在天台
+    # 狂叫）标成「五条悟现身」，模型于是答错章节。
+    locations = {
+        number: {"pageId": f"p{number}", "chapterOrdinal": 1 if number <= 53 else 2}
+        for number in range(45, 80)
+    }
+    crossed = {"pageNumber": 51, "pageNumbers": [51, 52, 53, 54, 55]}
+    assert _span_within_start_chapter(crossed, locations) == [51, 52, 53]
+    inside = {"pageNumber": 56, "pageNumbers": [56, 57, 58, 59, 60]}
+    assert _span_within_start_chapter(inside, locations) == [56, 57, 58, 59, 60]
+    # 缺区间时退回起点单页；起点查不到章节身份时不乱展开。
+    assert _span_within_start_chapter({"pageNumber": 51, "pageNumbers": []}, locations) == []
+    # 拿不到章节身份（旧调用方只传页码）时退回完整区间，不凭空丢区间中段。
+    no_chapter = {number: {"pageId": f"p{number}"} for number in (1, 2, 3)}
+    assert _span_within_start_chapter({"pageNumber": 1, "pageNumbers": [1, 2, 3]}, no_chapter) == [1, 2, 3]
+    # 区间里的页在 page_lookup 里查不到时一律丢弃。
+    assert _span_within_start_chapter({"pageNumber": 999, "pageNumbers": [999]}, locations) == []
+
+
+def test_chapter_ordinals_are_recognised_only_from_explicit_phrasing() -> None:
+    # 只认「第 N 话」；「第 46 页」「第几话」都不能被当成章节，否则整章覆盖会
+    # 把无关章节的页面灌进候选。
+    assert chapters_in_question("第2话主要发生了什么？") == [2]
+    assert chapters_in_question("第 15 話的剧情") == [15]
+    assert chapters_in_question("第二十三话") == [23]
+    assert chapters_in_question("第46页发生了什么") == []
+    assert chapters_in_question("伏黑惠第一次出场是在第几话？") == []
+    assert chapters_in_question("") == []
+
+
+def test_chapter_page_candidates_sample_the_whole_chapter_evenly() -> None:
+    # 章节级提问（「第 2 话主要发生了什么」）在向量检索里只命中扉页，模型因此
+    # 只能回答资料不足。整章覆盖必须按章边界等距取样，而不是取开头那几页。
+    snapshot = [
+        {"pageId": f"p{number}", "pageNumber": number, "analysis": {"page_summary": f"第{number}页"}}
+        for number in range(1, 31)
+    ]
+    locations = {
+        number: {
+            "pageId": f"p{number}",
+            "pageNumber": number,
+            "chapterOrdinal": 1 if number <= 10 else (2 if number <= 20 else 3),
+        }
+        for number in range(1, 31)
+    }
+    picked = chapter_page_candidates(
+        "第2话主要发生了什么？",
+        snapshot_pages=snapshot,
+        locations=locations,
+        limit_per_chapter=4,
+    )
+    numbers = [item["pageNumber"] for item in picked]
+    assert len(numbers) == 4
+    # 必须全部落在第 2 话（11..20）内。
+    assert all(11 <= number <= 20 for number in numbers)
+    # 等距取样：不能全挤在开头。
+    assert numbers[0] < numbers[-1]
+    assert numbers[-1] > 15
+    assert {item["hybridScore"] for item in picked} == {CHAPTER_FILL_SCORE}
+    # 没点名章节就不补任何东西。
+    assert chapter_page_candidates("虎杖是谁？", snapshot_pages=snapshot, locations=locations) == []
 
 
 def test_qa_page_candidates_survive_high_scoring_events(

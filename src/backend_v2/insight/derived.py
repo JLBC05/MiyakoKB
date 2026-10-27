@@ -6336,6 +6336,10 @@ class InsightDerivedWorkerService:
                         "page_id": page_id,
                         "page_number": page_number,
                         "type": "page",
+                        # 引用必须引用本页真正写的内容。document 为了召回率拼进了
+                        # 角色/地点/事件，其中事件摘要描述的是「区间里某个动作」，
+                        # 未必发生在本页；把原始摘要单独带出来，引用时用它。
+                        "page_summary": summary,
                     },
                 }
             )

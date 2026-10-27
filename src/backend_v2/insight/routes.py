@@ -68,6 +68,7 @@ from src.backend_v2.insight.qa import (
     QAApiAlgorithms,
     QAConflict,
     TransientRequestRepository,
+    chapter_page_candidates,
     citations_for,
     entity_page_candidates,
     page_locations,
@@ -654,6 +655,13 @@ def create_insight_blueprint(
                     snapshot_pages=snapshot_pages,
                     locations=locations,
                 )
+                # 问题点名某一话时，该话的其余页面往往不在向量召回里（章节级提问
+                # 只命中扉页），这里按章节边界补一批代表页。
+                chapter_candidates = chapter_page_candidates(
+                    handle.question,
+                    snapshot_pages=snapshot_pages,
+                    locations=locations,
+                )
 
                 global_candidates: list[dict[str, Any]] = []
                 rankable: list[dict[str, Any]] = []
@@ -705,11 +713,32 @@ def create_insight_blueprint(
                 evidence_page_ids = {
                     value.get("pageId") for value in evidence
                 }
-                candidates = global_candidates + ranked + evidence
+                # 整章覆盖页不是「实体出场」证据，但在没有更相关命中时它提供了本章
+                # 正文，因此排在实体证据之前、并只补尚未出现的页。
+                chapter_fill = [
+                    value
+                    for value in chapter_candidates
+                    if value.get("pageId") not in selected_page_ids
+                    and value.get("pageId") not in evidence_page_ids
+                ]
+                chapter_fill_page_ids = {
+                    value.get("pageId") for value in chapter_fill
+                }
+                # 点名章节的正文要排在向量命中之前：问「第 2 话发生了什么」时，
+                # 向量命中的是别的话里措辞相近的页面，本章页面反而排在它们后面，
+                # 模型的引用列表就变成了别的话。本章正文优先，其余命中跟随。
+                candidates = (
+                    global_candidates
+                    + chapter_fill
+                    + ranked
+                    + evidence
+                )
                 citations = citations_for(candidates, engine=engine, page_lookup=locations)
                 for citation in citations:
                     if citation.get("pageId") in evidence_page_ids:
                         citation["source"] = "entity"
+                    elif citation.get("pageId") in chapter_fill_page_ids:
+                        citation["source"] = "chapter"
 
                 yield _qa_sse(
                     "context",

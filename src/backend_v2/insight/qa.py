@@ -201,6 +201,29 @@ DEFAULT_QA_TOP_K = 10
 ENTITY_EVIDENCE_PAGES_PER_ENTITY = 4
 # 实体出场页的证据分。它不是与问题相关性的度量，给满分（1.0）会压过真正的向量命中。
 ENTITY_EVIDENCE_SCORE = 0.35
+# 「整章覆盖」候选：问题里点名了某一话时，把该话的代表页成批补进候选窗口。
+# 向量检索对「第 2 话主要发生了什么」这类章节级提问无能为力——实测 25 页的第 2 话
+# 只召回 1 页（卷头彩页那一页），模型因此只能回答「资料不足以概括第 2 话」。
+CHAPTER_FILL_PAGES_PER_CHAPTER = 6
+# 章内代表页的证据分：低于真实向量命中，高于实体出场页（它确实是本章正文，
+# 只是不确定与问题最相关）。
+CHAPTER_FILL_SCORE = 0.45
+# 从问题里认出「第 N 话」的三种写法：阿拉伯数字、全角数字、中文数字。
+_CHAPTER_ORDINAL_PATTERN = re.compile(
+    r"第\s*([0-9０-９]{1,4}|[零一二三四五六七八九十百]{1,6})\s*[话話]"
+)
+_CN_DIGITS = {
+    "零": 0,
+    "一": 1,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
 # 全局资料不可用的两种原因必须区分：没有做过全局分析，与做过了但已随重新分析过期。
 _GLOBAL_CONTEXT_MISSING = "missing"
 _GLOBAL_CONTEXT_STALE = "stale"
@@ -306,12 +329,92 @@ def _event_page_numbers(metadata: Mapping[str, Any]) -> list[int]:
     return numbers
 
 
+def _record_excerpt(document: str, metadata: Mapping[str, Any]) -> str:
+    """取引用里展示的正文。
+
+    页面向量文档为了召回率会拼上角色、地点与关键事件（见
+    :func:`derived.build_page_vector_document`），但事件摘要描述的是「区间里某个
+    动作」，未必发生在该页。实测第 1 话第 51 页画的是宿傩在天台狂叫，却被拼进了
+    第 2 话那条「五条悟突然现身天台」的事件摘要，模型据此把五条悟的登场话答成
+    第 1 话。因此引用优先使用索引里单独存档的 ``page_summary``。
+    """
+    stored = metadata.get("page_summary")
+    if isinstance(stored, str) and stored.strip():
+        return stored
+    return document
+
+
+def _citation_excerpt(row: Mapping[str, Any], meta: Mapping[str, Any]) -> str:
+    """引用里展示的正文：优先索引里单独存档的原始摘要。
+
+    页面向量文档为了召回率会拼上角色、地点与关键事件，事件摘要描述的是「区间里
+    某个动作」，未必发生在该页（实测第 1 话第 51 页画的是宿傩在天台狂叫，却被拼进
+    了第 2 话「五条悟突然现身天台」的摘要）。打分仍用召回文档，展示只用摘要。
+    """
+    excerpt = row.get("excerpt")
+    if isinstance(excerpt, str) and excerpt.strip():
+        return excerpt
+    stored = meta.get("page_summary")
+    if isinstance(stored, str) and stored.strip():
+        return stored
+    return row["document"]
+
+
+def _event_span_excerpt(document: str, start: int | None, number: int) -> str:
+    """区间展开出来的页必须自报家门，不能伪装成该页原文。
+
+    事件文案描述的是「区间里某个动作」，起点之后的页未必发生同一件事。实测第 1 话
+    第 51~53 页是宿傩在天台狂叫，而事件「五条悟突然现身天台」的文案却挂到了这
+    几页上；模型于是把第 1 话当成五条悟的登场话。加前缀后模型能看出这是跨页区间
+    摘要，而不是本页正文。
+    """
+    if not isinstance(start, int) or isinstance(start, bool) or start == number:
+        return document
+    return f"（跨页区间摘要，覆盖全书第 {start}~{max(start, number)} 页，非本页原文）{document}"
+
+
+def _span_within_start_chapter(
+    row: Mapping[str, Any],
+    page_lookup: Mapping[int, Mapping[str, Any]],
+) -> list[int]:
+    """把事件区间裁到它起点所在的那一话内。
+
+    事件区间是按页数窗口切出来的，会跨过章节边界：实测「五条悟突然现身天台」
+    这条事件的区间是 [51..55]，而第 1 话到第 53 页结束——51~53 页其实是宿傩在
+    天台狂叫，五条悟现身发生在第 2 话的 54~55 页。若按区间原样展开，第 1 话第
+    51 页会被标成「五条悟现身」，模型据此答「五条悟第一次登场是第 1 话第 51 页」。
+
+    因此只在起点所在章节内展开：事件文案描述的是起点之后不远处的动作，越章
+    展开等于给别的章节编造证据。
+    """
+    numbers = [n for n in row.get("pageNumbers") or [] if n in page_lookup]
+    if not numbers:
+        return []
+    start = row.get("pageNumber")
+    start_ordinal = None
+    if isinstance(start, int) and not isinstance(start, bool):
+        start_ordinal = (page_lookup.get(start) or {}).get("chapterOrdinal")
+    if start_ordinal is None:
+        start_ordinal = (page_lookup.get(numbers[0]) or {}).get("chapterOrdinal")
+    if start_ordinal is None:
+        # 拿不到章节身份（离线组装、旧调用方只传页码）时退回完整区间：
+        # 裁剪依赖章节索引，没有索引就保持原行为，不能凭空丢掉区间中段。
+        return numbers
+    return [
+        number
+        for number in numbers
+        if (page_lookup.get(number) or {}).get("chapterOrdinal") == start_ordinal
+    ] or [numbers[0]]
+
+
 def _candidate(value: object) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise QAConflict("QA candidate must be an object")
     candidate = dict(value)
     required = {"id", "type", "pageId", "pageNumber", "document", "hybridScore"}
-    allowed = required | {"parentContext", "rerankScore", "vectorScore", "pageNumbers"}
+    # excerpt 是引用里展示的正文，与用于打分的 document 分开：页面召回文档拼了
+    # 角色/地点/事件摘要，直接拿来当引用会引用到本页没写的内容。
+    allowed = required | {"parentContext", "rerankScore", "vectorScore", "pageNumbers", "excerpt"}
     if not required.issubset(candidate) or not set(candidate).issubset(allowed):
         raise QAConflict("QA candidate fields are invalid")
     if not isinstance(candidate["id"], str) or not candidate["id"]:
@@ -1422,7 +1525,10 @@ class InsightQAWorkerService:
                         # 这类跨页事件时会把它标成区间第一页而不是真正命中的那一页。
                         # 这里把区间原样带出来，交给 citations_for 展开。
                         "pageNumbers": _event_page_numbers(metadata),
+                        # document 保持索引里的召回文档（词法分也基于它计算）；
+                        # excerpt 才是引用里展示的正文，页面记录优先用存档的原始摘要。
                         "document": document,
+                        "excerpt": _record_excerpt(document, metadata),
                         "vectorScore": vector_score,
                         "hybridScore": hybrid_score,
                     }
@@ -2213,7 +2319,7 @@ def citations_for(
             row = _candidate(raw)
             if row["type"] != "event":
                 continue
-            spans = [n for n in row.get("pageNumbers") or [] if n in page_lookup]
+            spans = _span_within_start_chapter(row, page_lookup)
             if not spans:
                 continue
             event_spans[row["id"]] = spans
@@ -2325,13 +2431,22 @@ def citations_for(
                 "chapter_title": chapter_title,
                 "sourceUrl": source_url,
                 "source_url": source_url,
-                "source": "page",
-                "excerpt": row["document"],
+                # 事件候选的 pageId 指向区间起点，但事件文案描述的动作未必发生在
+                # 起点页：实测「五条悟突然现身天台」区间是 [51..55]，而第 1 话第
+                # 51 页画的是宿傩在天台狂叫。标成 page 会让模型把区间起点当成原文
+                # 出处，进而答错章节，所以事件派生的引用一律标 event。
+                "source": "event" if row["type"] == "event" else "page",
+                "excerpt": (
+                    _event_span_excerpt(row["document"], row.get("pageNumber"), global_page_number)
+                    if row["type"] == "event"
+                    else _citation_excerpt(row, page_metadata.get(page_id, {}))
+                ),
                 "score": row.get("rerankScore", row["hybridScore"]),
             }
         )
         # 事件候选覆盖多页：把区间里尚未引用的页补成独立引用，让「第几话第几页」
         # 指向事件真正发生的页，而不是区间起点那一页。
+        start_number = row.get("pageNumber")
         for number in event_spans.get(row["id"], ()):
             location = page_lookup.get(number) if page_lookup else None
             if not location:
@@ -2368,7 +2483,7 @@ def citations_for(
                     "sourceUrl": f"/api/v2/assets/{span_source_asset}" if span_source_asset else None,
                     "source_url": f"/api/v2/assets/{span_source_asset}" if span_source_asset else None,
                     "source": "event",
-                    "excerpt": row["document"],
+                    "excerpt": _event_span_excerpt(row["document"], start_number, number),
                     "score": row.get("rerankScore", row["hybridScore"]),
                 }
             )
@@ -2511,6 +2626,114 @@ def entity_page_candidates(
                     # 问题相关。给满分会让它压过真正命中问题的向量候选，因此降到
                     # 略低于典型向量命中的水平。
                     "hybridScore": ENTITY_EVIDENCE_SCORE,
+                }
+            )
+    return candidates
+
+
+def _chinese_ordinal(text: str) -> int | None:
+    """把「二」「十五」「二十三」这类中文数字转成整数；无法识别返回 None。"""
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    total = 0
+    current = 0
+    for char in text:
+        if char in _CN_DIGITS:
+            current = _CN_DIGITS[char]
+        elif char == "十":
+            total += (current or 1) * 10
+            current = 0
+        elif char == "百":
+            total += (current or 1) * 100
+            current = 0
+        else:
+            return None
+    return total + current
+
+
+def chapters_in_question(question: str) -> list[int]:
+    """列出问题里点名的章节序号（去重保序）。
+
+    只认「第 N 话/話」这种明确写法，避免把「第 3 页」误当成章节。
+    """
+    if not isinstance(question, str) or not question:
+        return []
+    found: list[int] = []
+    for match in _CHAPTER_ORDINAL_PATTERN.finditer(question):
+        value = _chinese_ordinal(match.group(1))
+        if value and value >= 1 and value not in found:
+            found.append(value)
+    return found
+
+
+def chapter_page_candidates(
+    question: str,
+    *,
+    snapshot_pages: Sequence[Mapping[str, Any]],
+    locations: Mapping[int, Mapping[str, Any]] | None = None,
+    limit_per_chapter: int = CHAPTER_FILL_PAGES_PER_CHAPTER,
+) -> list[dict[str, Any]]:
+    """问题点名某一话时，把该话的代表页成批补成候选。
+
+    向量检索是按页相关性排序的，对「第 2 话主要发生了什么」这种章节级提问，
+    命中的往往只有卷头彩页那一页，模型拿不到本章其余内容，只能回答「资料不足」。
+    这里按章节边界把该话均匀取样若干页补进候选窗口，让模型至少看到本章骨架。
+
+    取样用等距（而不是取前 N 页）：前 N 页会全部落在扉页与开头，仍然概括不了
+    整话发生了什么。
+    """
+    if not isinstance(locations, Mapping) or not locations:
+        return []
+    if limit_per_chapter < 1:
+        return []
+    ordinals = chapters_in_question(question)
+    if not ordinals:
+        return []
+    by_page_id: dict[str, Mapping[str, Any]] = {}
+    for item in snapshot_pages:
+        if not isinstance(item, Mapping):
+            continue
+        page_id = item.get("pageId")
+        if isinstance(page_id, str) and page_id:
+            by_page_id.setdefault(page_id, item)
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for ordinal in ordinals:
+        chapter_pages = [
+            (number, info)
+            for number, info in locations.items()
+            if isinstance(info, Mapping) and info.get("chapterOrdinal") == ordinal
+        ]
+        if not chapter_pages:
+            continue
+        chapter_pages.sort(key=lambda item: item[0])
+        total = len(chapter_pages)
+        take = min(limit_per_chapter, total)
+        # 等距取样：把本章按页序切成 take 段，取每段的第一页。
+        step = total / take
+        picked = [chapter_pages[int(index * step)] for index in range(take)]
+        for number, info in picked:
+            page_id = info.get("pageId")
+            if not isinstance(page_id, str) or not page_id or page_id in seen:
+                continue
+            item = by_page_id.get(page_id)
+            if item is None:
+                continue
+            analysis = item.get("analysis")
+            if not isinstance(analysis, Mapping):
+                analysis = {}
+            seen.add(page_id)
+            candidates.append(
+                {
+                    "id": f"chapter_page_{page_id}",
+                    "type": "page",
+                    "pageId": page_id,
+                    "pageNumber": number,
+                    "document": _page_document(number, analysis),
+                    "hybridScore": CHAPTER_FILL_SCORE,
                 }
             )
     return candidates
