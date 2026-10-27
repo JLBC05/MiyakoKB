@@ -148,7 +148,12 @@ def _match_venera_directory(paths: list[Path]) -> tuple[Path, str] | None:
 
     if not paths or not all(item.is_dir() for item in paths):
         return None
-    base_dir = default_venera_base_dir()
+    # Venera 是 Windows 桌面客户端，只有 Windows 才有 APPDATA；在没有它的机器上
+    # 「这个目录是不是 Venera 的」无从判断，安静退回本地口径即可，不能把导入本身搞失败。
+    try:
+        base_dir = default_venera_base_dir()
+    except OSError:
+        return None
     if not base_dir.is_dir():
         return None
     local_root = base_dir / "local"

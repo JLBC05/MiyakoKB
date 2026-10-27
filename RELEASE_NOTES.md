@@ -1,5 +1,15 @@
 # 发布说明
 
+## v0.3.4
+
+修一个只在非 Windows 环境暴露的导入缺陷：**本地区目录导入的完整性核对会把整条导入结果降级成 `ok=null`**。
+
+`default_venera_base_dir()` 依赖 Windows 的 `APPDATA`，没有该变量时抛 `FileNotFoundError`。本地导入在判断「这个目录是不是 Venera 的漫画目录」时会调用它，异常被完整性核对的兜底捕获，于是报告里只剩 `{"ok": null, "error": "FileNotFoundError: APPDATA environment variable not found"}`。
+
+修复：`_match_venera_directory()` 把取默认目录的调用收进 `try/except OSError`，拿不到就安静退回本地目录口径。Venera 是 Windows 桌面客户端，在没有 `APPDATA` 的机器上本来也读不到它的库，退回是正确行为而不是掩盖错误。
+
+v0.3.3 的引用修复不受影响。
+
 ## v0.3.3
 
 本版只做一件事：**引用里显示的文字，必须是那一页真正写的内容**。
