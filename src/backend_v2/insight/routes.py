@@ -706,7 +706,7 @@ def create_insight_blueprint(
                     value.get("pageId") for value in evidence
                 }
                 candidates = global_candidates + ranked + evidence
-                citations = citations_for(candidates, engine=engine)
+                citations = citations_for(candidates, engine=engine, page_lookup=locations)
                 for citation in citations:
                     if citation.get("pageId") in evidence_page_ids:
                         citation["source"] = "entity"

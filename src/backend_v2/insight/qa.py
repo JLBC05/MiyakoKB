@@ -181,11 +181,16 @@ DEFAULT_QA_MODE = "generic"
 QA_MODES = frozenset({"generic", "exact", "global"})
 # 通用模式为全库材料预留的候选条数（在页面候选配额之外）。
 GENERIC_GLOBAL_CANDIDATE_LIMIT = 2
-# 页面候选与事件候选按排名交错合并时，每个来源在两个来源之间各取几条。
+# 页面候选与事件候选交错合并时的配额，按「一轮里各取几条」表示。
 # 审计实测：事件候选的 hybridScore 系统性偏高（前 17 名里有 17 条 event、只有 3 条 page），
 # 纯按分数截断 topK 会让答案所需的页面根本进不了上下文，模型只能凭实体知识库作答而
-# 放弃引用页面。交错后两种证据各有保底名额。
-PAGE_CANDIDATE_INTERLEAVE_BATCH = 2
+# 放弃引用页面。
+# 页面是「原文出处」，事件是「二次加工后的概述」：模型回答「第几话第几页」只能靠页面
+# 候选，事件的页码是它所属页面的元数据、不是证据本体。因此在同样候选宽度下页面必须
+# 占多数。实测「五条悟第一次正式登场」的目标页在 60 条候选里排第 36——两两交错只能
+# 让它在窗口里拿到 6/10 名中的第 6 位，页面优先（4:1）才排得进前 10。
+PAGE_CANDIDATE_BATCH = 4
+EVENT_CANDIDATE_BATCH = 1
 # 默认页面证据宽度（topK）。5 太窄：实测「虎杖悠仁第一次吃下宿傩手指」的正确页
 # （第 1 话第 46 页）在向量检索里排第 8，会整页进不了候选，模型只能答「资料不足」。
 DEFAULT_QA_TOP_K = 10
@@ -277,12 +282,36 @@ def _finite_number(value: object, field: str) -> float:
     return float(value)
 
 
+def _event_page_numbers(metadata: Mapping[str, Any]) -> list[int]:
+    """读取事件记录覆盖的页码区间。
+
+    事件在索引里是一个「跨页摘要」，``page_numbers_json`` 保存它覆盖的整段页码
+    （例如 ``[51, 52, 53, 54, 55]``）。引用必须能落到区间内真正命中的那一页，
+    所以这里把区间解析出来；字段缺失或损坏时返回空列表，调用方退回区间起点。
+    """
+    raw = metadata.get("page_numbers_json")
+    if not isinstance(raw, str) or not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    numbers: list[int] = []
+    for value in parsed:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            return []
+        numbers.append(value)
+    return numbers
+
+
 def _candidate(value: object) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise QAConflict("QA candidate must be an object")
     candidate = dict(value)
     required = {"id", "type", "pageId", "pageNumber", "document", "hybridScore"}
-    allowed = required | {"parentContext", "rerankScore", "vectorScore"}
+    allowed = required | {"parentContext", "rerankScore", "vectorScore", "pageNumbers"}
     if not required.issubset(candidate) or not set(candidate).issubset(allowed):
         raise QAConflict("QA candidate fields are invalid")
     if not isinstance(candidate["id"], str) or not candidate["id"]:
@@ -311,6 +340,16 @@ def _candidate(value: object) -> dict[str, Any]:
                 candidate[field],
                 f"QA candidate {field}",
             )
+    if "pageNumbers" in candidate:
+        spans = candidate["pageNumbers"]
+        if not isinstance(spans, list):
+            raise QAConflict("QA candidate pageNumbers is invalid")
+        normalized_spans: list[int] = []
+        for value in spans:
+            normalized_spans.append(
+                _required_integer(value, "QA candidate pageNumbers entry", minimum=1)
+            )
+        candidate["pageNumbers"] = normalized_spans
     parent = candidate.get("parentContext")
     if parent is not None:
         if not isinstance(parent, list):
@@ -1378,6 +1417,11 @@ class InsightQAWorkerService:
                         "type": record_type,
                         "pageId": page_id,
                         "pageNumber": page_number,
+                        # 事件记录覆盖一个页面区间（例如 51..55）。索引里只有区间起点
+                        # 带 page_id，若引用只看 pageId，命中「五条悟突然现身天台」
+                        # 这类跨页事件时会把它标成区间第一页而不是真正命中的那一页。
+                        # 这里把区间原样带出来，交给 citations_for 展开。
+                        "pageNumbers": _event_page_numbers(metadata),
                         "document": document,
                         "vectorScore": vector_score,
                         "hybridScore": hybrid_score,
@@ -2072,13 +2116,22 @@ class InsightQACommandService:
         return
 
 
+def _source_batch(source: str) -> int:
+    """一个来源在一轮里占多少名额。"""
+    if source == "page":
+        return PAGE_CANDIDATE_BATCH
+    if source == "event":
+        return EVENT_CANDIDATE_BATCH
+    return 1
+
+
 def _interleave_by_source(
     candidates: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     """按来源交错页面与事件候选，避免高分事件挤掉全部页面证据。
 
-    两个来源各自保持原有分数顺序，只是按 ``PAGE_CANDIDATE_INTERLEAVE_BATCH``
-    轮流取条目；来源不足时把剩下的直接追加，因此不会丢候选。
+    两个来源各自保持原有分数顺序，只是按 ``_source_batch`` 给出的配额轮流取
+    条目（页面 4 : 事件 1）；来源不足时把剩下的直接追加，因此不会丢候选。
     """
     ordered = [_candidate(row) for row in candidates]
     buckets: dict[str, list[dict[str, Any]]] = {}
@@ -2086,18 +2139,19 @@ def _interleave_by_source(
         buckets.setdefault(str(row["type"]), []).append(row)
     if len(buckets) < 2:
         return ordered
-    # 交错的来源顺序按各自首条候选的分数决定，分数高的先出。
-    order = [
-        name
-        for name in sorted(buckets, key=lambda name: (-buckets[name][0]["hybridScore"], name))
-    ]
+    # 来源顺序固定为页面在前、事件在后：页面是原文出处，事件是二次概述，
+    # 同分时也要让原文先占位。未知来源按类型名排在最后，保持确定性。
+    order = sorted(
+        buckets,
+        key=lambda name: (_source_priority(name), -buckets[name][0]["hybridScore"], name),
+    )
     cursor = {name: 0 for name in order}
     merged: list[dict[str, Any]] = []
     while True:
         progressed = False
         for name in order:
             start = cursor[name]
-            take = buckets[name][start : start + PAGE_CANDIDATE_INTERLEAVE_BATCH]
+            take = buckets[name][start : start + _source_batch(name)]
             if not take:
                 continue
             progressed = True
@@ -2105,6 +2159,15 @@ def _interleave_by_source(
             merged.extend(take)
         if not progressed:
             return merged
+
+
+def _source_priority(source: str) -> int:
+    """窗口里的来源优先级：页面在前，事件在后，其余居中。"""
+    if source == "page":
+        return 0
+    if source == "event":
+        return 2
+    return 1
 
 
 def select_candidates(
@@ -2122,7 +2185,16 @@ def select_candidates(
 def citations_for(
     candidates: Sequence[Mapping[str, Any]],
     engine: Engine | None = None,
+    *,
+    page_lookup: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    """Build citable references from the candidates the model actually saw.
+
+    事件候选是跨页摘要：``pageId`` 只指向区间第一页。若不做展开，「五条悟突然
+    现身天台」这条 51..55 页的事件会被引用成第 51 页，把真正的答案页（第 55 页）
+    藏起来。给出 ``page_lookup``（全书页码 → 页面身份）时，事件区间里的每一页都
+    会得到一条引用，命中哪页就指哪页。
+    """
     citations: list[dict[str, Any]] = []
     seen: set[str] = set()
     page_ids: list[str] = []
@@ -2133,6 +2205,23 @@ def citations_for(
             continue
         seen.add(page_id)
         page_ids.append(page_id)
+    # 事件区间展开后要引用区间内每一页，这些页的 id 可能不在任何页面候选里，
+    # 因此必须提前并进元数据查询，否则展开出来的引用拿不到章节与来源图。
+    event_spans: dict[str, list[int]] = {}
+    if page_lookup:
+        for raw in candidates:
+            row = _candidate(raw)
+            if row["type"] != "event":
+                continue
+            spans = [n for n in row.get("pageNumbers") or [] if n in page_lookup]
+            if not spans:
+                continue
+            event_spans[row["id"]] = spans
+            for number in spans:
+                span_page_id = page_lookup[number].get("pageId")
+                if isinstance(span_page_id, str) and span_page_id and span_page_id not in seen:
+                    seen.add(span_page_id)
+                    page_ids.append(span_page_id)
 
     page_metadata: dict[str, dict[str, Any]] = {}
     metadata_failed = False
@@ -2166,15 +2255,26 @@ def citations_for(
             LOGGER.warning("Failed to enrich citation chapter/page metadata: %s", exc)
 
     processed: set[str] = set()
+    # 页面候选必须先占位：如果事件候选排在前面并先展开，同一页会被标成 source=event，
+    # 而页面上明明有真正的原文引用。分两趟跑，页面身份优先。
+    ordered: list[tuple[dict[str, Any], Mapping[str, Any]]] = []
     for raw in candidates:
         row = _candidate(raw)
+        ordered.append((row, row))
+    ordered.sort(key=lambda item: 0 if item[0]["type"] == "page" else 1)
+    for row, _ in ordered:
         page_id = row["pageId"]
         if page_id is None or page_id in processed:
             continue
         processed.add(page_id)
 
         meta = page_metadata.get(page_id, {})
+        # page_lookup 已经带章身份时优先用它：离线组装引用（engine=None）拿不到
+        # 数据库元数据，缺了这层兜底整个引用会只剩全书页码。
+        row_location = (page_lookup or {}).get(row["pageNumber"]) or {}
         page_ordinal = meta.get("page_ordinal")
+        if page_ordinal is None:
+            page_ordinal = row_location.get("pageInChapter")
         # 审计 P2-4：过去这里用「章内序号命中就替换、失败就回退全书页码」的单字段，
         # 同一字段会有两种语义。现在两个语义各占一个显式字段：
         #   pageInChapter     —— 章内第几页（真实可点击位置，元数据缺失时为 None）
@@ -2192,12 +2292,17 @@ def citations_for(
         chapter_ordinal = (
             meta.get("chapter_ordinal")
             if meta.get("chapter_ordinal") is not None
-            else (row.get("chapterOrdinal") or row.get("chapter_ordinal"))
+            else (
+                row.get("chapterOrdinal")
+                or row.get("chapter_ordinal")
+                or row_location.get("chapterOrdinal")
+            )
         )
         chapter_title = (
             meta.get("chapter_title")
             or row.get("chapterTitle")
             or row.get("chapter_title")
+            or row_location.get("chapterTitle")
         )
         source_asset_id = meta.get("source_asset_id")
         source_url = f"/api/v2/assets/{source_asset_id}" if source_asset_id else None
@@ -2225,6 +2330,48 @@ def citations_for(
                 "score": row.get("rerankScore", row["hybridScore"]),
             }
         )
+        # 事件候选覆盖多页：把区间里尚未引用的页补成独立引用，让「第几话第几页」
+        # 指向事件真正发生的页，而不是区间起点那一页。
+        for number in event_spans.get(row["id"], ()):
+            location = page_lookup.get(number) if page_lookup else None
+            if not location:
+                continue
+            span_page_id = location.get("pageId")
+            if not isinstance(span_page_id, str) or not span_page_id:
+                continue
+            if span_page_id in processed:
+                continue
+            processed.add(span_page_id)
+            span_meta = page_metadata.get(span_page_id, {})
+            # page_lookup 本身就是「全书页码 → 章节身份」的索引，元数据查不到时
+            # （例如纯离线组装引用）用它兜底，否则引用会退化成只有全书页码。
+            span_in_chapter = span_meta.get("page_ordinal")
+            if span_in_chapter is None:
+                span_in_chapter = location.get("pageInChapter")
+            span_source_asset = span_meta.get("source_asset_id")
+            citations.append(
+                {
+                    "pageId": span_page_id,
+                    "page_id": span_page_id,
+                    "pageNumber": span_in_chapter if span_in_chapter is not None else number,
+                    "page_number": span_in_chapter if span_in_chapter is not None else number,
+                    "pageNumberSource": "chapter" if span_in_chapter is not None else "run_global",
+                    "page_number_source": "chapter" if span_in_chapter is not None else "run_global",
+                    "pageInChapter": span_in_chapter,
+                    "page_in_chapter": span_in_chapter,
+                    "globalPageNumber": number,
+                    "global_page_number": number,
+                    "chapterOrdinal": span_meta.get("chapter_ordinal", location.get("chapterOrdinal")),
+                    "chapter_ordinal": span_meta.get("chapter_ordinal", location.get("chapterOrdinal")),
+                    "chapterTitle": span_meta.get("chapter_title", location.get("chapterTitle")),
+                    "chapter_title": span_meta.get("chapter_title", location.get("chapterTitle")),
+                    "sourceUrl": f"/api/v2/assets/{span_source_asset}" if span_source_asset else None,
+                    "source_url": f"/api/v2/assets/{span_source_asset}" if span_source_asset else None,
+                    "source": "event",
+                    "excerpt": row["document"],
+                    "score": row.get("rerankScore", row["hybridScore"]),
+                }
+            )
     if metadata_failed:
         LOGGER.warning(
             "Citation chapter metadata unavailable; %d citation(s) fall back to run-global page numbers",

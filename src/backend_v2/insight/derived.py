@@ -921,6 +921,50 @@ def _required_text(value: object, field: str) -> str:
     return text
 
 
+PAGE_VECTOR_ENTITY_FIELDS = (
+    ("characters", "角色"),
+    ("locations", "地点"),
+    ("abilities", "能力"),
+    ("items", "物品"),
+)
+
+
+def build_page_vector_document(analysis: Mapping[str, Any], summary: str) -> str:
+    """把一页的分析结果拼成语义检索用的文档。
+
+    过去这里只放 ``page_summary``（实测 57..221 字），角色、地点、道具与关键事件
+    全被丢掉，于是「某角色第一次出现在第几话」这类问题与页面摘要的语义距离很远：
+    第 46 页写的是「把手指抛向口中」，问的是「第一次吃下宿傩手指」，向量排序只能
+    排到第 11 名（topK=10 刚好错过）。补上结构化字段后同一问题的排名升到第 2 名。
+
+    文档顺序固定（摘要 → 出场实体 → 关键事件），保证同一份分析永远产出同一段
+    文本，向量可复现；空字段直接跳过，不给文档塞「无」这类噪声。
+    """
+    parts: list[str] = [summary.strip()]
+    for field, label in PAGE_VECTOR_ENTITY_FIELDS:
+        entries = analysis.get(field)
+        if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes, bytearray)):
+            continue
+        names: list[str] = []
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            name = entry.get("name")
+            if isinstance(name, str) and name.strip():
+                names.append(name.strip())
+        if names:
+            parts.append(f"{label}：" + "、".join(dict.fromkeys(names)))
+    events = analysis.get("key_events")
+    if isinstance(events, Sequence) and not isinstance(events, (str, bytes, bytearray)):
+        for event in events:
+            if not isinstance(event, Mapping):
+                continue
+            text = event.get("summary")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    return "\n".join(part for part in parts if part)
+
+
 def _required_boolean(value: object, field: str) -> bool:
     if not isinstance(value, bool):
         raise InsightConflict(f"{field} must be a boolean")
@@ -6286,7 +6330,7 @@ class InsightDerivedWorkerService:
             page_records.append(
                 {
                     "id": f"page-{page_id}",
-                    "document": summary,
+                    "document": build_page_vector_document(analysis, summary),
                     "metadata": {
                         "book_id": frozen.book_id,
                         "page_id": page_id,

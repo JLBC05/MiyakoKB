@@ -33,6 +33,7 @@ from src.backend_v2.insight.derived import (
     InsightDerivedWorkerService,
     InsightVectorStore,
     ProviderDerivedAlgorithms,
+    build_page_vector_document,
     is_judge_candidate,
 )
 from src.backend_v2.insight.exports import (
@@ -45,7 +46,8 @@ from src.backend_v2.insight.page_schema import (
 )
 from src.backend_v2.insight.qa import (
     DEFAULT_QA_TOP_K,
-    PAGE_CANDIDATE_INTERLEAVE_BATCH,
+    PAGE_CANDIDATE_BATCH,
+    EVENT_CANDIDATE_BATCH,
     ENTITY_EVIDENCE_PAGES_PER_ENTITY,
     ENTITY_EVIDENCE_SCORE,
     DefaultQAApiAlgorithms,
@@ -7020,6 +7022,129 @@ def test_qa_entity_evidence_is_capped_per_entity_and_scored_below_vectors(
     )
 
 
+def test_qa_event_citations_expand_to_every_page_in_the_span() -> None:
+    """事件候选跨页摘要：引用必须覆盖区间内每一页，而不是只指区间起点。
+
+    实测回归：事件「五条悟突然现身天台」的 ``pageId/page_number`` 指向第 51 页，
+    真实答案却写在第 55 页。旧实现只按 ``page_id`` 生成一条引用，模型据此答
+    「第 51 页」，与知识库内容不符。给出 ``page_lookup`` 后区间内每页都要有引用。
+    """
+    lookup = {
+        number: {
+            "pageId": f"page-{number}",
+            "pageNumber": number,
+            "chapterOrdinal": 2,
+            "chapterTitle": "第2話",
+            "pageInChapter": number - 50,
+        }
+        for number in range(51, 56)
+    }
+    candidates = [
+        {
+            "id": "event-layer-0-7",
+            "type": "event",
+            "pageId": "page-51",
+            "pageNumber": 51,
+            "document": "五条悟突然现身天台，介入伏黑惠与虎杖悠仁的对峙",
+            "hybridScore": 0.76,
+            "pageNumbers": [51, 52, 53, 54, 55],
+        }
+    ]
+    citations = citations_for(candidates, engine=None, page_lookup=lookup)
+    assert [row["globalPageNumber"] for row in citations] == [51, 52, 53, 54, 55]
+    assert [row["source"] for row in citations] == ["page", "event", "event", "event", "event"]
+    # 展开出来的引用必须带上真实章内位置，前端才能跳到那一页。
+    assert [row["pageInChapter"] for row in citations] == [1, 2, 3, 4, 5]
+    assert {row["chapterOrdinal"] for row in citations} == {2}
+    # 不给 page_lookup 时保持旧行为（单条引用），保证向后兼容。
+    legacy = citations_for(candidates, engine=None)
+    assert [(row["pageId"], row["source"]) for row in legacy] == [("page-51", "page")]
+
+
+def test_qa_event_span_parsing_rejects_broken_metadata() -> None:
+    """事件区间来自 Chroma 元数据字符串，坏数据必须静默退化为空区间。"""
+    from src.backend_v2.insight.qa import _event_page_numbers
+
+    assert _event_page_numbers({"page_numbers_json": "[51, 52, 53]"}) == [51, 52, 53]
+    assert _event_page_numbers({}) == []
+    assert _event_page_numbers({"page_numbers_json": "not json"}) == []
+    assert _event_page_numbers({"page_numbers_json": '{"a": 1}'}) == []
+    assert _event_page_numbers({"page_numbers_json": "[1, 0]"}) == []
+    assert _event_page_numbers({"page_numbers_json": '["3"]'}) == []
+
+
+def test_qa_page_candidates_keep_their_source_when_an_event_also_covers_them() -> None:
+    """同一页既是页面候选、又被事件区间覆盖时，引用要算成 page。
+
+    事件候选在向量检索里分数更高、常常排在页面候选之前。若先按候选顺序展开区间，
+    这一页会被标成 ``source=event``，前端会把「原文页」显示成「事件摘要」。
+    页面身份必须优先，且只出现一次。
+    """
+    lookup = {
+        number: {"pageId": f"page-{number}", "pageNumber": number, "pageInChapter": number}
+        for number in (1, 2, 3)
+    }
+    candidates = [
+        # 故意让事件排在页面之前，模拟高分事件先出现。
+        {
+            "id": "event-layer-1-3",
+            "type": "event",
+            "pageId": "page-1",
+            "pageNumber": 1,
+            "document": "事件摘要",
+            "hybridScore": 0.9,
+            "pageNumbers": [1, 2, 3],
+        },
+        {
+            "id": "page-2",
+            "type": "page",
+            "pageId": "page-2",
+            "pageNumber": 2,
+            "document": "第 2 页原文",
+            "hybridScore": 0.5,
+        },
+    ]
+    citations = citations_for(candidates, engine=None, page_lookup=lookup)
+    by_page: dict[int, list[str]] = {}
+    for row in citations:
+        by_page.setdefault(row["globalPageNumber"], []).append(row["source"])
+    # 第 2 页有真正的页面候选，不能被事件展开抢走身份（这是本用例的核心回归）。
+    assert by_page[2] == ["page"], "页面候选不能被事件展开抢走身份"
+    # 事件自身挂的起点页仍是真实起点页，算 page；只有区间中段标 event。
+    assert by_page[1] == ["page"]
+    assert by_page[3] == ["event"]
+    assert len(citations) == 3, "每页只应有一条引用"
+
+
+def test_page_vector_document_carries_entities_and_events() -> None:
+    """向量文档不能只有 page_summary，否则「谁第一次出现在第几话」检索不到。
+
+    实测回归：只索引摘要时「虎杖第一次吃下宿傩手指」的目标页排第 11，topK=10 刚好
+    错过；把角色、地点、物品与关键事件并进文档后排到第 2。这里锁住文档构成与顺序。
+    """
+    analysis = {
+        "page_summary": "虎杖悠仁把特级咒物的手指抛向口中。",
+        "characters": [{"name": "虎杖悠仁"}, {"name": "伏黑惠"}, {"name": "虎杖悠仁"}],
+        "locations": [{"name": "杉泽第三高中·天台"}],
+        "abilities": [],
+        "items": [{"name": "两面宿傩的手指"}],
+        "key_events": [{"summary": "虎杖吞下特级咒物手指"}, {"summary": "  "}],
+    }
+    document = build_page_vector_document(analysis, analysis["page_summary"])
+    lines = document.splitlines()
+    assert lines[0] == "虎杖悠仁把特级咒物的手指抛向口中。"
+    assert lines[1] == "角色：虎杖悠仁、伏黑惠"  # 同名只出现一次
+    assert lines[2] == "地点：杉泽第三高中·天台"
+    assert lines[3] == "物品：两面宿傩的手指"
+    assert "能力：" not in document  # 空类目不留噪声
+    assert lines[4] == "虎杖吞下特级咒物手指"  # 空白事件被跳过
+    # 同一份分析必须产出同一段文本，向量才可复现。
+    assert build_page_vector_document(analysis, analysis["page_summary"]) == document
+    # 缺少结构化字段时退化为纯摘要，不抛错。
+    assert build_page_vector_document({"page_summary": "只有摘要"}, "只有摘要") == "只有摘要"
+    assert build_page_vector_document({"characters": "not-a-list"}, "兜底") == "兜底"
+
+
 def test_qa_page_candidates_survive_high_scoring_events(
     insight_platform,
 ) -> None:
@@ -7027,8 +7152,13 @@ def test_qa_page_candidates_survive_high_scoring_events(
 
     审计实测：第 1 话前 17 名候选里 17 条是 event、只有 3 条是 page，而事件候选的
     分数系统性偏高；若纯按分数截断 topK，答案所需的页面根本进不了上下文。
+
+    配额必须是页面优先：事件是「二次加工后的概述」，回答「第几话第几页」只能靠页面
+    候选，事件的页码只是它所属页面的元数据。实测「五条悟第一次正式登场」的目标页在
+    60 条候选里排第 36，两两交错只够让它拿 6/10 中的第 6 位，页面优先才排得进前 10。
     """
-    assert PAGE_CANDIDATE_INTERLEAVE_BATCH >= 1
+    assert PAGE_CANDIDATE_BATCH > EVENT_CANDIDATE_BATCH
+    assert EVENT_CANDIDATE_BATCH >= 1
 
     def row(kind: str, score: float, index: int) -> dict[str, object]:
         return {
@@ -7041,25 +7171,28 @@ def test_qa_page_candidates_survive_high_scoring_events(
         }
 
     events = [row("event", 0.70 - index * 0.01, index) for index in range(6)]
-    pages = [row("page", 0.40 - index * 0.01, index) for index in range(3)]
+    pages = [row("page", 0.40 - index * 0.01, index) for index in range(6)]
     merged = _interleave_by_source(events + pages)
 
     assert len(merged) == len(events) + len(pages)
-    # 交错后前 4 条必然同时含两个来源，纯按分数时 page 会被排到最后。
-    assert {merged[0]["type"], merged[2]["type"]} == {"event", "page"}
-    assert [item["id"] for item in merged[:5]] == [
-        "event-0",
-        "event-1",
-        "page-0",
-        "page-1",
-        "event-2",
-    ]
-    assert [item["id"] for item in _interleave_by_source(pages)] == [
+    # 分数更低的页面也要先占满自己的配额：纯按分数时它们会全部排在事件之后。
+    assert [item["id"] for item in merged[:6]] == [
         "page-0",
         "page-1",
         "page-2",
+        "page-3",
+        "event-0",
+        "page-4",
+    ]
+    assert [item["id"] for item in _interleave_by_source(pages)] == [
+        f"page-{index}" for index in range(6)
     ]
     assert _interleave_by_source([]) == []
+
+    # 来源不足时把剩下的直接追加，不能丢候选，也不能重复。
+    short = _interleave_by_source(events + pages[:1])
+    assert len(short) == len(events) + 1
+    assert len({item["id"] for item in short}) == len(short)
 
 
 def test_qa_default_top_k_covers_pages_ranked_below_the_first_few(
