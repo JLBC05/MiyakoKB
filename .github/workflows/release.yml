@@ -8,9 +8,9 @@
 #   2. 手动触发: GitHub Actions 页面 -> 选择要发布的分支 -> Run workflow
 #
 # 流程:
-#   1. 先创建 Draft Release
+#   1. 先创建 Draft Release（更新日志由 RELEASE_NOTES.md 对应版本自动填充）
 #   2. 构建单一发行包（依赖见 requirements.txt）
-#   3. 等待手动编辑更新日志后发布
+#   3. 人工核对 Draft 后手动发布
 # ============================================================================
 
 name: Build and Release
@@ -98,31 +98,31 @@ jobs:
           script: |
             await require('./.github/scripts/prepare_release.cjs')({github, context, core});
 
+      # 更新日志不再是手填占位符：直接从 RELEASE_NOTES.md 抽当前版本那一节。
+      # 抽不到就让 prepare 失败——宁可这次不发，也不发出没有更新日志的 release。
+      - name: Render release body from RELEASE_NOTES.md
+        id: notes
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          if ! node .github/scripts/release_notes.cjs "$RELEASE_VERSION" --with-downloads > release-body.md; then
+            echo "RELEASE_NOTES.md 缺少 v${RELEASE_VERSION} 一节，先补更新日志再发版" >&2
+            exit 1
+          fi
+          echo "更新日志 $(wc -c < release-body.md) 字节"
+          {
+            echo "body<<RELEASE_BODY_EOF"
+            cat release-body.md
+            echo "RELEASE_BODY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create Draft Release
         if: steps.release_target.outputs.create_release == 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.TAG_NAME }}
           name: v${{ steps.version.outputs.VERSION }}
-          body: |
-            ## MiyakoKB v${{ steps.version.outputs.VERSION }}
-            
-            ### 更新日志
-            
-            <!-- 填入更新日志 -->
-            
-            ---
-            
-            ### 下载说明
-            
-            📦 **普通用户：**
-            - 下载 `MiyakoKB-${{ steps.version.outputs.VERSION }}.7z`
-            - 使用 **7-Zip** 或 **Bandzip** 解压后运行 `MiyakoKB.exe`
-            
-            **首次启动**：按向导选择数据目录，然后在「设置」里配置 VLM / LLM / 嵌入 / 重排四条通道的 API Key，再导入漫画。
-            
-            🔧 **源码部署用户：**
-            - 按 README 的「源码开发」一节准备 Python 3.11+、Node 22+ 环境，`pip install -r requirements.txt`，`npm ci && npm run build`，然后用 `python saber_v2.py --role launcher` 启动。
+          body: ${{ steps.notes.outputs.body }}
           draft: true
           prerelease: false
         env:
