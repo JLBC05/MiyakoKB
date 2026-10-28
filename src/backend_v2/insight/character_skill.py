@@ -1912,6 +1912,100 @@ def _card_filename(document: Mapping[str, Any]) -> str:
     return f"{stem or 'character-card'}.json"
 
 
+# 问答注入角色档案时，只取对「这个人是谁、怎么说话、和谁什么关系」有用的一小部分，
+# 并把条目数量硬性截断——档案里的 timeline 可能有几十条，全塞进问答提示词会挤掉
+# 页面证据（实测角色档案正文能到 2 万字符，而页面资料通常只有 2-4 千）。
+PROFILE_TRAIT_LIMIT = 6
+PROFILE_RELATION_LIMIT = 8
+PROFILE_SPEECH_LIMIT = 4
+
+
+def _profile_item_text(value: Any) -> str:
+    """把档案里的一条记录压成一行可读文本；无有效内容返回空串。"""
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, Mapping):
+        return ""
+    for key in ("trait", "pattern", "dynamic", "relation", "name", "event", "note"):
+        raw = value.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
+
+
+def character_profile_digest(document: Mapping[str, Any]) -> dict[str, Any]:
+    """从角色档案产物里抽出「给问答用」的摘要。
+
+    刻意不返回完整档案：完整档案是给「扮演」和「导出」用的，条目多、引用密，
+    放进问答提示词会淹没页面证据。这里只保留一句话概括、性格、说话方式、
+    人际关系和扮演提示——恰好覆盖「这个角色是个什么样的人」这类提问。
+    """
+    if not isinstance(document, Mapping):
+        return {}
+    summary = document.get("summary")
+    if not isinstance(summary, Mapping):
+        summary = {}
+
+    name = str(document.get("characterName") or "").strip()
+    lines: list[str] = []
+    one_liner = summary.get("one_liner")
+    if isinstance(one_liner, str) and one_liner.strip():
+        lines.append(f"一句话概括：{one_liner.strip()}")
+
+    traits: list[str] = []
+    for value in summary.get("personality") or []:
+        text = _profile_item_text(value)
+        if text and text not in traits:
+            traits.append(text)
+        if len(traits) >= PROFILE_TRAIT_LIMIT:
+            break
+    if traits:
+        lines.append("性格：" + "；".join(traits))
+
+    speech: list[str] = []
+    for value in summary.get("speech_style") or []:
+        text = _profile_item_text(value)
+        if text and text not in speech:
+            speech.append(text)
+        if len(speech) >= PROFILE_SPEECH_LIMIT:
+            break
+    if speech:
+        lines.append("说话方式：" + "；".join(speech))
+
+    relations: list[str] = []
+    for value in summary.get("relationships") or []:
+        if not isinstance(value, Mapping):
+            continue
+        other = value.get("name")
+        relation = value.get("relation") or value.get("dynamic")
+        if isinstance(other, str) and other.strip():
+            text = other.strip()
+            if isinstance(relation, str) and relation.strip():
+                text = f"{text}（{relation.strip()}）"
+            if text not in relations:
+                relations.append(text)
+        if len(relations) >= PROFILE_RELATION_LIMIT:
+            break
+    if relations:
+        lines.append("人际关系：" + "、".join(relations))
+
+    persona = summary.get("persona_prompt")
+    if isinstance(persona, str) and persona.strip():
+        lines.append(f"扮演提示：{persona.strip()}")
+
+    if not lines:
+        return {}
+    stats = document.get("stats") if isinstance(document.get("stats"), Mapping) else {}
+    return {
+        "entityId": str(document.get("entityId") or ""),
+        "name": name,
+        "lines": lines,
+        "revision": document.get("revision"),
+        "updatedAt": document.get("updatedAt"),
+        "pages": stats.get("pages") if isinstance(stats, Mapping) else None,
+    }
+
+
 def build_card_document(document: Mapping[str, Any]) -> tuple[str, bytes]:
     """把角色卡导出为**单个** SillyTavern V3 JSON 文件。
 

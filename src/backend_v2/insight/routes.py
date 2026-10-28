@@ -39,6 +39,7 @@ from src.backend_v2.insight.character_skill import (
     CharacterSkillService,
     build_card_document,
     build_skill_archive,
+    character_profile_digest,
 )
 from src.backend_v2.content.image_import import ImageImportService
 from src.backend_v2.content.repository import ContentRepository
@@ -717,6 +718,11 @@ def create_insight_blueprint(
                     snapshot_pages=snapshot_pages,
                     locations=locations,
                 )
+                character_profiles = _matched_character_profiles(
+                    character_skills,
+                    book_id=book_id,
+                    resolved_entities=resolved_entities,
+                )
                 # 问题点名某一话时，该话的其余页面往往不在向量召回里（章节级提问
                 # 只命中扉页），这里按章节边界补一批代表页。
                 chapter_candidates = chapter_page_candidates(
@@ -849,6 +855,7 @@ def create_insight_blueprint(
                                 cancelled=cancelled,
                                 resolved_entities=resolved_entities,
                                 locations=locations,
+                                character_profiles=character_profiles,
                             ):
                                 if chunk:
                                     answer_emitted = True
@@ -1535,6 +1542,58 @@ def _body_choice(
             f"{key} must be one of: {', '.join(sorted(allowed))}"
         )
     return value
+
+
+def _matched_character_profiles(
+    service: CharacterSkillService,
+    *,
+    book_id: str,
+    resolved_entities: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """取问题里点名、且已经蒸馏过角色档案的实体，作为问答的额外背景。
+
+    只是「锦上添花」：档案缺失、读取失败、产物过期都不应该让问答报错，
+    因此这里逐条吞掉异常（只记日志）。答案的资料主体仍然是页面候选。
+    """
+    if not isinstance(resolved_entities, Mapping):
+        return []
+    matched = resolved_entities.get("matched_entities")
+    if not isinstance(matched, list):
+        return []
+    profiles: list[dict[str, Any]] = []
+    for entity in matched:
+        if not isinstance(entity, Mapping):
+            continue
+        entity_id = entity.get("entityId") or entity.get("entity_id")
+        if not isinstance(entity_id, str) or not entity_id:
+            continue
+        try:
+            document = service.get(
+                book_id=book_id,
+                entity_id=entity_id,
+            )
+        except Exception as exc:  # 没蒸馏过 / 产物不可用都走这里
+            LOGGER.debug(
+                "No character profile for %s in %s: %s", entity_id, book_id, exc
+            )
+            continue
+        # stale 表示档案是「上一轮分析」蒸出来的，可能和当前页面资料冲突。
+        # 问答以页面证据为准，这种过时背景宁可不用，也不要让模型拿旧设定去圆新资料。
+        if str(document.get("status") or "") == "stale":
+            LOGGER.debug(
+                "Skipping stale character profile for %s in %s", entity_id, book_id
+            )
+            continue
+        try:
+            digest = character_profile_digest(document)
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to build character profile digest for %s: %s", entity_id, exc
+            )
+            continue
+        if digest:
+            profiles.append(digest)
+    return profiles
 
 
 def _citations(

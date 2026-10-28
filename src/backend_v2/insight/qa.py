@@ -1856,6 +1856,7 @@ class DefaultQAApiAlgorithms:
         cancelled: threading.Event,
         resolved_entities: Mapping[str, Any] | None = None,
         locations: Mapping[int, Mapping[str, Any]] | None = None,
+        character_profiles: Sequence[Mapping[str, Any]] | None = None,
     ) -> Iterator[str]:
         from src.shared.ai_transport import UnifiedChatRequest
         from src.shared.openai_execution import (
@@ -1869,6 +1870,7 @@ class DefaultQAApiAlgorithms:
             candidates,
             resolved_entities=resolved_entities,
             locations=locations,
+            character_profiles=character_profiles,
         )
         prompts = config.get("prompts")
         if not isinstance(prompts, Mapping):
@@ -2896,12 +2898,31 @@ def _answer_context(
     resolved_entities: Mapping[str, Any] | None = None,
     *,
     locations: Mapping[int, Mapping[str, Any]] | None = None,
+    character_profiles: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     sections = []
 
     matched = []
     if isinstance(resolved_entities, Mapping):
         matched = resolved_entities.get("matched_entities", [])
+
+    if character_profiles:
+        profile_blocks = []
+        for profile in character_profiles:
+            if not isinstance(profile, Mapping):
+                continue
+            lines = profile.get("lines")
+            if not isinstance(lines, list) or not lines:
+                continue
+            name = str(profile.get("name") or profile.get("entityId") or "该角色").strip()
+            body = "\n".join(f"  {line}" for line in lines if isinstance(line, str))
+            if body:
+                profile_blocks.append(f"- {name}\n{body}")
+        if profile_blocks:
+            sections.append(
+                "[角色档案（由知识库蒸馏，用于理解人物性格与关系；"
+                "涉及具体页码时仍以页面资料为准）]\n" + "\n".join(profile_blocks)
+            )
 
     if matched:
         entity_lines = ["[实体知识库数据]"]

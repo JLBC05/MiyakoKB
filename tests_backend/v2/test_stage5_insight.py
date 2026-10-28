@@ -71,6 +71,7 @@ from src.backend_v2.insight.qa import (
     _interleave_by_source,
     validate_retrieval_candidates,
 )
+from src.backend_v2.insight.character_skill import character_profile_digest
 from src.backend_v2.insight.repository import (
     InsightConflict,
     InsightNotFound,
@@ -383,7 +384,9 @@ class FakeQAApiAlgorithms:
         config,
         cancelled,
         locations=None,
+        character_profiles=None,
     ):
+        self.character_profiles = list(character_profiles or [])
         yield "答案"
         yield "内容"
 
@@ -7373,6 +7376,105 @@ def test_qa_default_top_k_covers_pages_ranked_below_the_first_few(
     assert handle.options["topK"] == DEFAULT_QA_TOP_K
     # candidateLimit = topK * 6，候选宽度必须同步放宽，否则 topK 调大也不会多召回。
     assert captured["request_payload"]["candidateLimit"] == DEFAULT_QA_TOP_K * 6
+
+
+def test_character_profile_digest_keeps_only_the_question_relevant_fields() -> None:
+    document = {
+        "entityId": "character_jiu_liu_mei",
+        "characterName": "久留美",
+        "revision": 3,
+        "stats": {"pages": 148},
+        "summary": {
+            "one_liner": "把母亲亏掉的两千万赢回来的 FX 交易者。",
+            "personality": [{"trait": "极度执着"}, {"trait": "容易上头"}],
+            "speech_style": [{"pattern": "口癖『嗯…？要多买入吗…？』"}],
+            "relationships": [{"name": "母亲", "relation": "债主与牵挂"}],
+            "persona_prompt": "第三人称扮演，语气从犹豫到亢奋。",
+            # 下面这些刻意不进摘要：档案是给扮演/导出用的，放进问答会挤掉页面证据。
+            "timeline": [{"citation": "《第01话》第12页（全书第12页）", "event": "亏损"}],
+        },
+    }
+
+    digest = character_profile_digest(document)
+
+    assert digest["name"] == "久留美"
+    assert digest["revision"] == 3
+    joined = "\n".join(digest["lines"])
+    assert "把母亲亏掉的两千万赢回来的 FX 交易者。" in joined
+    assert "极度执着" in joined and "容易上头" in joined
+    assert "要多买入吗" in joined
+    assert "母亲（债主与牵挂）" in joined
+    assert "第三人称扮演" in joined
+    # 时间线（含引用）不应出现在问答摘要里
+    assert "亏损" not in joined
+
+
+def test_character_profile_digest_returns_nothing_for_empty_documents() -> None:
+    assert character_profile_digest({}) == {}
+    assert character_profile_digest({"characterName": "甲", "summary": {}}) == {}
+
+
+def test_answer_context_puts_character_profiles_before_page_material() -> None:
+    profiles = [
+        {
+            "entityId": "character_jiu_liu_mei",
+            "name": "久留美",
+            "lines": ["一句话概括：FX 交易者。", "性格：极度执着"],
+        }
+    ]
+
+    context = _answer_context([], None, character_profiles=profiles)
+
+    assert "[角色档案" in context
+    assert "久留美" in context
+    assert "一句话概括：FX 交易者。" in context
+    # 没有页面资料、也没有实体命中时，仍要给出「无相关资料」的兜底提示。
+    assert "无相关漫画分析资料。" in context
+
+
+def test_matched_character_profiles_skips_stale_and_missing_profiles(
+    monkeypatch,
+) -> None:
+    from src.backend_v2.insight import routes as insight_routes
+
+    class _Service:
+        def __init__(self, documents):
+            self.documents = documents
+
+        def get(self, *, book_id, entity_id, **kwargs):
+            value = self.documents.get(entity_id)
+            if value is None:
+                raise InsightNotFound("no profile")
+            return value
+
+    documents = {
+        "fresh": {
+            "entityId": "fresh",
+            "characterName": "甲",
+            "status": "ready",
+            "summary": {"one_liner": "新档案"},
+        },
+        "old": {
+            "entityId": "old",
+            "characterName": "乙",
+            "status": "stale",
+            "summary": {"one_liner": "旧档案"},
+        },
+    }
+    monkeypatch.setattr(insight_routes, "character_profile_digest", character_profile_digest)
+    resolved = {
+        "matched_entities": [
+            {"entityId": "fresh"},
+            {"entityId": "old"},
+            {"entityId": "missing"},
+        ]
+    }
+
+    profiles = insight_routes._matched_character_profiles(
+        _Service(documents), book_id="b", resolved_entities=resolved
+    )
+
+    assert [item["entityId"] for item in profiles] == ["fresh"]
 
 
 def test_qa_entity_evidence_pages_become_citable_candidates(
