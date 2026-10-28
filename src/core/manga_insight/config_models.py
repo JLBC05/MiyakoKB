@@ -21,8 +21,9 @@ _VLM_FIELDS = {
     "credential_version_id",
     "openai_options",
     "image_max_size",
+    "request_timeout_seconds",
 }
-_CHAT_FIELDS = _VLM_FIELDS - {"image_max_size"}
+_CHAT_FIELDS = _VLM_FIELDS - {"image_max_size", "request_timeout_seconds"}
 _EMBEDDING_FIELDS = {
     "provider",
     "api_key",
@@ -111,6 +112,7 @@ class VLMConfig:
         )
     )
     image_max_size: int = 0
+    request_timeout_seconds: float = 0
 
     def __post_init__(self) -> None:
         self.provider = _string(self.provider, name="vlm.provider", allow_empty=False)
@@ -129,6 +131,10 @@ class VLMConfig:
             self.image_max_size,
             name="vlm.image_max_size",
         )
+        self.request_timeout_seconds = _nonnegative_number(
+            self.request_timeout_seconds,
+            name="vlm.request_timeout_seconds",
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -139,6 +145,7 @@ class VLMConfig:
             "credential_version_id": self.credential_version_id,
             "openai_options": self.openai_options.to_dict(),
             "image_max_size": self.image_max_size,
+            "request_timeout_seconds": self.request_timeout_seconds,
         }
 
     @classmethod
@@ -155,6 +162,7 @@ class VLMConfig:
             credential_version_id=data["credential_version_id"],
             openai_options=OpenAICompatibleOptions.from_dict(options),
             image_max_size=data["image_max_size"],
+            request_timeout_seconds=data.get("request_timeout_seconds", 0),
         )
 
 

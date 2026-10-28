@@ -14,14 +14,18 @@ from src.shared.ai_transport import (
     OpenAICompatibleChatTransport,
     UnifiedChatRequest,
 )
-from src.shared.openai_execution import build_openai_compatible_runtime_options, resolve_openai_compatible_invocation
+from src.shared.openai_execution import (
+    DEFAULT_AI_REQUEST_TIMEOUT,
+    build_openai_compatible_runtime_options,
+    resolve_openai_compatible_invocation,
+)
 from src.shared.openai_options import OpenAICompatibleExecutionOptions, OpenAICompatibleOptions
 
 
-def test_shared_default_is_300_seconds_and_explicit_timeouts_are_preserved():
+def test_shared_default_is_600_seconds_and_explicit_timeouts_are_preserved():
     for stream in (False, True):
         options = OpenAICompatibleOptions(execution=OpenAICompatibleExecutionOptions(use_stream=stream))
-        assert resolve_openai_compatible_invocation("custom", "chat", options).timeout == 300
+        assert resolve_openai_compatible_invocation("custom", "chat", options).timeout == DEFAULT_AI_REQUEST_TIMEOUT
         assert resolve_openai_compatible_invocation(
             "custom", "chat", options, build_openai_compatible_runtime_options(timeout=45),
         ).timeout == 45

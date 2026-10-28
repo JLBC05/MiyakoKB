@@ -43,7 +43,10 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger("SharedOpenAIExecution")
-DEFAULT_AI_REQUEST_TIMEOUT = 300.0
+# 单次 AI 请求（含图片的多模态批）的墙钟预算。
+# 图片批次在慢速网关上可轻松超过 5 分钟；300 秒会把「慢但成功」的请求误杀成
+# 重试，而重试同样慢，形成进度停摆。默认放宽到 600 秒，可由供应商设置覆盖。
+DEFAULT_AI_REQUEST_TIMEOUT = 600.0
 
 T = TypeVar("T")
 

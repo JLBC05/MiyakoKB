@@ -121,6 +121,7 @@ _INSIGHT_PROVIDER_PAYLOAD_FIELDS = {
             "openaiOptions",
             "imageMaxSize",
             "analyzeConcurrency",
+            "requestTimeoutSeconds",
         }
     ),
     "insight_chat": frozenset(
@@ -157,7 +158,7 @@ _INSIGHT_PROVIDER_PAYLOAD_FIELDS = {
 }
 # 可选键：老库里的 provider 载荷没有这些键，读取时必须继续合法。
 _OPTIONAL_INSIGHT_PROVIDER_PAYLOAD_FIELDS: dict[str, frozenset[str]] = {
-    "insight_vlm": frozenset({"analyzeConcurrency"}),
+    "insight_vlm": frozenset({"analyzeConcurrency", "requestTimeoutSeconds"}),
 }
 _WEB_IMPORT_AGENT_PROVIDER_PAYLOAD_FIELDS = frozenset(
     {"modelName", "customBaseUrl"}
@@ -792,6 +793,15 @@ def validate_provider_setting_payload(
                 f"provider_settings.{domain}.{key}",
                 minimum=0,
             )
+        elif key == "requestTimeoutSeconds":
+            number = _finite_number(
+                value,
+                f"provider_settings.{domain}.{key}",
+            )
+            if number < 0:
+                raise ValueError(
+                    f"provider_settings.{domain}.{key} must be at least 0"
+                )
         elif key == "timeoutSeconds":
             number = _finite_number(
                 value,

@@ -146,6 +146,7 @@ def _provider_section(
         "batchSize": "batch_size",
         "minImageSize": "min_image_size",
         "imageMaxSize": "image_max_size",
+        "requestTimeoutSeconds": "request_timeout_seconds",
         "analyzeConcurrency": "analyze_concurrency",
         "rpmLimit": "rpm_limit",
         "transportRetries": "transport_retries",
@@ -201,6 +202,7 @@ def _insight_provider_factory_payload(
         }
         if domain == "insight_vlm":
             payload["imageMaxSize"] = 0
+            payload["requestTimeoutSeconds"] = 0
         return payload
     if domain == "insight_embedding":
         payload["rpmLimit"] = 0

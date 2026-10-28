@@ -10,7 +10,10 @@ from src.shared.openai_options import (
     OpenAICompatibleOptions,
     OpenAICompatibleRequestOptions,
 )
-from src.shared.openai_execution import OpenAICompatibleEmptyContentError
+from src.shared.openai_execution import (
+    DEFAULT_AI_REQUEST_TIMEOUT,
+    OpenAICompatibleEmptyContentError,
+)
 
 
 def _png_bytes() -> bytes:
@@ -447,7 +450,7 @@ class MangaInsightSharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.temperature, 0.2)
         self.assertFalse(request.use_stream)
         self.assertEqual(request.response_format, {"type": "json_object"})
-        self.assertEqual(request.timeout, 300.0)
+        self.assertEqual(request.timeout, DEFAULT_AI_REQUEST_TIMEOUT)
         self.assertEqual(request.messages[0]["role"], "user")
         self.assertEqual(request.messages[0]["content"][-1], {"type": "text", "text": "分析这页漫画"})
 
@@ -530,6 +533,7 @@ class MangaInsightSharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 "base_url": "https://example.com/v1",
                 "credential_version_id": None,
                 "image_max_size": 0,
+                "request_timeout_seconds": 0,
                 "openai_options": {
                     "request": {
                         "force_json_output": True,
@@ -561,6 +565,57 @@ class MangaInsightSharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.openai_options.execution.rpm_limit, 8)
         self.assertEqual(request.openai_options.execution.business_retries, 3)
         self.assertEqual(request.runtime_options.stream_output_label, "漫画分析")
+
+    async def test_vlm_client_applies_configured_request_timeout(self) -> None:
+        from src.core.manga_insight.config_models import VLMConfig
+        from src.core.manga_insight.vlm_client import VLMClient
+
+        config = VLMConfig(
+            provider="custom",
+            api_key="test-key",
+            model="vlm-model",
+            base_url="https://example.com/v1",
+            openai_options=OpenAICompatibleOptions(
+                execution=OpenAICompatibleExecutionOptions(use_stream=False),
+            ),
+            request_timeout_seconds=900,
+        )
+
+        with mock.patch(
+            "src.core.manga_insight.vlm_client.AsyncOpenAICompatibleTransport.complete",
+            new=mock.AsyncMock(return_value='{"pages":[{"page_number":1}]}'),
+        ) as complete_mock:
+            client = VLMClient(config)
+            await client.analyze_page(_png_bytes(), 1, "分析这页漫画")
+
+        request = complete_mock.call_args.args[0]
+        self.assertEqual(request.runtime_options.timeout, 900.0)
+        self.assertEqual(request.timeout, 900.0)
+
+    async def test_vlm_client_falls_back_to_shared_default_timeout(self) -> None:
+        from src.core.manga_insight.config_models import VLMConfig
+        from src.core.manga_insight.vlm_client import VLMClient
+
+        config = VLMConfig(
+            provider="custom",
+            api_key="test-key",
+            model="vlm-model",
+            base_url="https://example.com/v1",
+            openai_options=OpenAICompatibleOptions(
+                execution=OpenAICompatibleExecutionOptions(use_stream=False),
+            ),
+        )
+
+        with mock.patch(
+            "src.core.manga_insight.vlm_client.AsyncOpenAICompatibleTransport.complete",
+            new=mock.AsyncMock(return_value='{"pages":[{"page_number":1}]}'),
+        ) as complete_mock:
+            client = VLMClient(config)
+            await client.analyze_page(_png_bytes(), 1, "分析这页漫画")
+
+        request = complete_mock.call_args.args[0]
+        self.assertIsNone(request.runtime_options.timeout)
+        self.assertEqual(request.timeout, DEFAULT_AI_REQUEST_TIMEOUT)
 
     async def test_vlm_client_retries_typed_empty_content_at_business_layer(self) -> None:
         from src.core.manga_insight.config_models import VLMConfig

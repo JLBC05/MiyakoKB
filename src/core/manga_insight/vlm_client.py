@@ -172,6 +172,11 @@ class VLMClient:
                 openai_options=options,
                 runtime_options=build_openai_compatible_runtime_options(
                     stream_output_label="漫画分析",
+                    # 0 表示跟随全局默认（DEFAULT_AI_REQUEST_TIMEOUT）；
+                    # 图片批次在慢网关上常常需要 5 分钟以上，可由设置放宽。
+                    timeout=(
+                        self.config.request_timeout_seconds or None
+                    ),
                 ),
             ),
             capability="vlm",

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 _CREDENTIAL_FIELDS = {"api_key", "credential_version_id"}
 # 供应商可选参数：缺失时沿用引擎默认值，历史冻结配置无需回填。
-_OPTIONAL_FIELDS = {"analyze_concurrency"}
+_OPTIONAL_FIELDS = {"analyze_concurrency", "request_timeout_seconds"}
 
 
 def _section(
@@ -124,6 +124,7 @@ def frozen_vlm_config(config: Mapping[str, Any]) -> VLMConfig:
             "credential_version_id": credential_version_id,
             "openai_options": section["openai_options"],
             "image_max_size": section["image_max_size"],
+            "request_timeout_seconds": section.get("request_timeout_seconds", 0),
         },
         name="vlm",
     )
