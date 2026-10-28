@@ -127,6 +127,9 @@ excludes = [
     'torch', 'torchvision', 'transformers', 'tensorboard', 'timm',
     'rapidocr', 'manga_ocr', 'ultralytics', 'litelama', 'fugashi', 'unidic_lite',
     'onnxruntime.quantization', 'onnxruntime.training',
+    # 科学计算/数据分析栈：产品代码与 chromadb 都不需要（chromadb 只用 pandas）
+    # 它们只在开发机被顺手装上，PyInstaller 见库就收，会让产物凭空多出上百 MB
+    'pyarrow', 'scipy', 'matplotlib',
 ]
 
 # ===================== Analysis =====================
