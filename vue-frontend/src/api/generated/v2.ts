@@ -3898,7 +3898,7 @@ export interface components {
         };
         ErrorDetail: {
             /** @enum {string} */
-            code: "revision_conflict" | "idempotency_conflict" | "operation_active" | "invalid_job_transition" | "chapter_write_pending" | "chapter_locked" | "import_in_progress" | "session_busy" | "validation_error" | "not_found" | "integration_disabled" | "loopback_required" | "invalid_extension_token" | "unsupported_image" | "asset_quota_exceeded" | "session_conflict" | "dom_agent_unavailable" | "dom_agent_failed" | "browser_http_error" | "browser_internal_error" | "invalid_result_capability" | "result_not_found";
+            code: "revision_conflict" | "idempotency_conflict" | "operation_active" | "invalid_job_transition" | "chapter_write_pending" | "chapter_locked" | "import_in_progress" | "session_busy" | "validation_error" | "not_found" | "integration_disabled" | "loopback_required" | "invalid_extension_token" | "unsupported_image" | "asset_quota_exceeded" | "session_conflict" | "dom_agent_unavailable" | "dom_agent_failed" | "browser_http_error" | "browser_internal_error" | "invalid_result_capability" | "result_not_found" | "admission" | "admin_required" | "asset_missing" | "auth_rate_limited" | "authentication_required" | "credential_lease_unavailable" | "conflict" | "csrf_failed" | "download_failed" | "draft_conflict" | "draft_locked" | "forbidden" | "import_crashed" | "import_source_unavailable" | "integrity_check_failed" | "invalid_host" | "job_conflict" | "provider_unavailable" | "resource_locked" | "scan_failed" | "storage_upgrade_pending" | "venera_data_dir_unavailable" | "venera_library_unreadable";
             message: string;
             retryable?: boolean;
             fieldErrors?: {

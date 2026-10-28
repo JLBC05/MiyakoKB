@@ -6496,6 +6496,33 @@ components:
             - browser_internal_error
             - invalid_result_capability
             - result_not_found
+            # ---- 以下 22 个为后端实际在用、原先漏登记的业务 code ----
+            # 由 tests_backend/v2/test_openapi_contract.py 的
+            # test_every_backend_error_code_is_declared_in_the_schema 守护。
+            - admission
+            - admin_required
+            - asset_missing
+            - auth_rate_limited
+            - authentication_required
+            - credential_lease_unavailable
+            # 前置条件不满足（状态不对，重试无用）；与 revision_conflict（乐观锁冲突）区分。
+            - conflict
+            - csrf_failed
+            - download_failed
+            - draft_conflict
+            - draft_locked
+            - forbidden
+            - import_crashed
+            - import_source_unavailable
+            - integrity_check_failed
+            - invalid_host
+            - job_conflict
+            - provider_unavailable
+            - resource_locked
+            - scan_failed
+            - storage_upgrade_pending
+            - venera_data_dir_unavailable
+            - venera_library_unreadable
         message:
           type: string
         retryable:

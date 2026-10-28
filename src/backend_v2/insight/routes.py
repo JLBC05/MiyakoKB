@@ -57,6 +57,7 @@ from src.backend_v2.insight.exports import (
     InsightExportCommandService,
     build_current_export,
 )
+from src.backend_v2.insight.errors import InsightPrecondition
 from src.backend_v2.insight.repository import (
     InsightConflict,
     InsightLocked,
@@ -134,6 +135,12 @@ def create_insight_blueprint(
     @blueprint.errorhandler(InsightLocked)
     def locked(error: InsightLocked):
         return _error("resource_locked", str(error), 423)
+
+    @blueprint.errorhandler(InsightPrecondition)
+    def precondition(error: Exception):
+        # 前置条件不满足（状态不对，重试无用）：与乐观锁冲突区分开，
+        # 让前端提示「请先完成 X」而不是刷新快照后无限重试。
+        return _error("conflict", str(error), 409)
 
     @blueprint.errorhandler(InsightConflict)
     @blueprint.errorhandler(JobConflict)

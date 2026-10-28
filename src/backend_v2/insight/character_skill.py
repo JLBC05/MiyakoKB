@@ -31,6 +31,7 @@ import zipfile
 from sqlalchemy import Engine, func, insert, select, update
 from sqlalchemy.engine import Connection
 
+from src.backend_v2.insight.errors import InsightPrecondition
 from src.backend_v2.insight.provider_runtime import frozen_chat_config, frozen_vlm_config
 from src.backend_v2.insight.repository import InsightConflict, InsightNotFound
 from src.backend_v2.serialization import canonical_json as _json
@@ -214,11 +215,11 @@ class CharacterSkillRepository:
             )
         ).first()
         if row is None or not row[0]:
-            raise InsightConflict("该书还没有实体知识网络，请先完成一次知识库构建")
+            raise InsightPrecondition("该书还没有实体知识网络，请先完成一次知识库构建")
         # stale 表示「产物是旧一轮分析的」，把它当正常证据会把过期实体写进
         # 角色档案；ready / degraded 仍可用（degraded 只是覆盖不全）。
         if str(row[1]) == "stale":
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "实体知识网络已过期（书籍重新分析过），请先重新生成实体知识网络"
             )
         return json.loads(row[0])
@@ -366,7 +367,7 @@ class CharacterSkillRepository:
             .limit(1)
         ).first()
         if row is None:
-            raise InsightConflict("该书还没有已发布的页面分析结果")
+            raise InsightPrecondition("该书还没有已发布的页面分析结果")
         return str(row[0])
 
     def page_evidence(

@@ -294,3 +294,114 @@ def test_v2_api_modules_do_not_declare_handwritten_v2_interfaces() -> None:
         for match in pattern.finditer(path.read_text(encoding="utf-8")):
             declarations.append(f"{path.name}:{match.group(0).strip()}")
     assert declarations == []
+
+
+# 后端会用三种写法抛出业务错误码，三种都要扫，否则会漏登记（历史上就漏了 22 个）。
+_ERROR_CODE_PATTERNS = (
+    re.compile(r'_error\(\s*["\']([a-z0-9_]+)["\']'),
+    re.compile(r'(?<![\w])code\s*=\s*["\']([a-z0-9_]+)["\']'),
+    re.compile(r'["\']code["\']\s*:\s*["\']([a-z0-9_]+)["\']'),
+)
+
+
+def _backend_error_codes() -> dict[str, str]:
+    """扫描 src/backend_v2 下全部 Python 文件，返回 {错误码: 首个出处}。"""
+    codes: dict[str, str] = {}
+    for path in (PROJECT_ROOT / "src" / "backend_v2").rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for pattern in _ERROR_CODE_PATTERNS:
+            for match in pattern.finditer(text):
+                code = match.group(1)
+                if code not in codes:
+                    line = text.count("\n", 0, match.start()) + 1
+                    codes[code] = f"{path.relative_to(PROJECT_ROOT).as_posix()}:{line}"
+    return codes
+
+
+def test_every_backend_error_code_is_declared_in_the_schema() -> None:
+    """任何后端会返回的错误码都必须在 ErrorDetail.code 里登记。
+
+    漏登记会让前端类型收窄失效、客户端分支写不出来；这条测试是唯一守门人，
+    新增 code 忘记登记时会在这里失败并指出出处。
+    """
+    spec = yaml.safe_load(SPEC_PATH.read_text(encoding="utf-8"))
+    declared = set(
+        spec["components"]["schemas"]["ErrorDetail"]["properties"]["code"]["enum"]
+    )
+    used = _backend_error_codes()
+    missing = {code: where for code, where in used.items() if code not in declared}
+    assert missing == {}, (
+        "以下错误码后端在用但未在 openapi ErrorDetail.code 登记：\n"
+        + "\n".join(f"  {code} @ {where}" for code, where in sorted(missing.items()))
+    )
+
+
+def test_error_code_scan_finds_known_codes() -> None:
+    """自检：扫描器本身不能悄悄失效（正则写错会让上一条测试永远通过）。"""
+    used = _backend_error_codes()
+    assert "not_found" in used
+    assert "validation_error" in used
+    assert "revision_conflict" in used
+    assert len(used) >= 25
+
+
+def test_insight_precondition_and_lock_conflict_use_different_codes(
+    tmp_path: Path,
+) -> None:
+    """前置条件不满足与乐观锁冲突必须给前端不同的 code（U-1）。
+
+    两者语义不同：前者重试无用（要先完成某个前置动作），后者重试有用
+    （别人先改了数据）。此前都映射成 ``revision_conflict``，前端只会刷新快照
+    后无限重试。这条测试锁住两个分支的 code 与状态码。
+    """
+    from src.backend_v2.insight.errors import InsightPrecondition
+    from src.backend_v2.insight.repository import InsightConflict, InsightLocked
+
+    root = tmp_path / "data-v2"
+    root.mkdir()
+    engine = create_sqlite_engine(root / "saber.sqlite3")
+    metadata.create_all(engine)
+    seed_system_records(engine)
+    try:
+        app = create_api_app(
+            ApiSettings(
+                data_root=root,
+                identity=RuntimeIdentity(
+                    epoch_id="test-api", epoch_token="test-token", test_mode=True
+                ),
+                engine=engine,
+            )
+        )
+        blueprint = app.blueprints[
+            next(name for name in app.blueprints if name.startswith("insight_v2"))
+        ]
+        handlers = blueprint.error_handler_spec[None][None]
+
+        def call(exc: Exception) -> tuple[int, str]:
+            with app.test_request_context("/probe"):
+                response = handlers[type(exc)](exc)
+            status = response[1] if isinstance(response, tuple) else response.status_code
+            return status, response[0].get_json()["error"]["code"]
+
+        assert call(InsightPrecondition("该书还没有实体知识网络，请先完成一次知识库构建")) == (
+            409,
+            "conflict",
+        )
+        assert call(InsightConflict("revision mismatch")) == (409, "revision_conflict")
+        assert call(InsightLocked("locked")) == (423, "resource_locked")
+        # 分层不是重命名：前置条件仍继承父类，旧 except InsightConflict 照样接得住。
+        assert isinstance(InsightPrecondition("x"), InsightConflict)
+    finally:
+        engine.dispose()
+
+
+def test_character_skill_reports_missing_alignment_as_a_precondition() -> None:
+    """真实调用点：前置条件类错误的调用点必须抛 InsightPrecondition，不能回退成纯冲突。"""
+    source = (
+        PROJECT_ROOT / "src" / "backend_v2" / "insight" / "character_skill.py"
+    ).read_text(encoding="utf-8")
+    assert 'raise InsightPrecondition("该书还没有实体知识网络' in source
+    assert 'raise InsightPrecondition("该书还没有已发布的页面分析结果")' in source
+    assert "from src.backend_v2.insight.errors import InsightPrecondition" in source
+
+
