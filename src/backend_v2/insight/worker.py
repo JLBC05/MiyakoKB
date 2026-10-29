@@ -941,6 +941,9 @@ def _analysis_batch_grouping(
         return "chapter"
     if scope in {"incremental", "page"}:
         return "contiguous"
+    if scope == "derived":
+        # 派生重建不产生页分析批次，按整书分组即可（保留现有架构语义）
+        return "global"
     if scope != "full":
         raise JobConflict("frozen Insight scope is invalid")
     layers = analysis_config.get("layers")

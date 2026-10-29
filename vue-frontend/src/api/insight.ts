@@ -100,7 +100,7 @@ export interface PageData {
 }
 
 export interface StartAnalysisOptions {
-  mode?: 'full' | 'incremental' | 'chapters' | 'pages'
+  mode?: 'full' | 'incremental' | 'chapters' | 'pages' | 'derived'
   chapters?: string[]
   pages?: number[]
 }
@@ -353,6 +353,14 @@ async function pageForNumber(
   if (!Number.isInteger(pageNum) || pageNum < 1) return undefined
   const response = await getInsightPagesPage(bookId, { cursor: pageNum - 1, limit: 1 })
   return response.items.find(page => page.displayPageNumber === pageNum)
+}
+
+/**
+ * 重建知识库：复用已有页分析结果，只重跑汇总层、概览、时间线、实体对齐与向量。
+ * 不会重新调用 VLM 看图，因此比“全书分析”快得多，适合改了分析架构后刷新产物。
+ */
+export function rebuildKnowledgeBase(bookId: string): Promise<AnalysisJobSubmission> {
+  return startAnalysis(bookId, { mode: 'derived' })
 }
 
 export async function startAnalysis(

@@ -17,7 +17,7 @@ import BookDeleteConfirmContent from '@/components/bookshelf/book-detail/BookDel
 import { useBookshelfStore } from '@/stores/bookshelfStore'
 import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import { getBookDetail } from '@/api/bookshelf'
-import { getInsightChapters, startAnalysis } from '@/api/insight'
+import { getInsightChapters, rebuildKnowledgeBase, startAnalysis } from '@/api/insight'
 import { showToast } from '@/utils/toast'
 import type { BookData, ChapterData } from '@/types'
 
@@ -36,6 +36,8 @@ const loadError = ref<string | null>(null)
 const selectedChapterIds = ref<Set<string>>(new Set())
 const analyzedChapterIds = ref<Set<string>>(new Set())
 const isBuildingSelected = ref(false)
+const showRebuildConfirm = ref(false)
+const isRebuilding = ref(false)
 const analyzedChaptersCount = computed(() => analyzedChapterIds.value.size)
 
 let isMounted = false
@@ -126,6 +128,22 @@ async function handleBuildSelectedChapters(): Promise<void> {
     showToast(err instanceof Error ? err.message : '提交构建任务失败', 'error')
   } finally {
     isBuildingSelected.value = false
+  }
+}
+
+async function handleRebuildKnowledge(): Promise<void> {
+  if (!bookId.value) return
+  isRebuilding.value = true
+  try {
+    const res = await rebuildKnowledgeBase(bookId.value)
+    taskCenterStore.trackJob(res.jobId)
+    taskCenterStore.open()
+    showRebuildConfirm.value = false
+    showToast('已提交知识库重建任务（不重跑页分析）', 'success')
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '提交重建任务失败', 'error')
+  } finally {
+    isRebuilding.value = false
   }
 }
 
@@ -320,6 +338,15 @@ watch(bookId, newId => {
               </UiButton>
 
               <UiButton
+                variant="secondary"
+                size="md"
+                @click="showRebuildConfirm = true"
+              >
+                <UiIcon name="refresh" size="18" />
+                <span>重建知识库（不重跑页分析）</span>
+              </UiButton>
+
+              <UiButton
                 variant="ghost"
                 size="md"
                 @click="deleteTarget = 'book'; showDeleteConfirm = true"
@@ -375,6 +402,26 @@ watch(bookId, newId => {
       </template>
     </BaseModal>
 
+    <!-- 重建知识库确认弹窗 -->
+    <BaseModal
+      v-model="showRebuildConfirm"
+      title="重建知识库"
+      size="small"
+      :close-on-overlay="true"
+      :close-on-esc="true"
+    >
+      <div class="rebuild-confirm-body">
+        <p>将复用已发布的页面分析结果，只重跑汇总层、故事概览、时间线、实体对齐与向量索引，不会重新调用视觉模型逐页看图。</p>
+        <p>适用于修改了分析架构或预设后刷新产物；耗时通常是全书分析的十分之一以内，但页面覆盖率取决于已有分析结果，覆盖不足的产物会显示为「部分可用」。</p>
+      </div>
+      <template #footer>
+        <ProductActionRow aria-label="重建知识库操作" variant="dialog">
+          <UiButton type="button" variant="secondary" @click="showRebuildConfirm = false">取消</UiButton>
+          <UiButton type="button" variant="primary" :loading="isRebuilding" @click="handleRebuildKnowledge">开始重建</UiButton>
+        </ProductActionRow>
+      </template>
+    </BaseModal>
+
     <!-- 删除确认弹窗 -->
     <BaseModal
       v-model="showDeleteConfirm"
@@ -398,6 +445,15 @@ watch(bookId, newId => {
 </template>
 
 <style scoped>
+.rebuild-confirm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
 .book-detail-page {
   --book-detail-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.03);
   --book-detail-shadow-cover: 0 4px 12px rgba(0, 0, 0, 0.08);

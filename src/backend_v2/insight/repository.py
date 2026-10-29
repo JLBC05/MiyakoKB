@@ -53,7 +53,9 @@ from src.backend_v2.storage.schema import (
 )
 
 
-ANALYSIS_RUN_SCOPES = frozenset({"full", "incremental", "chapter", "page"})
+ANALYSIS_RUN_SCOPES = frozenset(
+    {"full", "incremental", "chapter", "page", "derived"}
+)
 ANALYSIS_RUN_STATUSES = frozenset(
     {"staging", "completed", "completed_with_errors", "failed", "cancelled"}
 )

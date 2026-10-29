@@ -5906,7 +5906,7 @@ class InsightDerivedWorkerService:
             else None
         )
         scope = _required_string(config.get("scope"), "Insight scope")
-        if scope not in {"full", "chapter", "page", "incremental"}:
+        if scope not in {"full", "chapter", "page", "incremental", "derived"}:
             raise JobConflict("frozen Insight scope is invalid")
         if layer_match is not None and run_id is None:
             raise JobConflict("summary layer step is missing its analysis run")

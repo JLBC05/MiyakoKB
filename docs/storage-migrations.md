@@ -83,3 +83,11 @@ python .github/scripts/probe_package.py dist/Saber-Translator/Saber-Translator.e
 Windows 可能锁定正在使用的字体文件；如果手动替换、移动或删除时提示文件被占用，先停止程序再操作。新增文件不受此限制。
 
 3.5.0 升级时保留所有字体 ID，将旧资源字体和上传字体复制到相应目录。旧上传字体使用“显示名-ID.扩展名”避免名称冲突，列表仍显示原来的名称。仅在没有其他引用时删除旧字体的对象资产，避免留下双份存储和重复空间统计。字体上传/删除的旧幂等响应会清除，业务代码只返回新的 `scope` 与 `isDefault` 字段。
+
+## 3.5.5 全书分析 scope 扩展（derived）
+
+`analysis_runs.scope` 的 CHECK 约束增加取值 `derived`，其余结构不变。该 scope 表示「只重算全书后处理、不重跑页分析」：任务不创建 `insight_analyze_batch` 项，全部页复用已有已发布页结果（校验 `source_checksum` 一致），随后照常排队 `insight_validate_run`、三层汇总、上下文整理、无剧透概览、剧情总结、时间线、实体对齐与向量重建。
+
+用途是把旧版本生成的派生数据（尤其是跨章节的事件区间）按当前架构重算，避免重跑视觉模型。若目标书没有任何可复用页结果，任务在创建阶段即返回前置条件错误 `conflict`，不会入队空跑。
+
+版本说明：`3.5.4 → 3.5.5` 只有这一次 CHECK 放宽，由 `src/storage_migrator/v3_5_5.py` 重建 `analysis_runs` 表完成，数据行数在转换后必须保持一致，并执行 `PRAGMA foreign_key_check`。

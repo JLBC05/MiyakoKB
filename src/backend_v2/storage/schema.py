@@ -1115,7 +1115,7 @@ analysis_runs = Table(
     Column("published_at", DateTime(timezone=True)),
     *_timestamps(),
     CheckConstraint(
-        "scope IN ('full','incremental','chapter','page')",
+        "scope IN ('full','incremental','chapter','page','derived')",
         name="scope_values",
     ),
     CheckConstraint(

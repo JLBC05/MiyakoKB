@@ -12,6 +12,7 @@ from sqlalchemy import Engine, select, update
 from sqlalchemy.engine import Connection
 
 from src.backend_v2.auth.ownership import effective_owner_id
+from src.backend_v2.insight.errors import InsightPrecondition
 from src.backend_v2.insight.repository import (
     ANALYSIS_RUN_SCOPES,
     InsightConflict,
@@ -113,15 +114,23 @@ class InsightAnalysisCommandService:
         if replay is not None:
             _required_string(replay.get("runId"), "Insight replay runId")
             return replay
-        book, targets = self._resolve_targets(
-            book_id=book_id,
-            scope=scope,
-            chapter_ids=normalized["chapterIds"],
-            page_ids=normalized["pageIds"],
-        )
-        analysis_targets = targets
-        with self.engine.connect() as connection:
-            targets, reused = self._reuse_book_results(connection, book_id, targets, scope)
+        if scope == "derived":
+            # 派生重建：页分析结果一律复用（不调 VLM 看图），只重跑全书后处理。
+            with self.engine.connect() as connection:
+                book, targets, reused = self._derived_targets(connection, book_id)
+            analysis_targets: list[FrozenTarget] = []
+        else:
+            book, targets = self._resolve_targets(
+                book_id=book_id,
+                scope=scope,
+                chapter_ids=normalized["chapterIds"],
+                page_ids=normalized["pageIds"],
+            )
+            analysis_targets = targets
+            with self.engine.connect() as connection:
+                targets, reused = self._reuse_book_results(
+                    connection, book_id, targets, scope
+                )
         run_id = str(uuid.uuid4())
         config = self.settings.resolve_insight(
             book_id=book_id,
@@ -185,16 +194,23 @@ class InsightAnalysisCommandService:
 
         def assert_targets(connection, _batch_id: str) -> None:
             try:
-                current_book, current_targets = self._resolve_targets_in_connection(
-                    connection,
-                    book_id=book_id,
-                    scope=scope,
-                    chapter_ids=normalized["chapterIds"],
-                    page_ids=normalized["pageIds"],
-                )
-                current_targets, current_reused = self._reuse_book_results(
-                    connection, book_id, current_targets, scope,
-                )
+                if scope == "derived":
+                    (
+                        current_book,
+                        current_targets,
+                        current_reused,
+                    ) = self._derived_targets(connection, book_id)
+                else:
+                    current_book, current_targets = self._resolve_targets_in_connection(
+                        connection,
+                        book_id=book_id,
+                        scope=scope,
+                        chapter_ids=normalized["chapterIds"],
+                        page_ids=normalized["pageIds"],
+                    )
+                    current_targets, current_reused = self._reuse_book_results(
+                        connection, book_id, current_targets, scope,
+                    )
             except ValueError as exc:
                 raise InsightConflict(
                     "Insight analysis targets changed before job admission"
@@ -246,6 +262,64 @@ class InsightAnalysisCommandService:
             transaction_hook=initialize_run,
         )
         return response
+
+    @staticmethod
+    def _derived_targets(
+        connection: Connection,
+        book_id: str,
+    ) -> tuple[Mapping[str, Any], list[FrozenTarget], list[dict[str, Any]]]:
+        """Reuse every published page result so only the derived stages re-run.
+
+        页分析结果按 ``source_checksum`` 严格校验：没有已发布结果、或源图已变（校验
+        值不一致）的页不进本次 run（覆盖不足会让产物状态变成 ``degraded``，前端会
+        显示覆盖率），但绝不悄悄调用 VLM 重新看图。
+        """
+        book, all_targets = (
+            InsightAnalysisCommandService._resolve_targets_in_connection(
+                connection,
+                book_id=book_id,
+                scope="full",
+                chapter_ids=(),
+                page_ids=(),
+            )
+        )
+        active = {
+            row["page_id_snapshot"]: row
+            for row in connection.execute(
+                select(analysis_page_results)
+                .join(
+                    analysis_heads,
+                    analysis_heads.c.active_result_id == analysis_page_results.c.id,
+                )
+                .where(analysis_heads.c.book_id == book_id)
+            ).mappings()
+        }
+        targets: list[FrozenTarget] = []
+        copies: list[dict[str, Any]] = []
+        for target in all_targets:
+            result = active.get(target.page_id)
+            if result is None or result["source_checksum"] != target.source_checksum:
+                continue
+            payload = json.loads(result["payload_json"])
+            payload.update(
+                source_asset_id=target.source_asset_id,
+                page_number_snapshot=target.page_number,
+            )
+            copies.append(
+                {
+                    "page_id": target.page_id,
+                    "source_asset_id": target.source_asset_id,
+                    "source_checksum": target.source_checksum,
+                    "page_number": target.page_number,
+                    "payload": payload,
+                }
+            )
+            targets.append(target)
+        if not targets:
+            raise InsightPrecondition(
+                "该书还没有任何可复用的页面分析结果，请先完成一次全书分析"
+            )
+        return book, targets, copies
 
     def _reuse_book_results(
         self, connection: Connection, book_id: str,
@@ -433,14 +507,14 @@ def normalize_analysis_command(command: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("bookId is required")
     scope = command.get("scope")
     if scope not in ANALYSIS_RUN_SCOPES:
-        raise ValueError("scope must be full, incremental, chapter, or page")
+        raise ValueError("scope must be full, incremental, chapter, page, or derived")
     chapter_ids = _ids(command, "chapterIds")
     page_ids = _ids(command, "pageIds")
     if scope == "chapter" and not chapter_ids:
         raise ValueError("chapter scope requires chapterIds")
     if scope == "page" and not page_ids:
         raise ValueError("page scope requires pageIds")
-    if scope in {"full", "incremental"} and (chapter_ids or page_ids):
+    if scope in {"full", "incremental", "derived"} and (chapter_ids or page_ids):
         raise ValueError(f"{scope} scope does not accept chapter/page selectors")
     if scope == "chapter" and page_ids:
         raise ValueError("chapter scope does not accept page selectors")
@@ -489,6 +563,7 @@ def _scope_label(scope: str) -> str:
         "incremental": "增量分析",
         "chapter": "章节分析",
         "page": "页面分析",
+        "derived": "重建知识库（不重跑页分析）",
     }[scope]
 
 

@@ -67,7 +67,7 @@ export function createInsightAnalysisJob(command: {
   bookId: string
   chapterIds?: string[]
   pageIds?: string[]
-  scope: 'chapter' | 'full' | 'incremental' | 'page'
+  scope: 'chapter' | 'full' | 'incremental' | 'page' | 'derived'
 }): Promise<V2InsightAnalysisJobAccepted> {
   return apiClient.post(`${ROOT}/analysis-jobs`, command, {
     headers: { 'Idempotency-Key': newIdempotencyKey() },

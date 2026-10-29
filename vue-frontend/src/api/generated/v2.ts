@@ -3245,7 +3245,7 @@ export interface components {
             jobId: components["schemas"]["Uuid"] | null;
             bookId: components["schemas"]["Uuid"];
             /** @enum {string} */
-            scope: "full" | "incremental" | "chapter" | "page";
+            scope: "full" | "incremental" | "chapter" | "page" | "derived";
             /** @enum {string} */
             status: "staging" | "completed" | "completed_with_errors" | "failed" | "cancelled";
             targetCount: number;
@@ -3261,7 +3261,7 @@ export interface components {
         InsightAnalysisJobCommand: {
             bookId: components["schemas"]["Uuid"];
             /** @enum {string} */
-            scope: "full" | "incremental" | "chapter" | "page";
+            scope: "full" | "incremental" | "chapter" | "page" | "derived";
             chapterIds?: components["schemas"]["Uuid"][];
             pageIds?: components["schemas"]["Uuid"][];
         };
