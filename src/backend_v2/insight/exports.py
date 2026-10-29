@@ -12,7 +12,7 @@ import zipfile
 from sqlalchemy import Engine, insert, select
 from sqlalchemy.engine import Connection
 
-from src.backend_v2.insight.errors import InsightPrecondition
+from src.backend_v2.insight.errors import InsightInvariant, InsightPrecondition
 from src.backend_v2.insight.repository import (
     InsightConflict,
     InsightNotFound,
@@ -61,17 +61,17 @@ def _json(value: object) -> str:
 
 def _load_object(value: object, field: str) -> dict[str, Any]:
     if not isinstance(value, str):
-        raise InsightConflict(
+        raise InsightInvariant(
             f"stored {field} is missing"
         )
     try:
         parsed = json.loads(value)
     except (TypeError, ValueError) as exc:
-        raise InsightConflict(
+        raise InsightInvariant(
             f"stored {field} is invalid"
         ) from exc
     if not isinstance(parsed, Mapping):
-        raise InsightConflict(
+        raise InsightInvariant(
             f"stored {field} must be an object"
         )
     return dict(parsed)
@@ -491,7 +491,7 @@ class InsightExportWorkerService:
             or _required_string(run["scope"], "export source run scope")
             != "full"
         ):
-            raise InsightConflict("frozen Insight run is not a published full run")
+            raise InsightInvariant("frozen Insight run is not a published full run")
 
         pages_by_id: dict[str, Mapping[str, Any]] = {}
         for row in page_rows:
@@ -593,7 +593,7 @@ class InsightExportWorkerService:
                 "export layer status",
             )
             if layer_status not in {"published", "stale"}:
-                raise InsightConflict("frozen export layer is not published")
+                raise InsightInvariant("frozen export layer is not published")
             page_range = _load_object(
                 row["page_range_snapshot_json"],
                 "export layer page range",
@@ -656,7 +656,7 @@ class InsightExportWorkerService:
             seen_artifact_keys.add(key)
             status = _required_string(row["status"], "export artifact status")
             if status not in {"ready", "degraded", "stale"}:
-                raise InsightConflict("frozen export artifact is not published")
+                raise InsightInvariant("frozen export artifact is not published")
             payload = validate_artifact_payload(
                 kind=kind,
                 template=template,
@@ -704,7 +704,7 @@ class InsightExportWorkerService:
                 "export timeline status",
             )
             if timeline_status not in {"ready", "degraded", "stale"}:
-                raise InsightConflict("frozen export timeline is not published")
+                raise InsightInvariant("frozen export timeline is not published")
             _required_sha256(
                 timeline_row["dependency_fingerprint"],
                 "export timeline dependency fingerprint",
@@ -730,7 +730,7 @@ class InsightExportWorkerService:
                     "export timeline event payload",
                 )
                 if "eventId" in payload:
-                    raise InsightConflict("stored timeline event contains eventId")
+                    raise InsightInvariant("stored timeline event contains eventId")
                 event_payloads.append(payload)
             character_payloads: list[dict[str, Any]] = []
             seen_character_names: set[str] = set()

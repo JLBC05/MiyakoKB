@@ -290,6 +290,39 @@ def create_api_app(settings: ApiSettings) -> Flask:
             ), 404
         return error
 
+    @app.errorhandler(Exception)
+    def internal_error(error: Exception):
+        """任何未捕获异常都必须回 JSON，不能让 Flask 吐 HTML 500。
+
+        背景：此前只有 ``>=500`` 的日志埋点（见 ``after_request``），没有统一
+        的 500 响应体，前端 ``createApiError`` 拿到的是 HTML，于是被当成
+        「开发代理中断」，用户看到的提示与真实原因完全无关。
+
+        ``HTTPException``（404/405/413/…）已有各自的语义，原样放行，不要
+        改写成 500。
+        """
+        from werkzeug.exceptions import HTTPException
+
+        if isinstance(error, HTTPException):
+            return error
+        request_id = (request.headers.get("X-Request-Id") or "").strip() or secrets.token_hex(6)
+        LOGGER.exception(
+            "未处理的服务端异常 [%s] %s %s", request_id, request.method, request.path
+        )
+        user_log(
+            "error",
+            f"服务端内部错误｜{request.method} {request.path}｜requestId={request_id}",
+        )
+        # 本地/内部 profile 带上 requestId 便于对照日志；公网 profile 只回通用文案。
+        if getattr(settings.profile, "name", "local") == "public":
+            message = "服务端内部错误，请稍后重试"
+        else:
+            message = f"服务端内部错误，请稍后重试（requestId={request_id}）"
+        response = jsonify({"error": {"code": "internal_error", "message": message}})
+        response.status_code = 500
+        response.headers["X-Request-Id"] = request_id
+        return response
+
     if settings.profile.name == "public":
         validate_profile_bind_host(settings.profile, settings.host)
         if settings.public_host is None:

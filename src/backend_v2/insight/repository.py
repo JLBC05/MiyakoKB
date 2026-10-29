@@ -85,6 +85,19 @@ class InsightLocked(InsightConflict):
     pass
 
 
+class InsightInvariant(InsightConflict):
+    """服务端内部不变量被破坏（数据/算法处于不可能的状态）。
+
+    定义放在这里而不是 ``insight/errors.py`` 是因为 ``errors.py`` 会 import
+    本模块的 ``InsightConflict``；若反向 import 就成环。``errors.py`` 负责
+    重新导出并承载分层语义的说明。
+
+    继承 ``InsightConflict`` 只是兼容阶梯：路由层为它注册更具体的处理器后
+    映射 ``500 internal_error``，而既有的 ``except InsightConflict`` /
+    ``pytest.raises(InsightConflict)`` 继续接得住。
+    """
+
+
 def _idempotency_replay(
     connection: Connection,
     *,
@@ -165,11 +178,11 @@ def _record_idempotency(
 
 def _load_json(value: object, field: str) -> object:
     if not isinstance(value, str):
-        raise InsightConflict(f"stored {field} is missing")
+        raise InsightInvariant(f"stored {field} is missing")
     try:
         return json.loads(value)
     except (TypeError, ValueError) as exc:
-        raise InsightConflict(
+        raise InsightInvariant(
             f"stored {field} is invalid"
         ) from exc
 
@@ -177,14 +190,14 @@ def _load_json(value: object, field: str) -> object:
 def _json_object(value: object, field: str) -> dict[str, Any]:
     parsed = _load_json(value, field)
     if not isinstance(parsed, Mapping):
-        raise InsightConflict(f"stored {field} must be an object")
+        raise InsightInvariant(f"stored {field} must be an object")
     return dict(parsed)
 
 
 def _json_array(value: object, field: str) -> list[Any]:
     parsed = _load_json(value, field)
     if not isinstance(parsed, list):
-        raise InsightConflict(f"stored {field} must be an array")
+        raise InsightInvariant(f"stored {field} must be an array")
     return parsed
 
 
@@ -196,7 +209,7 @@ def _optional_json_object(value: object, field: str) -> dict[str, Any] | None:
 
 def _required_string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value:
-        raise InsightConflict(
+        raise InsightInvariant(
             f"stored {field} must be a non-empty string"
         )
     return value
@@ -210,7 +223,7 @@ def _optional_string(value: object, field: str) -> str | None:
 
 def _required_integer(value: object, field: str, *, minimum: int = 0) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise InsightConflict(
+        raise InsightInvariant(
             f"stored {field} must be an integer of at least {minimum}"
         )
     return value
@@ -218,7 +231,7 @@ def _required_integer(value: object, field: str, *, minimum: int = 0) -> int:
 
 def _required_datetime(value: object, field: str) -> datetime:
     if not isinstance(value, datetime):
-        raise InsightConflict(
+        raise InsightInvariant(
             f"stored {field} must be a timestamp"
         )
     return value
@@ -233,7 +246,7 @@ def _optional_datetime(value: object, field: str) -> datetime | None:
 def _required_sha256(value: object, field: str) -> str:
     text = _required_string(value, field)
     if len(text) != 64 or any(character not in "0123456789abcdef" for character in text):
-        raise InsightConflict(
+        raise InsightInvariant(
             f"stored {field} must be a lowercase SHA-256 digest"
         )
     return text
@@ -241,7 +254,7 @@ def _required_sha256(value: object, field: str) -> str:
 
 def _required_boolean(value: object, field: str) -> bool:
     if not isinstance(value, bool):
-        raise InsightConflict(
+        raise InsightInvariant(
             f"stored {field} must be a boolean"
         )
     return value
@@ -282,7 +295,7 @@ def _page_analysis(
         else:
             payload = validate_persisted_page_analysis(parsed)
     except InvalidPageAnalysis as exc:
-        raise InsightConflict(
+        raise InsightInvariant(
             f"stored {field} is invalid"
         ) from exc
     expected = {
@@ -293,7 +306,7 @@ def _page_analysis(
     }
     for key, expected_value in expected.items():
         if expected_value is not None and payload[key] != expected_value:
-            raise InsightConflict(
+            raise InsightInvariant(
                 f"stored {field} identity does not match its row"
             )
     return payload
@@ -371,7 +384,7 @@ def _validate_note_metadata(
 def _stored_note_metadata(value: object) -> dict[str, str | None]:
     metadata = _json_object(value, "note metadata")
     if set(metadata) != {"question", "comment"}:
-        raise InsightConflict(
+        raise InsightInvariant(
             "stored note metadata fields are invalid"
         )
     normalized: dict[str, str | None] = {}
@@ -382,7 +395,7 @@ def _stored_note_metadata(value: object) -> dict[str, str | None]:
             or not raw
             or raw != raw.strip()
         ):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored note metadata is invalid"
             )
         normalized[field] = raw
@@ -700,12 +713,12 @@ class InsightRepository:
             "analysis run target page id snapshot",
         )
         if stored_run_id != run_id or stored_page_id != page_id:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored analysis run target identity is invalid"
             )
         status = _required_string(row["status"], "analysis run target status")
         if status not in ANALYSIS_TARGET_STATUSES:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored analysis run target status is invalid"
             )
         return {
@@ -848,7 +861,7 @@ class InsightRepository:
         group = cls._batch_group_value(row, grouping)
         first_ordinal = group_starts.get(group)
         if first_ordinal is None or ordinal < first_ordinal:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored analysis run batch grouping is invalid"
             )
         return (
@@ -1238,7 +1251,7 @@ class InsightRepository:
                 f"analysis run target {index} status",
             )
             if status not in ANALYSIS_TARGET_STATUSES:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis run target status is invalid"
                 )
             ordinal = _required_integer(
@@ -1247,7 +1260,7 @@ class InsightRepository:
                 minimum=1,
             )
             if ordinal != index:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis run target order is invalid"
                 )
             target_page_id = _required_string(
@@ -1255,7 +1268,7 @@ class InsightRepository:
                 f"analysis run target {index} page id snapshot",
             )
             if target_page_id in seen_target_page_ids:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis run target pages are duplicated"
                 )
             seen_target_page_ids.add(target_page_id)
@@ -1292,7 +1305,7 @@ class InsightRepository:
                 "analysis run target page id snapshot",
             )
             if current_page_id is not None and current_page_id != snapshot_page_id:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis target current page is invalid"
                 )
             if current_page_id is not None:
@@ -1377,7 +1390,7 @@ class InsightRepository:
             ):
             status = _required_string(status_value, "analysis run target count status")
             if status not in ANALYSIS_TARGET_STATUSES:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis run target status is invalid"
                 )
             counts[status] = _required_integer(
@@ -1406,7 +1419,7 @@ class InsightRepository:
             raise InsightNotFound("analysis run not found")
         scope = _required_string(run["scope"], "analysis run scope")
         if scope not in ANALYSIS_RUN_SCOPES:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored analysis run scope is invalid"
             )
         run_status = _required_string(run["status"], "analysis run status")
@@ -1426,7 +1439,7 @@ class InsightRepository:
             run["target_count"],
             "analysis run target count",
         ) != len(refreshed):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored analysis run target count is inconsistent"
             )
         successful: list[Mapping[str, Any]] = []
@@ -1434,7 +1447,7 @@ class InsightRepository:
         for target in refreshed:
             status = _required_string(target["status"], "analysis run target status")
             if status not in ANALYSIS_TARGET_STATUSES:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis run target status is invalid"
                 )
             page_id = _required_string(
@@ -1465,18 +1478,18 @@ class InsightRepository:
         config = _json_object(run["config_json"], "analysis run config")
         analysis_config = config.get("analysis")
         if not isinstance(analysis_config, Mapping):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored analysis run config is invalid"
             )
         layers = analysis_config.get("layers")
         if not isinstance(layers, list):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored analysis layer config is invalid"
             )
         expected_layers: dict[int, str] = {}
         for index, layer in enumerate(layers, start=1):
             if not isinstance(layer, Mapping):
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis layer config is invalid"
                 )
             layer_index = _required_integer(
@@ -1484,7 +1497,7 @@ class InsightRepository:
                 f"analysis layer config {index} index",
             )
             if layer_index != index - 1:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis layer order is invalid"
                 )
             layer_name = _required_string(
@@ -1492,11 +1505,11 @@ class InsightRepository:
                 f"analysis layer config {index} name",
             )
             if not layer_name.strip():
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis layer name is blank"
                 )
             if layer_index in expected_layers:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis layer indices are duplicated"
                 )
             expected_layers[layer_index] = layer_name
@@ -2038,7 +2051,7 @@ class InsightRepository:
                 "analysis run target status",
             )
             if status not in ANALYSIS_TARGET_STATUSES:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis run target status is invalid"
                 )
             if status == "completed":
@@ -2078,12 +2091,12 @@ class InsightRepository:
             raise InsightNotFound("analysis run not found")
         scope = _required_string(run["scope"], "analysis run scope")
         if scope not in ANALYSIS_RUN_SCOPES:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored analysis run scope is invalid"
             )
         status = _required_string(run["status"], "analysis run status")
         if status not in ANALYSIS_RUN_STATUSES:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored analysis run status is invalid"
             )
         missing_page_ids = _json_array(
@@ -2094,7 +2107,7 @@ class InsightRepository:
             not isinstance(page_id, str) or not page_id
             for page_id in missing_page_ids
         ) or len(set(missing_page_ids)) != len(missing_page_ids):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored analysis run missing page ids are invalid"
             )
         target_items = []
@@ -2108,7 +2121,7 @@ class InsightRepository:
                 minimum=1,
             )
             if ordinal != index:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis run target order is invalid"
                 )
             target_status = _required_string(
@@ -2116,7 +2129,7 @@ class InsightRepository:
                 f"analysis run target {index} status",
             )
             if target_status not in ANALYSIS_TARGET_STATUSES:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis run target status is invalid"
                 )
             error = _optional_json_object(
@@ -2132,12 +2145,12 @@ class InsightRepository:
                         for field in ("code", "message")
                     )
                 ):
-                    raise InsightConflict(
+                    raise InsightInvariant(
                         "stored analysis target error is invalid"
                     )
                 failed_target_count += 1
             elif error is not None:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis target error is inconsistent"
                 )
             if target_status == "completed":
@@ -2147,7 +2160,7 @@ class InsightRepository:
                 f"analysis run target {index} page id",
             )
             if target_page_id in seen_target_page_ids:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis run target pages are duplicated"
                 )
             seen_target_page_ids.add(target_page_id)
@@ -2185,7 +2198,7 @@ class InsightRepository:
             or success_count != completed_count
             or stored_failed_count != expected_failed_count
         ):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored analysis run counts are inconsistent"
             )
         if status != "staging":
@@ -2195,7 +2208,7 @@ class InsightRepository:
                 if item["status"] != "completed"
             }
             if set(missing_page_ids) != expected_missing:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis run missing pages are inconsistent"
                 )
         return {
@@ -2287,7 +2300,7 @@ class InsightRepository:
         for raw_book_id, raw_count in page_count_rows:
             count_book_id = _required_string(raw_book_id, "page count book id")
             if count_book_id in page_counts:
-                raise InsightConflict("stored page counts are duplicated")
+                raise InsightInvariant("stored page counts are duplicated")
             page_counts[count_book_id] = _required_integer(
                 raw_count,
                 "page count",
@@ -2299,7 +2312,7 @@ class InsightRepository:
                 "analysis head count book id",
             )
             if count_book_id in head_counts:
-                raise InsightConflict("stored analysis head counts are duplicated")
+                raise InsightInvariant("stored analysis head counts are duplicated")
             head_counts[count_book_id] = _required_integer(
                 raw_count,
                 "analysis head count",
@@ -2311,13 +2324,13 @@ class InsightRepository:
                 "active analysis run book id",
             )
             if active_book_id in active_runs:
-                raise InsightConflict("stored active analysis runs are duplicated")
+                raise InsightInvariant("stored active analysis runs are duplicated")
             active_status = _required_string(
                 row["status"],
                 "active analysis run status",
             )
             if active_status not in {"completed", "completed_with_errors"}:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored active analysis run status is invalid"
                 )
             _required_string(row["id"], "active analysis run id")
@@ -2337,10 +2350,10 @@ class InsightRepository:
                 "continuation",
                 "derived_rebuild",
             }:
-                raise InsightConflict("stored active Insight job kind is invalid")
+                raise InsightInvariant("stored active Insight job kind is invalid")
             status = _required_string(row["status"], "active job status")
             if status not in NONTERMINAL_JOB_STATUSES:
-                raise InsightConflict("stored active Insight job status is invalid")
+                raise InsightInvariant("stored active Insight job status is invalid")
             active_jobs.append(
                 {
                     "jobId": _required_string(row["id"], "active job id"),
@@ -2428,11 +2441,11 @@ class InsightRepository:
                 "overview artifact template",
             )
             if template not in OVERVIEW_TEMPLATES:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored overview template is invalid"
                 )
             if template in items:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored overview templates are duplicated"
                 )
             items.append(template)
@@ -2515,7 +2528,7 @@ class InsightRepository:
                     )
                     != "published"
                 ):
-                    raise InsightConflict(
+                    raise InsightInvariant(
                         "stored recent page analysis is invalid"
                     )
                 snapshot_page_number = _required_integer(
@@ -2832,7 +2845,7 @@ class InsightRepository:
                 "chapter page count",
             )
             if sum(analysis_counts.values()) != page_count:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored chapter analysis counts are inconsistent"
                 )
             items.append(
@@ -3010,7 +3023,7 @@ class InsightRepository:
                     "preview analysis run status",
                 )
                 if preview_run_status not in ANALYSIS_RUN_STATUSES:
-                    raise InsightConflict(
+                    raise InsightInvariant(
                         "stored preview analysis run status is invalid"
                     )
                 preview_target_status = connection.execute(
@@ -3026,7 +3039,7 @@ class InsightRepository:
                     "preview analysis target status",
                 )
                 if preview_target_status not in ANALYSIS_TARGET_STATUSES:
-                    raise InsightConflict(
+                    raise InsightInvariant(
                         "stored preview analysis target status is invalid"
                     )
                 result = connection.execute(
@@ -3144,7 +3157,7 @@ class InsightRepository:
                 "analysis result book id",
             )
             if result_book_id != book_id:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored page analysis belongs to another book"
                 )
             _required_string(
@@ -3160,9 +3173,9 @@ class InsightRepository:
                 "analysis page result status",
             )
             if result_status not in {"staging", "published", "stale"}:
-                raise InsightConflict("stored page analysis status is invalid")
+                raise InsightInvariant("stored page analysis status is invalid")
             if not preview and result_status != "published":
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored active page analysis is not published"
                 )
             result_page_id = _required_string(
@@ -3174,7 +3187,7 @@ class InsightRepository:
                 "analysis page result current page id",
             )
             if result_page_id != page_id or result_current_page_id != page_id:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored page analysis identity is invalid"
                 )
             result_page_number = _required_integer(
@@ -3210,7 +3223,7 @@ class InsightRepository:
                 "analysis page result run status",
             )
             if result_run_status not in ANALYSIS_RUN_STATUSES:
-                raise InsightConflict("stored analysis run status is invalid")
+                raise InsightInvariant("stored analysis run status is invalid")
             active_book_target_status = _optional_string(
                 book_head_target_status,
                 "active book analysis target status",
@@ -3219,11 +3232,11 @@ class InsightRepository:
                 active_book_target_status is not None
                 and active_book_target_status not in ANALYSIS_TARGET_STATUSES
             ):
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored active book analysis target status is invalid"
                 )
             if active_book_target_status == "pending":
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored active book analysis still has a pending target"
                 )
             if (
@@ -3248,7 +3261,7 @@ class InsightRepository:
                     "active page analysis run id",
                 )
                 if head_run_id != result_run_id:
-                    raise InsightConflict(
+                    raise InsightInvariant(
                         "stored page analysis head is inconsistent"
                     )
             result_state = "stale" if stale_reasons else "ready"
@@ -3257,7 +3270,7 @@ class InsightRepository:
             else:
                 state = self._state_for_row(current_state_row)
                 if state not in {result_state, "running"}:
-                    raise InsightConflict(
+                    raise InsightInvariant(
                         "stored page analysis state is inconsistent"
                     )
         return {
@@ -3355,7 +3368,7 @@ class InsightRepository:
                         "note citation note id",
                     )
                     if citation_note_id not in selected_note_ids:
-                        raise InsightConflict(
+                        raise InsightInvariant(
                             "stored note citation belongs to another note"
                         )
                     citations_by_note.setdefault(
@@ -3784,7 +3797,7 @@ class InsightRepository:
             "latest Insight job status",
         )
         if latest_job is not None and latest_job not in JOB_STATUSES:
-            raise InsightConflict("stored latest Insight job status is invalid")
+            raise InsightInvariant("stored latest Insight job status is invalid")
         latest_target = _optional_string(
             row["latest_target_status"],
             "latest Insight target status",
@@ -3793,7 +3806,7 @@ class InsightRepository:
             latest_target is not None
             and latest_target not in ANALYSIS_TARGET_STATUSES
         ):
-            raise InsightConflict("stored latest Insight target status is invalid")
+            raise InsightInvariant("stored latest Insight target status is invalid")
         active_result_id = _optional_string(
             row["active_result_id"],
             "active page analysis id",
@@ -3856,17 +3869,17 @@ class InsightRepository:
             book_target_status is not None
             and book_target_status not in ANALYSIS_TARGET_STATUSES
         ):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored active book analysis target status is invalid"
             )
         if (book_run_id is None) != (book_head_updated_at is None) or (
             book_run_id is None and book_target_status is not None
         ):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored active book analysis head is incomplete"
             )
         if book_target_status == "pending":
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored active book analysis still has a pending target"
             )
         if active_result_id is None:
@@ -3876,7 +3889,7 @@ class InsightRepository:
                 or page_run_id is not None
                 or page_head_updated_at is not None
             ):
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored page analysis head is incomplete"
                 )
         elif (
@@ -3885,7 +3898,7 @@ class InsightRepository:
             or page_run_id is None
             or page_head_updated_at is None
         ):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored page analysis result is incomplete"
             )
         if (
@@ -4001,7 +4014,7 @@ class InsightRepository:
         ):
             status = _required_string(raw_status, "analysis target status")
             if status not in ANALYSIS_TARGET_STATUSES or status in counts:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis target counts are invalid"
                 )
             counts[status] = _required_integer(
@@ -4083,7 +4096,7 @@ class InsightRepository:
                 "citation page id",
             )
             if citation_page_id in page_numbers:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored book page numbers are duplicated"
                 )
             page_numbers[citation_page_id] = _required_integer(
@@ -4105,7 +4118,7 @@ class InsightRepository:
                 "citation active analysis page id",
             )
             if active_page_id in active_results:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored page analysis heads are duplicated"
                 )
             active_results[active_page_id] = _required_string(
@@ -4150,12 +4163,12 @@ class InsightRepository:
         title = _required_string(row["title"], "note title")
         content = row["content"]
         if not isinstance(content, str):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored note content is invalid"
             )
         kind = _required_string(row["kind"], "note kind")
         if kind not in {"text", "qa"}:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored note kind is invalid"
             )
         tags = _json_array(row["tags_json"], "note tags")
@@ -4165,16 +4178,16 @@ class InsightRepository:
             or value != value.strip()
             for value in tags
         ) or len(set(tags)) != len(tags):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored note tags are invalid"
             )
         metadata = _stored_note_metadata(row["comments_json"])
         if kind == "qa" and metadata["question"] is None:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored QA note question is missing"
             )
         if kind == "text" and metadata["question"] is not None:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored text note metadata is invalid"
             )
         citation_items: list[dict[str, Any]] = []
@@ -4185,7 +4198,7 @@ class InsightRepository:
                 minimum=1,
             )
             if ordinal != expected_ordinal:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored note citation order is invalid"
                 )
             citation_note_id = _required_string(
@@ -4193,7 +4206,7 @@ class InsightRepository:
                 "note citation note id",
             )
             if citation_note_id != note_id:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored citation belongs to another note"
                 )
             citation_page_id = _optional_string(
@@ -4210,7 +4223,7 @@ class InsightRepository:
             )
             excerpt = citation["excerpt"]
             if not isinstance(excerpt, str):
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored note citation excerpt is invalid"
                 )
             score = citation["score"]
@@ -4219,7 +4232,7 @@ class InsightRepository:
                 or not isinstance(score, (int, float))
                 or not math.isfinite(score)
             ):
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored note citation score is invalid"
                 )
             citation_items.append(

@@ -31,7 +31,7 @@ from src.backend_v2.insight.page_schema import (
     get_run_extra_entities,
     validate_persisted_page_analysis,
 )
-from src.backend_v2.insight.errors import InsightPrecondition
+from src.backend_v2.insight.errors import InsightInvariant, InsightPrecondition
 from src.backend_v2.insight.repository import (
     InsightConflict,
     InsightNotFound,
@@ -885,15 +885,15 @@ def _split_entity_pages(
 
 def _json_object(value: object, field: str) -> dict[str, Any]:
     if not isinstance(value, str):
-        raise InsightConflict(f"stored {field} is missing")
+        raise InsightInvariant(f"stored {field} is missing")
     try:
         parsed = json.loads(value)
     except (TypeError, ValueError) as exc:
-        raise InsightConflict(
+        raise InsightInvariant(
             f"stored {field} is invalid"
         ) from exc
     if not isinstance(parsed, Mapping):
-        raise InsightConflict(f"stored {field} must be an object")
+        raise InsightInvariant(f"stored {field} must be an object")
     return dict(parsed)
 
 
@@ -1054,7 +1054,7 @@ def _persisted_page_analysis(
         else:
             payload = validate_persisted_page_analysis(parsed)
     except InvalidPageAnalysis as exc:
-        raise InsightConflict(
+        raise InsightInvariant(
             "stored analysis page payload is invalid"
         ) from exc
     if (
@@ -1063,7 +1063,7 @@ def _persisted_page_analysis(
         or payload["source_asset_id"] != source_asset_id
         or payload["source_checksum"] != source_checksum
     ):
-        raise InsightConflict(
+        raise InsightInvariant(
             "stored analysis page payload identity is invalid"
         )
     return payload
@@ -1484,7 +1484,7 @@ def _timeline_thumbnail_page_numbers(
         if value is None:
             return
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-            raise InsightConflict(
+            raise InsightInvariant(
                 f"stored timeline {field} is invalid"
             )
         numbers.add(value)
@@ -1492,7 +1492,7 @@ def _timeline_thumbnail_page_numbers(
     for event in events:
         page_numbers = event.get("page_numbers", [])
         if not isinstance(page_numbers, list):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline event page_numbers are invalid"
             )
         for value in page_numbers:
@@ -1501,43 +1501,43 @@ def _timeline_thumbnail_page_numbers(
         add(character.get("first_page"), "character first page")
         related_pages = character.get("related_page_numbers", [])
         if not isinstance(related_pages, list):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline character page numbers are invalid"
             )
         for value in related_pages:
             add(value, "character related page")
         key_moments = character.get("key_moments", [])
         if not isinstance(key_moments, list):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline character moments are invalid"
             )
         for moment in key_moments:
             if not isinstance(moment, Mapping):
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored timeline character moment is invalid"
                 )
             add(moment.get("page"), "character moment page")
     plot_arcs = content.get("plot_arcs", [])
     if not isinstance(plot_arcs, list):
-        raise InsightConflict("stored timeline plot_arcs are invalid")
+        raise InsightInvariant("stored timeline plot_arcs are invalid")
     for arc in plot_arcs:
         if not isinstance(arc, Mapping):
-            raise InsightConflict("stored timeline plot arc is invalid")
+            raise InsightInvariant("stored timeline plot arc is invalid")
         page_range = arc.get("page_range")
         if page_range is not None:
             if not isinstance(page_range, Mapping):
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored timeline plot arc page range is invalid"
                 )
             add(page_range.get("start"), "plot arc start page")
     plot_threads = content.get("plot_threads", [])
     if not isinstance(plot_threads, list):
-        raise InsightConflict(
+        raise InsightInvariant(
             "stored timeline plot_threads are invalid"
         )
     for thread in plot_threads:
         if not isinstance(thread, Mapping):
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline plot thread is invalid"
             )
         add(thread.get("introduced_at"), "plot thread introduced page")
@@ -2375,7 +2375,7 @@ class InsightDerivedRepository:
                 minimum=1,
             )
             if target_ordinal <= previous_ordinal:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis target order is invalid"
                 )
             previous_ordinal = target_ordinal
@@ -2383,7 +2383,7 @@ class InsightDerivedRepository:
                 row["status"],
                 "analysis page result status",
             ) not in {"staging", "published"}:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored staging page analysis is invalid"
                 )
             page_id = _required_string(
@@ -2391,7 +2391,7 @@ class InsightDerivedRepository:
                 "analysis page result pageId",
             )
             if page_id in seen_page_ids:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis page results are duplicated"
                 )
             seen_page_ids.add(page_id)
@@ -2399,7 +2399,7 @@ class InsightDerivedRepository:
                 row["page_id"],
                 "analysis page result current pageId",
             ) != page_id:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored analysis page identity is invalid"
                 )
             page_number = _required_integer(
@@ -5186,12 +5186,12 @@ class InsightDerivedRepository:
             timeline_id = _required_string(row["id"], "stored timeline id")
             mode = _required_string(row["mode"], "stored timeline mode")
             if mode not in {"enhanced", "compressed", "simple"}:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored timeline mode is invalid"
                 )
             status = _required_string(row["status"], "stored timeline status")
             if status not in {"ready", "degraded", "stale"}:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored timeline status is invalid"
                 )
             event_rows = list(
@@ -5263,7 +5263,7 @@ class InsightDerivedRepository:
             for event_id, _ordinal, value in selected_events:
                 event_payload = _json_object(value, "timeline event payload")
                 if "eventId" in event_payload:
-                    raise InsightConflict(
+                    raise InsightInvariant(
                         "stored timeline event contains a reserved id"
                     )
                 event_payloads.append(
@@ -5282,7 +5282,7 @@ class InsightDerivedRepository:
                     "timeline character payload",
                 )
                 if "characterId" in character_payload:
-                    raise InsightConflict(
+                    raise InsightInvariant(
                         "stored timeline character contains a reserved id"
                     )
                 character_payloads.append(
@@ -5306,7 +5306,7 @@ class InsightDerivedRepository:
                     mode=mode,
                 )
             except ValueError as exc:
-                raise InsightConflict(
+                raise InsightInvariant(
                     "stored timeline payload is invalid"
                 ) from exc
             referenced_page_ids: set[str] = set()
@@ -5317,7 +5317,7 @@ class InsightDerivedRepository:
                     not isinstance(page_id, str) or not page_id
                     for page_id in page_ids
                 ):
-                    raise InsightConflict(
+                    raise InsightInvariant(
                         "stored timeline event page_ids are invalid"
                     )
                 if (
@@ -5325,7 +5325,7 @@ class InsightDerivedRepository:
                     or not page_numbers
                     or len(page_numbers) != len(page_ids)
                 ):
-                    raise InsightConflict(
+                    raise InsightInvariant(
                         "stored timeline event page references are incomplete"
                     )
                 referenced_page_ids.update(page_ids)
@@ -5405,7 +5405,7 @@ class InsightDerivedRepository:
                         minimum=1,
                     )
                     if page_id in page_numbers_by_id:
-                        raise InsightConflict(
+                        raise InsightInvariant(
                             "stored timeline page reference is duplicated"
                         )
                     page_numbers_by_id[page_id] = page_number
@@ -5432,7 +5432,7 @@ class InsightDerivedRepository:
                         page_numbers_by_id.get(page_id)
                         for page_id in payload["page_ids"]
                     ] != payload["page_numbers"]:
-                        raise InsightConflict(
+                        raise InsightInvariant(
                             "stored timeline page references are stale or invalid"
                         )
         return {
@@ -5497,12 +5497,12 @@ class InsightDerivedRepository:
             return None
         mode = _required_string(row["mode"], "stored timeline mode")
         if mode not in {"enhanced", "compressed", "simple"}:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline mode is invalid"
             )
         status = _required_string(row["status"], "stored timeline status")
         if status not in {"ready", "degraded", "stale"}:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline status is invalid"
             )
         return {
@@ -5550,7 +5550,7 @@ class InsightDerivedRepository:
                     "timeline character payload",
                 )
                 if "characterId" in payload:
-                    raise InsightConflict(
+                    raise InsightInvariant(
                         "stored timeline character contains a reserved id"
                     )
                 characters.append(
@@ -5564,12 +5564,12 @@ class InsightDerivedRepository:
                 )
         mode = _required_string(timeline["mode"], "stored timeline mode")
         if mode not in {"enhanced", "compressed", "simple"}:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline mode is invalid"
             )
         status = _required_string(timeline["status"], "stored timeline status")
         if status not in {"ready", "degraded", "stale"}:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline status is invalid"
             )
         try:
@@ -5580,7 +5580,7 @@ class InsightDerivedRepository:
                 require_events=False,
             )
         except ValueError as exc:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline character payload is invalid"
             ) from exc
         return {
@@ -5623,12 +5623,12 @@ class InsightDerivedRepository:
             return None
         mode = _required_string(row["mode"], "stored timeline mode")
         if mode not in {"enhanced", "compressed", "simple"}:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline mode is invalid"
             )
         status = _required_string(row["status"], "stored timeline status")
         if status not in {"ready", "degraded", "stale"}:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline status is invalid"
             )
         payload = _json_object(
@@ -5636,7 +5636,7 @@ class InsightDerivedRepository:
             "timeline character payload",
         )
         if "characterId" in payload:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline character contains a reserved id"
             )
         character = {
@@ -5654,7 +5654,7 @@ class InsightDerivedRepository:
                 require_events=False,
             )
         except ValueError as exc:
-            raise InsightConflict(
+            raise InsightInvariant(
                 "stored timeline character payload is invalid"
             ) from exc
         return {

@@ -6516,6 +6516,9 @@ components:
             - import_source_unavailable
             - integrity_check_failed
             - invalid_host
+            # 服务端内部不变量被破坏（stored … is missing / frozen … is not
+            # published 等），与「刷新重试」无关；前端不应广播冲突事件。
+            - internal_error
             - job_conflict
             - provider_unavailable
             - resource_locked

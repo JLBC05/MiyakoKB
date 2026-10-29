@@ -224,4 +224,31 @@ describe('apiClient error normalization', () => {
     expect(CONFLICT_EVENT).toBe('miyako:conflict')
   })
 
+  it('never broadcasts a conflict event for internal_error 500s', async () => {
+    // P1：服务端内部不变量错误走 500 internal_error。它重试也无用，
+    // 绝不能触发「快照过期、刷新重试」的冲突广播。
+    const { onApiConflict } = await import('@/api/client')
+    const responseErrorHandler = responseUseMock.mock.calls[0]?.[1] as ResponseErrorHandler | undefined
+    if (!responseErrorHandler) throw new Error('response error interceptor was not registered')
+
+    const received: string[] = []
+    const unsubscribe = onApiConflict((detail) => {
+      received.push(detail.code)
+    })
+    try {
+      const error = await responseErrorHandler(Object.assign(new Error('Request failed with status code 500'), {
+        code: 'ERR_BAD_RESPONSE',
+        config: { url: '/api/v2/insight/books/x/entity-alignment/rebuild', method: 'POST' },
+        response: {
+          status: 500,
+          data: { error: { code: 'internal_error', message: '服务内部错误（请求号 rid-1）' } },
+        },
+      }) as AxiosError).catch((value: unknown) => value)
+      expect(error).toMatchObject({ status: 500, code: 'internal_error' })
+      expect(received).toEqual([])
+    } finally {
+      unsubscribe()
+    }
+  })
+
 })

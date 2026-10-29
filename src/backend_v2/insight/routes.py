@@ -57,7 +57,7 @@ from src.backend_v2.insight.exports import (
     InsightExportCommandService,
     build_current_export,
 )
-from src.backend_v2.insight.errors import InsightPrecondition
+from src.backend_v2.insight.errors import InsightInvariant, InsightPrecondition
 from src.backend_v2.insight.repository import (
     InsightConflict,
     InsightLocked,
@@ -141,6 +141,15 @@ def create_insight_blueprint(
         # 前置条件不满足（状态不对，重试无用）：与乐观锁冲突区分开，
         # 让前端提示「请先完成 X」而不是刷新快照后无限重试。
         return _error("conflict", str(error), 409)
+
+    @blueprint.errorhandler(InsightInvariant)
+    def invariant(error: Exception):
+        # 服务端内部不变量被破坏（stored … is missing / frozen … is not published
+        # 等）：这不是用户能修的事，也不是「刷新重试」。给 500 internal_error，
+        # 让前端提示「服务端异常」而不是广播冲突事件后无限刷新。
+        # 细节只进日志，避免把库内数据结构暴露给客户端。
+        LOGGER.exception("Insight 内部不变量被破坏：%s", error)
+        return _error("internal_error", "服务端内部错误，请稍后重试", 500)
 
     @blueprint.errorhandler(InsightConflict)
     @blueprint.errorhandler(JobConflict)
