@@ -12,6 +12,7 @@ import zipfile
 from sqlalchemy import Engine, insert, select
 from sqlalchemy.engine import Connection
 
+from src.backend_v2.insight.errors import InsightPrecondition
 from src.backend_v2.insight.repository import (
     InsightConflict,
     InsightNotFound,
@@ -148,7 +149,7 @@ class InsightExportCommandService:
             ).scalar_one_or_none()
         run_id = _required_string(run["id"], "active Insight run id")
         if _required_string(run["book_id"], "active Insight run book id") != book_id:
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "active Insight run belongs to another book"
             )
         run_status = _required_string(run["status"], "active Insight run status")
@@ -157,7 +158,7 @@ class InsightExportCommandService:
             or _required_string(run["scope"], "active Insight run scope")
             != "full"
         ):
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "active Insight run is not a published full run"
             )
         snapshot = self.derived.snapshot(book_id=book_id)
@@ -279,10 +280,10 @@ class InsightExportWorkerService:
     ) -> Mapping[str, Any]:
         step_kind = step.get("stepKind")
         if step_kind != "insight_export_report":
-            raise InsightConflict("unsupported Insight export step")
+            raise InsightPrecondition("unsupported Insight export step")
         raw_config = step.get("config")
         if not isinstance(raw_config, Mapping):
-            raise InsightConflict("frozen Insight export config is invalid")
+            raise InsightPrecondition("frozen Insight export config is invalid")
         config = dict(raw_config)
         step_id = step.get("stepId")
         if not isinstance(step_id, str) or not step_id:
@@ -338,7 +339,7 @@ class InsightExportWorkerService:
             "artifactIds",
             "timelineVersionId",
         }:
-            raise InsightConflict("frozen Insight export config fields are invalid")
+            raise InsightPrecondition("frozen Insight export config fields are invalid")
         book_id = _required_string(config["bookId"], "export book id")
         run_id = _required_string(config["sourceRunId"], "export source run id")
         # Knowledge-mode runs persist the entity arrays next to the core page
@@ -855,7 +856,7 @@ def build_current_export(
         payload=artifact.get("payload"),
     )
     if kind != "overview":
-        raise InsightConflict("only overview artifacts support direct export")
+        raise InsightPrecondition("only overview artifacts support direct export")
     if output_format == "json":
         return (
             _json(payload),

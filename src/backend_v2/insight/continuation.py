@@ -22,6 +22,7 @@ from src.backend_v2.insight.derived import (
     AnalysisInputSnapshot,
     InsightDerivedRepository,
 )
+from src.backend_v2.insight.errors import InsightPrecondition
 from src.backend_v2.insight.repository import (
     InsightConflict,
     InsightNotFound,
@@ -218,7 +219,7 @@ class ContinuationRepository:
                         project_payload.get("analysisInputs")
                     )
                 except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                    raise InsightConflict(
+                    raise InsightPrecondition(
                         "continuation project schema is invalid; clear the project"
                     ) from exc
                 stored_fingerprint = project_payload.get(
@@ -227,7 +228,7 @@ class ContinuationRepository:
                 if (
                     not _is_sha256(stored_fingerprint)
                 ):
-                    raise InsightConflict(
+                    raise InsightPrecondition(
                         "continuation project schema is invalid; clear the project"
                     )
                 snapshot_changed = (
@@ -359,7 +360,7 @@ class ContinuationRepository:
                         "analysisInputFingerprint must be SHA-256"
                     )
             except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                raise InsightConflict(
+                raise InsightPrecondition(
                     "continuation project schema is invalid; clear the project"
                 ) from exc
             normalized.update(
@@ -548,7 +549,7 @@ class ContinuationRepository:
             if row is None:
                 self._require_project(connection, project_id)
                 if base_revision != 0:
-                    raise InsightConflict("continuation script does not exist")
+                    raise InsightPrecondition("continuation script does not exist")
                 script_id = str(uuid.uuid4())
                 revision = 1
                 connection.execute(
@@ -1289,7 +1290,7 @@ class ContinuationRepository:
                 TypeError,
                 ValueError,
             ) as exc:
-                raise InsightConflict(
+                raise InsightPrecondition(
                     "continuation form data is invalid; clear the project"
                 ) from exc
         return {
@@ -1460,12 +1461,12 @@ class ContinuationRepository:
                 payload.get("analysisInputs")
             )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "continuation project schema is invalid; clear the project"
             ) from exc
         expected_fingerprint = payload.get("analysisInputFingerprint")
         if not _is_sha256(expected_fingerprint):
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "continuation project schema is invalid; clear the project"
             )
         try:
@@ -1619,7 +1620,7 @@ class ContinuationRepository:
                 "continuation form",
             )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "continuation form data is invalid; clear the project"
             ) from exc
         return {
@@ -1802,7 +1803,7 @@ class ContinuationRepository:
             TypeError,
             ValueError,
         ) as exc:
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "continuation project data is invalid; clear the project"
             ) from exc
         return {
@@ -2129,7 +2130,7 @@ class ContinuationCommandService:
                 )
             )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "continuation project snapshot is invalid; clear the project"
             ) from exc
         page_count = project_config["pageCount"]
@@ -2148,7 +2149,7 @@ class ContinuationCommandService:
                 )
             ).mappings().one_or_none()
             if script is None or not str(script["content"]).strip():
-                raise InsightConflict("generate or save a script first")
+                raise InsightPrecondition("generate or save a script first")
             existing = {
                 int(row["ordinal"]): row
                 for row in connection.execute(
@@ -2298,7 +2299,7 @@ class ContinuationCommandService:
                 )
             )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "continuation project snapshot is invalid; clear the project"
             ) from exc
         with self.engine.connect() as connection:
@@ -2368,12 +2369,12 @@ class ContinuationCommandService:
             if selected_set is None or int(row["ordinal"]) in selected_set
         ]
         if not targets:
-            raise InsightConflict("continuation has no pages to illustrate")
+            raise InsightPrecondition("continuation has no pages to illustrate")
         if any(
             not str(target["payload"].get("finalPrompt", "")).strip()
             for target in targets
         ):
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "every selected continuation page requires finalPrompt"
             )
         config = self._config(book_id, project)
@@ -2485,7 +2486,7 @@ class ContinuationCommandService:
                 )
             ]
         if not images:
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "continuation has no active images to export"
             )
         config = self._config(book_id, project)
@@ -2625,7 +2626,7 @@ class ContinuationCommandService:
                 "continuation form",
             )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "continuation character form is invalid; delete and recreate it"
             ) from exc
         config = self._config(book_id, project)
@@ -2734,14 +2735,14 @@ class ContinuationCommandService:
                 project_payload.get("analysisInputs")
             )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "continuation project snapshot is invalid; clear the project"
             ) from exc
         analysis_fingerprint = project_payload.get(
             "analysisInputFingerprint"
         )
         if not _is_sha256(analysis_fingerprint):
-            raise InsightConflict(
+            raise InsightPrecondition(
                 "continuation project analysis snapshot is invalid; clear the project"
             )
         config.update(
@@ -3937,7 +3938,7 @@ def _page_dto(
             )
         )
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        raise InsightConflict(
+        raise InsightPrecondition(
             "continuation page data is invalid; clear the project"
         ) from exc
     return {
@@ -3972,7 +3973,7 @@ def _character_dto(row: Mapping[str, Any]) -> dict[str, Any]:
             "continuation character",
         )
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        raise InsightConflict(
+        raise InsightPrecondition(
             "continuation character data is invalid; clear the project"
         ) from exc
     return {

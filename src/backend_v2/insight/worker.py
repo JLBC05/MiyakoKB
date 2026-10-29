@@ -23,7 +23,8 @@ from src.backend_v2.insight.provider_runtime import (
     frozen_analyze_concurrency,
     frozen_vlm_config,
 )
-from src.backend_v2.insight.repository import InsightConflict, InsightRepository
+from src.backend_v2.insight.errors import InsightPrecondition
+from src.backend_v2.insight.repository import InsightRepository
 from src.backend_v2.jobs.repository import (
     AttemptFence,
     AttemptFenced,
@@ -739,7 +740,7 @@ class InsightAnalysisWorkerService:
                     )
                 )
                 if checkpoint["successCount"] == 0:
-                    raise InsightConflict(
+                    raise InsightPrecondition(
                         "analysis run has no successful pages"
                     )
 

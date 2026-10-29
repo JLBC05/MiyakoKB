@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, TYPE_CHECKING
 
+from src.backend_v2.insight.errors import InsightPrecondition
 from src.backend_v2.insight.repository import InsightConflict
 from src.shared.ai_providers import get_provider_manifest, provider_requires_api_key
 
@@ -39,7 +40,7 @@ def _section(
             details.append("missing " + ", ".join(sorted(missing)))
         if unknown:
             details.append("unknown " + ", ".join(sorted(unknown)))
-        raise InsightConflict(
+        raise InsightPrecondition(
             f"frozen Insight {name} config fields are invalid "
             f"({'; '.join(details)})"
         )
@@ -53,11 +54,11 @@ def _credential_values(
 ) -> tuple[str, str | None]:
     provider = section.get("provider")
     if not isinstance(provider, str) or not provider.strip():
-        raise InsightConflict(f"frozen Insight {name} provider is invalid")
+        raise InsightPrecondition(f"frozen Insight {name} provider is invalid")
     try:
         get_provider_manifest(provider)
     except (TypeError, ValueError) as exc:
-        raise InsightConflict(
+        raise InsightPrecondition(
             f"frozen Insight {name} provider is invalid"
         ) from exc
 
@@ -66,16 +67,16 @@ def _credential_values(
         raise InsightConflict(f"frozen Insight {name} api_key must be a string")
     base_url = section.get("custom_base_url")
     if base_url is not None and not isinstance(base_url, str):
-        raise InsightConflict(f"frozen Insight {name} base URL is invalid")
+        raise InsightPrecondition(f"frozen Insight {name} base URL is invalid")
     if provider_requires_api_key(provider, base_url) and not api_key.strip():
-        raise InsightConflict(f"frozen Insight {name} credential is missing")
+        raise InsightPrecondition(f"frozen Insight {name} credential is missing")
 
     credential_version_id = section.get("credential_version_id")
     if credential_version_id is not None and (
         not isinstance(credential_version_id, str)
         or not credential_version_id.strip()
     ):
-        raise InsightConflict(
+        raise InsightPrecondition(
             f"frozen Insight {name} credential version is invalid"
         )
     return api_key, credential_version_id
@@ -85,7 +86,7 @@ def _parse_config(factory, payload: dict[str, Any], *, name: str):
     try:
         return factory.from_dict(payload)
     except (TypeError, ValueError) as exc:
-        raise InsightConflict(f"frozen Insight {name} config is invalid") from exc
+        raise InsightPrecondition(f"frozen Insight {name} config is invalid") from exc
 
 
 def frozen_analyze_concurrency(config: Mapping[str, Any]) -> int | None:

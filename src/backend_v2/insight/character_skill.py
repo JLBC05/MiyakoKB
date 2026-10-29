@@ -450,7 +450,7 @@ class CharacterSkillRepository:
         prefix = evidence.asset_id[:2]
         for candidate in sorted((self.data_root / "objects" / prefix).glob(f"{evidence.asset_id}.*")):
             return candidate.read_bytes()
-        raise InsightConflict(f"页面原图缺失：{evidence.citation()}")
+        raise InsightPrecondition(f"页面原图缺失：{evidence.citation()}")
 
     # ---- 写入 ----------------------------------------------------------
 
@@ -567,7 +567,7 @@ class CharacterSkillBuilder:
             page_numbers=[int(number) for number in entity.get("pages") or []],
         )
         if not evidence:
-            raise InsightConflict("该角色在已发布的页面分析里没有可解析的出场页")
+            raise InsightPrecondition("该角色在已发布的页面分析里没有可解析的出场页")
 
         facts = _aggregate(entity, evidence, alias_map)
         report("evidence", 1, 3)
@@ -584,7 +584,7 @@ class CharacterSkillBuilder:
                 report=report,
             )
         if kind != CHARACTER_SKILL_KIND:
-            raise InsightConflict(f"不支持的蒸馏类型：{kind}")
+            raise InsightPrecondition(f"不支持的蒸馏类型：{kind}")
 
         selected = _select_vision_pages(evidence, facts, limit)
         observations = await self._observe(
@@ -793,7 +793,7 @@ class CharacterSkillBuilder:
         entities.sort(key=lambda item: (-len(item.get("pages") or []), str(item.get("canonical_name") or "")))
         entities = entities[:limit]
         if not entities:
-            raise InsightConflict("该书没有可用的实体知识，无法生成世界书")
+            raise InsightPrecondition("该书没有可用的实体知识，无法生成世界书")
 
         preview: dict[str, list[int]] = {}
         wanted: set[int] = set()

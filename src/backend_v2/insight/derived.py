@@ -31,6 +31,7 @@ from src.backend_v2.insight.page_schema import (
     get_run_extra_entities,
     validate_persisted_page_analysis,
 )
+from src.backend_v2.insight.errors import InsightPrecondition
 from src.backend_v2.insight.repository import (
     InsightConflict,
     InsightNotFound,
@@ -2076,7 +2077,7 @@ class InsightVectorStore:
             import chromadb
             from chromadb.config import Settings
         except ImportError as exc:
-            raise InsightConflict("ChromaDB is not installed") from exc
+            raise InsightPrecondition("ChromaDB is not installed") from exc
         self.path.mkdir(parents=True, exist_ok=True)
         client = chromadb.PersistentClient(
             path=str(self.path),
@@ -2223,7 +2224,7 @@ class InsightVectorStore:
             import chromadb
             from chromadb.config import Settings
         except ImportError as exc:
-            raise InsightConflict("ChromaDB is not installed") from exc
+            raise InsightPrecondition("ChromaDB is not installed") from exc
         client = chromadb.PersistentClient(
             path=str(self.path),
             settings=Settings(anonymized_telemetry=False),
@@ -2663,7 +2664,7 @@ class InsightDerivedRepository:
                     )
                     != source_checksum
                 ):
-                    raise InsightConflict(
+                    raise InsightPrecondition(
                         "published page analysis is stale; reanalyze the page"
                     )
                 ordered_inputs.append(
@@ -3382,7 +3383,7 @@ class InsightDerivedRepository:
                     for page in pages_for_result
                 ]
                 if not page_ids:
-                    raise InsightConflict(
+                    raise InsightPrecondition(
                         "analysis layer has no covered pages"
                     )
                 inputs.append(
@@ -6694,7 +6695,7 @@ class InsightDerivedWorkerService:
             )
             page_refs = pages_by_layer.get(layer_id, [])
             if not page_refs:
-                raise InsightConflict(
+                raise InsightPrecondition(
                     "analysis layer has no covered pages"
                 )
             try:
