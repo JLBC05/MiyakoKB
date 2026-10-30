@@ -41,6 +41,59 @@ def _is_empty_or_pure_punctuation(text: str) -> bool:
     return all(unicodedata.category(c).startswith("P") or c.isspace() for c in text)
 
 
+_CATEGORY_PRIORITY = {
+    "characters": 0,
+    "abilities": 1,
+    "items": 2,
+    "locations": 3,
+    "concepts": 4,
+}
+
+
+def _entity_frequency(entity: dict[str, Any]) -> int:
+    freq = entity.get("frequency")
+    if isinstance(freq, int) and freq >= 0:
+        return freq
+    pages = entity.get("pages")
+    return len(pages) if isinstance(pages, list) else 0
+
+
+def _entity_rank(entity: dict[str, Any]) -> tuple[int, int]:
+    """Rank an entity for same-name conflicts.
+
+    Higher frequency wins; on a tie the more concrete category wins so that a
+    character called "久留美" (1021 pages) is never shadowed by a stray concept
+    of the same name that happens to appear once.
+    """
+    category = entity.get("category") or ""
+    return (_entity_frequency(entity), -_CATEGORY_PRIORITY.get(category, 99))
+
+
+def _preferred_entity(
+    current: dict[str, Any] | None,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    if current is None:
+        return candidate
+    return candidate if _entity_rank(candidate) > _entity_rank(current) else current
+
+
+def _prefer_entity_id(
+    current_id: str | None,
+    candidate_id: str,
+    entities_by_id: dict[str, dict[str, Any]],
+) -> str:
+    if current_id is None or current_id == candidate_id:
+        return candidate_id
+    current = entities_by_id.get(current_id)
+    candidate = entities_by_id.get(candidate_id)
+    if candidate is None:
+        return current_id
+    if current is None:
+        return candidate_id
+    return candidate_id if _entity_rank(candidate) > _entity_rank(current) else current_id
+
+
 def resolve_entities_in_question(
     book_id: str,
     question: str,
@@ -109,7 +162,7 @@ def resolve_entities_in_question(
                     entities_by_id[eid] = ent
                     cname = ent.get("canonical_name")
                     if cname:
-                        entities_by_name[cname] = ent
+                        entities_by_name[cname] = _preferred_entity(entities_by_name.get(cname), ent)
     elif isinstance(canonical_entities_raw, dict):
         for k, v in canonical_entities_raw.items():
             if isinstance(v, dict):
@@ -120,7 +173,7 @@ def resolve_entities_in_question(
                 entities_by_id[eid] = ent
                 cname = ent.get("canonical_name")
                 if cname:
-                    entities_by_name[cname] = ent
+                    entities_by_name[cname] = _preferred_entity(entities_by_name.get(cname), ent)
 
     # Build candidate terms mapping: name -> entity_id
     cand_to_entity: dict[str, str] = {}
@@ -129,25 +182,31 @@ def resolve_entities_in_question(
     for eid, ent in entities_by_id.items():
         cname = ent.get("canonical_name")
         if cname:
-            cand_to_entity[cname] = eid
+            cand_to_entity[cname] = _prefer_entity_id(cand_to_entity.get(cname), eid, entities_by_id)
 
     # 2. Aliases from entity info
     for eid, ent in entities_by_id.items():
         aliases = ent.get("aliases")
         if isinstance(aliases, list):
             for alias in aliases:
-                if alias and alias not in cand_to_entity:
-                    cand_to_entity[alias] = eid
+                if alias:
+                    cand_to_entity[alias] = _prefer_entity_id(cand_to_entity.get(alias), eid, entities_by_id)
 
     # 3. Supplementary mapping from alias_map: alias_name -> canonical_name -> entity_id or alias_name -> entity_id
     if isinstance(alias_map_raw, dict):
         for alias_name, target in alias_map_raw.items():
-            if not alias_name or alias_name in cand_to_entity:
+            if not alias_name:
                 continue
+            target_id = None
             if target in entities_by_id:
-                cand_to_entity[alias_name] = target
+                target_id = target
             elif target in entities_by_name:
-                cand_to_entity[alias_name] = entities_by_name[target]["entity_id"]
+                target_id = entities_by_name[target]["entity_id"]
+            if target_id is None:
+                continue
+            cand_to_entity[alias_name] = _prefer_entity_id(
+                cand_to_entity.get(alias_name), target_id, entities_by_id
+            )
 
     # 4. Dot-separated components for names with middle dot '·' (e.g. "斯科特·朝圣者" -> "斯科特")
     dot_parts_map: dict[str, set[str]] = {}
