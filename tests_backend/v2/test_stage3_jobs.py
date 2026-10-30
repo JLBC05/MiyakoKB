@@ -528,42 +528,6 @@ def test_queue_list_is_not_truncated_by_history_batch_limit(job_platform) -> Non
     ]
 
 
-def test_chapter_write_lock_is_acquired_atomically_and_released(
-    job_platform,
-) -> None:
-    engine, repository, _book, chapter, worker_epoch_id = job_platform
-    job_id = _create_job(
-        repository,
-        kind="translation",
-        chapter_id=str(chapter["id"]),
-        steps=("detect", "ocr"),
-    )
-
-    fence = repository.claim_next(worker_epoch_id=worker_epoch_id)
-    assert fence is not None
-    with engine.connect() as connection:
-        lock = connection.execute(
-            select(chapter_write_locks).where(
-                chapter_write_locks.c.job_id == job_id
-            )
-        ).mappings().one()
-        assert lock["chapter_id"] == chapter["id"]
-
-    while (step := repository.next_step(fence)) is not None:
-        repository.complete_step(
-            fence,
-            step_id=str(step["stepId"]),
-            checkpoint={"kind": step["stepKind"]},
-        )
-    assert repository.finish_if_complete(fence) == "completed"
-    with engine.connect() as connection:
-        assert connection.execute(
-            select(chapter_write_locks.c.job_id).where(
-                chapter_write_locks.c.job_id == job_id
-            )
-        ).scalar_one_or_none() is None
-
-
 def test_step_completion_events_identify_page_kind_and_book(job_platform) -> None:
     engine, repository, book, chapter, worker_epoch_id = job_platform
     from src.backend_v2.storage.schema import pages
@@ -582,7 +546,7 @@ def test_step_completion_events_identify_page_kind_and_book(job_platform) -> Non
         display_name="translation batch",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 config={"mode": "test"},
                 book_id=str(book["id"]),
                 chapter_id=str(chapter["id"]),
@@ -646,7 +610,7 @@ def test_step_publication_skips_downstream_steps_in_progress(
         display_name="publication skips rendering",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={"executionMode": execution_mode},
                 items=(
@@ -754,114 +718,6 @@ def test_step_publication_persists_mutated_checkpoint_and_can_skip(
     }
 
 
-def test_write_job_preempts_preexisting_operation(job_platform) -> None:
-    engine, repository, _book, chapter, worker_epoch_id = job_platform
-    page_id = str(uuid.uuid4())
-    with engine.begin() as connection:
-        from src.backend_v2.storage.schema import pages
-
-        connection.execute(
-            insert(pages).values(
-                id=page_id,
-                chapter_id=chapter["id"],
-                ordinal=1,
-                logical_source_path="1.png",
-            )
-        )
-        operation_id = str(uuid.uuid4())
-        connection.execute(
-            insert(operations).values(
-                id=operation_id,
-                kind="page_detect",
-                executor_role="worker",
-                status="pending",
-                page_id=page_id,
-                base_revision=1,
-                request_json="{}",
-            )
-        )
-    job_id = _create_job(
-        repository,
-        kind="translation",
-        chapter_id=str(chapter["id"]),
-    )
-    fence = repository.claim_next(worker_epoch_id=worker_epoch_id)
-    assert fence is not None and fence.job_id == job_id
-    with engine.connect() as connection:
-        operation = connection.execute(
-            select(
-                operations.c.status,
-                operations.c.attempt_id,
-                operations.c.executor_epoch_id,
-            ).where(operations.c.id == operation_id)
-        ).one()
-    assert operation == ("cancelled", None, None)
-
-
-def test_pause_resume_cancel_and_attempt_fencing(job_platform) -> None:
-    engine, repository, _book, chapter, worker_epoch_id = job_platform
-    job_id = _create_job(
-        repository,
-        kind="translation",
-        chapter_id=str(chapter["id"]),
-    )
-    fence = repository.claim_next(worker_epoch_id=worker_epoch_id)
-    assert fence is not None
-    step = repository.next_step(fence)
-    assert step is not None
-
-    paused = repository.request_pause(job_id)
-    assert paused["status"] == "paused"
-    assert paused["progress"]["completedItems"] == 0
-    assert repository.request_pause(job_id)["status"] == "paused"
-    with pytest.raises(AttemptFenced):
-        repository.checkpoint_step(
-            fence,
-            step_id=str(step["stepId"]),
-            checkpoint={"safe": True},
-        )
-    with engine.connect() as connection:
-        paused_step = connection.execute(
-            select(job_steps.c.status, job_steps.c.attempt_id).where(
-                job_steps.c.id == str(step["stepId"])
-            )
-        ).one()
-        assert paused_step == ("pending", None)
-        assert connection.execute(
-            select(job_items.c.status).where(
-                job_items.c.id == str(step["itemId"])
-            )
-        ).scalar_one() == "pending"
-        assert connection.execute(
-            select(chapter_write_locks.c.job_id).where(
-                chapter_write_locks.c.job_id == job_id
-            )
-        ).scalar_one() == job_id
-
-    assert repository.resume(job_id)["status"] == "queued"
-    queue_snapshot = repository.list_jobs(scope="queue")
-    queued_job = next(
-        row for row in queue_snapshot["items"] if row["jobId"] == job_id
-    )
-    assert queued_job["blockedReason"] == "retained_chapter_lock"
-    with pytest.raises(JobConflict):
-        repository.reorder(ordered_job_ids=[job_id])
-    with pytest.raises(InvalidJobTransition):
-        repository.continue_interrupted(job_id)
-    resumed = repository.claim_next(worker_epoch_id=worker_epoch_id)
-    assert resumed is not None
-    assert resumed.attempt_id != fence.attempt_id
-    assert repository.request_cancel(job_id)["status"] == "cancelled"
-    with pytest.raises(AttemptFenced):
-        repository.assert_attempt_active(resumed)
-    with engine.connect() as connection:
-        assert connection.execute(
-            select(chapter_write_locks.c.job_id).where(
-                chapter_write_locks.c.job_id == job_id
-            )
-        ).scalar_one_or_none() is None
-
-
 def test_hard_pause_preserves_completed_items_and_requeues_all_active_steps(
     job_platform,
 ) -> None:
@@ -946,7 +802,7 @@ def test_interrupted_translation_can_be_cancelled_before_book_deletion(
     engine, repository, book, chapter, worker_epoch_id = job_platform
     job_id = _create_job(
         repository,
-        kind="translation",
+        kind="insight_analysis",
         chapter_id=str(chapter["id"]),
     )
     assert repository.claim_next(worker_epoch_id=worker_epoch_id) is not None
@@ -1347,66 +1203,6 @@ def test_plugin_pipeline_fencing_is_not_logged_as_a_plugin_failure(
     )
 
 
-def test_batch_logs_use_each_persisted_step_outcome_and_one_shared_error(
-    job_platform,
-    caplog,
-) -> None:
-    _engine, repository, _book, _chapter, worker_epoch_id = job_platform
-    created = repository.create_batch(
-        display_name="partial batch failure",
-        specs=[
-            JobSpec(
-                kind="export",
-                config={
-                    "executionMode": "sequential",
-                    "translation": {"batchSize": 2},
-                },
-                items=(
-                    JobItemSpec(page_id=None, step_kinds=("hq_translate",)),
-                    JobItemSpec(page_id=None, step_kinds=("hq_translate",)),
-                ),
-            )
-        ],
-    )
-    fence = repository.claim_next(worker_epoch_id=worker_epoch_id)
-    assert fence is not None
-    assert fence.job_id == created["jobIds"][0]
-
-    def fail_after_first_step(current_fence, steps):
-        repository.complete_step(
-            current_fence,
-            step_id=str(steps[0]["stepId"]),
-            checkpoint={"completed": True},
-        )
-        raise RuntimeError("shared batch failure")
-
-    loop = JobWorkerLoop(
-        repository,
-        worker_epoch_id=worker_epoch_id,
-        handlers={"hq_translate": lambda _fence, _step: {}},
-        batch_handlers={"hq_translate": fail_after_first_step},
-    )
-
-    with caplog.at_level(logging.INFO, logger="saber.user"):
-        loop._run_attempt(fence, threading.Event())
-
-    messages = [
-        record.getMessage()
-        for record in caplog.records
-        if record.name == "saber.user"
-    ]
-    assert sum("shared batch failure" in message for message in messages) == 1
-    assert sum("高质量翻译｜完成" in message for message in messages) == 1
-    assert sum("高质量翻译｜已记录失败" in message for message in messages) == 1
-    page_outcomes = [
-        message
-        for message in messages
-        if "高质量翻译｜完成" in message
-        or "高质量翻译｜已记录失败" in message
-    ]
-    assert all("耗时" not in message for message in page_outcomes)
-
-
 def test_parallel_worker_runs_each_job_in_its_claimed_owner_scope(
     job_platform,
 ) -> None:
@@ -1653,42 +1449,6 @@ def test_queue_snapshot_reports_offline_worker_wait(job_platform) -> None:
     snapshot = repository.list_jobs()
     assert snapshot["workerOnline"] is False
     assert snapshot["waitingReason"] == "worker_offline"
-
-
-def test_releasing_chapter_lock_unblocks_waiter_atomically(job_platform) -> None:
-    _engine, repository, _book, chapter, worker_epoch_id = job_platform
-    chapter_id = str(chapter["id"])
-    blocker_id = _create_job(
-        repository,
-        kind="translation",
-        chapter_id=chapter_id,
-    )
-    waiter_id = _create_job(
-        repository,
-        kind="detect",
-        chapter_id=chapter_id,
-    )
-    blocker = repository.claim_next(worker_epoch_id=worker_epoch_id)
-    assert blocker is not None and blocker.job_id == blocker_id
-    assert repository.request_pause(blocker_id)["status"] == "paused"
-
-    assert repository.claim_next(worker_epoch_id=worker_epoch_id) is None
-    blocked = repository.get_job(waiter_id)
-    assert blocked["blockedReason"] == "blocked_by_job"
-    assert blocked["blockedByJobId"] == blocker_id
-    assert repository.list_jobs()["waitingReason"] == "queue_blocked"
-
-    repository.request_cancel(blocker_id)
-    unblocked = repository.get_job(waiter_id)
-    assert unblocked["blockedReason"] is None
-    assert unblocked["blockedByJobId"] is None
-    assert repository.list_jobs()["waitingReason"] is None
-    event_types = [
-        event["type"] for event in repository.events_after(job_id=waiter_id)
-    ]
-    assert event_types[-2:] == ["job_blocked", "job_unblocked"]
-    claimed = repository.claim_next(worker_epoch_id=worker_epoch_id)
-    assert claimed is not None and claimed.job_id == waiter_id
 
 
 @pytest.mark.parametrize("terminal_step", ["save", "publish_clean", "detect"])
@@ -2212,7 +1972,7 @@ def test_job_failures_never_expose_frozen_credentials(job_platform) -> None:
         connection.execute(
             insert(credentials).values(
                 id=credential_id,
-                domain="translation",
+                domain="insight_analysis",
                 provider="canary",
             )
         )
@@ -2796,15 +2556,6 @@ def test_interrupted_job_is_listed_only_in_history(job_platform) -> None:
     ] == [job_id]
 
 
-def test_create_translation_reports_a_real_nonterminal_conflict(job_platform) -> None:
-    _engine, repository, _book, chapter, _worker_epoch_id = job_platform
-    chapter_id = str(chapter["id"])
-    _create_job(repository, kind="translation", chapter_id=chapter_id)
-
-    with pytest.raises(JobConflict, match="conflicting nonterminal job"):
-        _create_job(repository, kind="translation", chapter_id=chapter_id)
-
-
 def test_clear_history_deletes_retry_children_before_sources_and_protects_live_lineage(
     job_platform,
 ) -> None:
@@ -3113,7 +2864,7 @@ def test_parallel_fatal_pool_error_fences_job_before_bounded_thread_recovery(
         display_name="fatal pool fencing",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={
                     "executionMode": "parallel",
@@ -3197,7 +2948,7 @@ def test_parallel_worker_uses_serial_stage_pools_with_cross_stage_overlap(
         display_name="parallel pipeline",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={
                     "executionMode": "parallel",
@@ -3258,7 +3009,7 @@ def test_parallel_pipeline_limits_upstream_lead_to_fifty_items(
         display_name="bounded parallel pipeline",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={
                     "executionMode": "parallel",
@@ -3332,7 +3083,7 @@ def test_parallel_worker_quiesces_completed_pool_during_long_tail(
         display_name="parallel long tail",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={
                     "executionMode": "parallel",
@@ -3427,7 +3178,7 @@ def test_parallel_supervisor_uses_bounded_wait_during_running_step(
         display_name="bounded supervisor polling",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={
                     "executionMode": "parallel",
@@ -3504,7 +3255,7 @@ def test_parallel_worker_defers_persistent_sqlite_busy_during_stage_admission(
         display_name="parallel busy retry",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={
                     "executionMode": "parallel",
@@ -3561,7 +3312,7 @@ def test_parallel_worker_does_not_fail_a_step_when_lock_telemetry_is_busy(
         display_name="non-authoritative telemetry",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={
                     "executionMode": "parallel",
@@ -3615,71 +3366,6 @@ def test_parallel_worker_does_not_fail_a_step_when_lock_telemetry_is_busy(
         thread.join(timeout=2)
 
 
-def test_worker_rejects_coerced_parallel_and_batch_settings(job_platform) -> None:
-    _engine, repository, _book, chapter, worker_epoch_id = job_platform
-    created = repository.create_batch(
-        display_name="strict worker config",
-        specs=[
-            JobSpec(
-                kind="translation",
-                chapter_id=str(chapter["id"]),
-                config={
-                    "executionMode": "parallel",
-                    "deepLearningConcurrency": 1,
-                },
-                items=(JobItemSpec(page_id=None, step_kinds=("detect",)),),
-            )
-        ],
-    )
-    job_id = str(created["jobIds"][0])
-    stop = threading.Event()
-    loop = JobWorkerLoop(
-        repository,
-        worker_epoch_id=worker_epoch_id,
-        handlers={"detect": lambda _fence, _step: {"done": True}},
-        idle_poll_seconds=0.01,
-    )
-    original_attempt_config = repository.attempt_config
-
-    def invalid_attempt_config(fence):
-        config = dict(original_attempt_config(fence))
-        config["deepLearningConcurrency"] = True
-        return config
-
-    repository.attempt_config = invalid_attempt_config  # type: ignore[method-assign]
-    thread = threading.Thread(target=loop.run, args=(stop,), daemon=True)
-    thread.start()
-    try:
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            if repository.get_job(job_id)["status"] == "failed":
-                break
-            time.sleep(0.01)
-        assert repository.get_job(job_id)["status"] == "failed"
-    finally:
-        stop.set()
-        thread.join(timeout=2)
-
-    with pytest.raises(ValueError, match="batch size must be an integer"):
-        JobWorkerLoop._batch_size(
-            "hq_translate",
-            {"translation": {"batchSize": "2"}},
-            step_ordinal=1,
-        )
-
-    assert JobWorkerLoop._batch_size(
-        "hq_translate",
-        {"translation": {"batchSize": 128}},
-        step_ordinal=1,
-    ) == 128
-
-    assert JobWorkerLoop._batch_size(
-        "proofread",
-        {"proofreadingRounds": [{"batchSize": 256}]},
-        step_ordinal=1,
-    ) == 256
-
-
 @pytest.mark.parametrize("concurrency", [1, 2, 4])
 def test_parallel_worker_enforces_frozen_deep_learning_concurrency(
     job_platform,
@@ -3690,7 +3376,7 @@ def test_parallel_worker_enforces_frozen_deep_learning_concurrency(
         display_name="bounded deep learning pipeline",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={
                     "executionMode": "parallel",
@@ -3749,11 +3435,6 @@ def test_parallel_worker_enforces_frozen_deep_learning_concurrency(
     assert len(model_threads) == concurrency
 
 
-def test_new_jobs_reject_concurrency_above_the_pool_count() -> None:
-    with pytest.raises(ValueError, match="integer from 1 to 4"):
-        JobSpec(kind="detect", config={"deepLearningConcurrency": 5}, items=(JobItemSpec(page_id=None, step_kinds=("detect",)),))
-
-
 def test_parallel_worker_restores_old_concurrency_above_four(
     job_platform,
 ) -> None:
@@ -3762,7 +3443,7 @@ def test_parallel_worker_restores_old_concurrency_above_four(
         display_name="legacy deep learning pipeline",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={
                     "executionMode": "parallel",
@@ -3809,7 +3490,7 @@ def test_hard_pause_clears_all_persisted_pool_lock_waiting(
         display_name="pause lock waiting",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={
                     "executionMode": "parallel",
@@ -3847,7 +3528,7 @@ def test_parallel_progress_is_backend_owned_and_recovers_pool_lock_waiting(
         display_name="durable pool progress",
         specs=[
             JobSpec(
-                kind="translation",
+                kind="insight_analysis",
                 chapter_id=str(chapter["id"]),
                 config={
                     "executionMode": "parallel",

@@ -92,17 +92,7 @@ TERMINAL_ITEM_STATUSES = ("completed", "failed", "skipped", "cancelled")
 HISTORY_JOB_STATUSES = (*TERMINAL_JOB_STATUSES, "interrupted")
 QUEUE_JOB_STATUSES = ("queued", *CURRENT_JOB_STATUSES)
 HISTORY_BATCH_LIMIT = 200
-WRITE_JOB_KINDS = frozenset(
-    {
-        "translation",
-        "remove_text",
-        "detect",
-        "style_apply",
-        "text_import",
-        "container_import",
-        "web_import_commit",
-    }
-)
+WRITE_JOB_KINDS = frozenset({"container_import", "web_import_commit"})
 class JobNotFound(LookupError):
     pass
 

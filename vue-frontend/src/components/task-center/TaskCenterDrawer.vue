@@ -749,14 +749,13 @@ function analysisCreated(result: V2InsightAnalysisJobAccepted) {
                         v-if="job.status === 'failed' || job.status === 'completed_with_errors'"
                         size="xs"
                         variant="secondary"
-                        @click="retryJob(job, job.kind === 'style_apply' ? 'original' : 'current')"
+                        @click="retryJob(job, 'current')"
                       >
                         {{ job.status === 'completed_with_errors' ? '重试失败项' : '重试任务' }}
                       </UiButton>
                       <UiButton
                         v-if="
-                          (job.status === 'failed' || job.status === 'completed_with_errors') &&
-                            job.kind !== 'style_apply'
+                          job.status === 'failed' || job.status === 'completed_with_errors'
                         "
                         size="xs"
                         variant="ghost"

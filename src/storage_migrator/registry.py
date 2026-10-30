@@ -15,6 +15,9 @@ from .v3_5_4 import validate as validate_operation_snapshots
 from .v3_5_5 import convert as widen_analysis_run_scopes
 from .v3_5_5 import stop_unfinished as stop_unfinished_analysis_run_scopes
 from .v3_5_5 import validate as validate_analysis_run_scopes
+from .v3_5_6 import convert as retire_translation_job_kinds
+from .v3_5_6 import stop_unfinished as stop_unfinished_translation_job_kinds
+from .v3_5_6 import validate as validate_translation_job_kinds
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration("3.5.2", "3.5.3", retire_legacy_domains),
     Migration("3.5.3", "3.5.4", drop_operation_snapshots),
     Migration("3.5.4", "3.5.5", widen_analysis_run_scopes),
+    Migration("3.5.5", "3.5.6", retire_translation_job_kinds),
 )
 SOURCE_PREPARERS = {
     "3.5.0": stop_unfinished,
@@ -39,6 +43,7 @@ SOURCE_PREPARERS = {
     "3.5.3": stop_unfinished_retired_domains,
     "3.5.4": stop_unfinished_operation_snapshots,
     "3.5.5": stop_unfinished_analysis_run_scopes,
+    "3.5.6": stop_unfinished_translation_job_kinds,
 }
 VERSION_VALIDATORS = {
     "3.5.0": validate,
@@ -47,6 +52,7 @@ VERSION_VALIDATORS = {
     "3.5.3": validate_retired_domains,
     "3.5.4": validate_operation_snapshots,
     "3.5.5": validate_analysis_run_scopes,
+    "3.5.6": validate_translation_job_kinds,
 }
 
 

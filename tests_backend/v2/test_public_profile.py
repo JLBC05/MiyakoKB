@@ -556,7 +556,7 @@ def test_admin_user_list_includes_retained_task_activity(public_platform) -> Non
     now = utcnow()
     base_job = {
         "owner_user_id": alice_id,
-        "kind": "translation",
+        "kind": "insight_analysis",
         "config_json": "{}",
         "latest_progress_json": "{}",
         "queue_rank": None,
@@ -649,7 +649,7 @@ def test_admin_user_list_includes_retained_task_activity(public_platform) -> Non
     assert alice["interruptedTaskCount"] == 1
     assert alice["completedTaskCount"] == 1
     assert alice["issueTaskCount"] == 2
-    assert alice["currentTaskKind"] == "translation"
+    assert alice["currentTaskKind"] == "insight_analysis"
     assert alice["currentTaskStartedAt"] is not None
     assert alice["lastTaskAt"] is not None
 

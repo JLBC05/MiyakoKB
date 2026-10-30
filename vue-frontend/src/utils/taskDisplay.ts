@@ -2,11 +2,6 @@ import type { components } from '../api/generated/v2'
 type V2Job = components['schemas']['Job']
 
 const JOB_KIND_LABELS = {
-  translation: '翻译',
-  remove_text: '去除文字',
-  detect: '文本检测',
-  style_apply: '应用样式',
-  text_import: '导入文本',
   container_import: '导入文件',
   web_extract: '网页提取',
   web_import_commit: '网页入库',

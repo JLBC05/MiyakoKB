@@ -1087,7 +1087,7 @@ def test_worker_recovery_is_idempotent_and_preserves_chapter_lock(platform) -> N
         connection.execute(
             insert(jobs).values(
                 id="job",
-                kind="translation",
+                kind="insight_analysis",
                 status="running",
                 chapter_id="chapter",
                 config_json="{}",

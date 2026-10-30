@@ -153,7 +153,7 @@ export const useTaskCenterStore = defineStore('taskCenter', () => {
 
   function retryableFailedItemCount(
     chapterId: string | null | undefined,
-    kinds: readonly V2Job['kind'][] = ['translation'],
+    kinds: readonly V2Job['kind'][] = [],
   ): number {
     if (!chapterId) return 0
     return latestRetryableFailedJob(chapterId, kinds)?.progress.failedItems ?? 0

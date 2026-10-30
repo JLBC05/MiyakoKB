@@ -787,7 +787,7 @@ def test_clear_chapter_pages_is_one_guarded_atomic_backend_command(
         connection.execute(
             insert(jobs).values(
                 id="clear-pages-blocker",
-                kind="translation",
+                kind="insight_analysis",
                 status="queued",
                 book_id=str(book["id"]),
                 chapter_id=chapter_id,
@@ -969,7 +969,7 @@ def test_page_import_and_chapter_order_cas_enforce_backend_ownership(
         connection.execute(
             insert(jobs).values(
                 id="lock-job",
-                kind="translation",
+                kind="insight_analysis",
                 status="queued",
                 chapter_id=chapter_id,
                 config_json="{}",

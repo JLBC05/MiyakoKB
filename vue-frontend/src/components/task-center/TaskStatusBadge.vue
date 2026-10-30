@@ -20,7 +20,6 @@ const liveJobs = computed(() => (
   [...store.queue, ...store.history].filter(job => (
     (!props.bookId || job.bookId === props.bookId)
     && (!props.chapterId || job.chapterId === props.chapterId)
-    && (!props.chapterId || job.kind === 'translation')
     && [
       'queued',
       'running',

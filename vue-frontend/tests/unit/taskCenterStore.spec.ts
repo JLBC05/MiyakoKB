@@ -82,7 +82,7 @@ function makeJob(overrides: Partial<V2Job> & Pick<V2Job, 'jobId' | 'status'>): V
     jobId: overrides.jobId,
     batchId: null,
     batchDisplayName: null,
-    kind: 'translation',
+    kind: 'insight_analysis',
     retryOfJobId: null,
     retryMode: null,
     status,
@@ -688,8 +688,8 @@ describe('taskCenterStore snapshot reconciliation', () => {
 
     await store.refresh()
 
-    expect(store.retryableFailedItemCount('chapter-1')).toBe(2)
-    await expect(store.retryLatestFailed('chapter-1', ['translation'])).resolves.toMatchObject({
+    expect(store.retryableFailedItemCount('chapter-1', ['insight_analysis'])).toBe(2)
+    await expect(store.retryLatestFailed('chapter-1', ['insight_analysis'])).resolves.toMatchObject({
       sourceJobId: 'source-failed-job',
       failedItemCount: 2,
     })
@@ -704,7 +704,7 @@ describe('taskCenterStore snapshot reconciliation', () => {
     mocks.list.mockResolvedValue({ items: [failed, unrelatedSuccess] })
     await store.refresh()
 
-    expect(store.retryableFailedItemCount('chapter-1')).toBe(2)
+    expect(store.retryableFailedItemCount('chapter-1', ['insight_analysis'])).toBe(2)
 
     mocks.list.mockResolvedValue({
       items: [
@@ -721,7 +721,7 @@ describe('taskCenterStore snapshot reconciliation', () => {
     })
     await store.refresh()
 
-    expect(store.retryableFailedItemCount('chapter-1')).toBe(0)
+    expect(store.retryableFailedItemCount('chapter-1', ['insight_analysis'])).toBe(0)
 
     mocks.list.mockResolvedValue({
       items: [
@@ -738,19 +738,19 @@ describe('taskCenterStore snapshot reconciliation', () => {
     })
     await store.refresh()
 
-    expect(store.retryableFailedItemCount('chapter-1')).toBe(2)
+    expect(store.retryableFailedItemCount('chapter-1', ['insight_analysis'])).toBe(2)
   })
 
   it('keeps the durable history snapshot complete while deriving filters locally', async () => {
     mocks.list.mockResolvedValue({
       items: [
-        makeJob({ jobId: 'failed-1', status: 'failed', kind: 'translation', bookId: 'book-1' }),
+        makeJob({ jobId: 'failed-1', status: 'failed', kind: 'insight_analysis', bookId: 'book-1' }),
         makeJob({ jobId: 'completed-1', status: 'completed', kind: 'insight_analysis', bookId: 'book-2' }),
       ],
     })
     const store = useTaskCenterStore()
     store.statusFilter = 'failed'
-    store.kindFilter = 'translation'
+    store.kindFilter = 'insight_analysis'
     store.bookFilter = 'book-1'
 
     await store.refresh()

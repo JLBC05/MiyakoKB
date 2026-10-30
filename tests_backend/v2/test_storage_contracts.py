@@ -447,7 +447,7 @@ def test_only_one_current_job_can_exist(engine) -> None:
                 "INSERT INTO jobs "
                 "(id, kind, status, config_json, latest_progress_json, "
                 "created_at, updated_at) "
-                "VALUES ('job-1', 'translation', 'running', '{}', :progress, "
+                "VALUES ('job-1', 'insight_analysis', 'running', '{}', :progress, "
                 "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
             ),
             {"progress": _stored_job_progress("running")},

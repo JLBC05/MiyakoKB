@@ -3839,11 +3839,6 @@ components:
     JobKind:
       type: string
       enum:
-        - translation
-        - remove_text
-        - detect
-        - style_apply
-        - text_import
         - container_import
         - web_extract
         - web_import_commit

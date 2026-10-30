@@ -9,7 +9,7 @@ import {
 
 describe('task display labels', () => {
   it('localizes every category without changing its contract value', () => {
-    expect(jobKindLabel('translation')).toBe('翻译')
+    expect(jobKindLabel('insight_analysis')).toBe('漫画分析')
     expect(jobKindLabel('insight_analysis')).toBe('漫画分析')
     expect(stepKindLabel('translate')).toBe('文本翻译')
     expect(stepKindLabel('insight_analyze_page')).toBe('分析漫画页面')

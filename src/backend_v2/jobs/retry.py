@@ -84,9 +84,6 @@ class JobRetryService:
         source, selected_items = self._source(job_id, failed_only=failed_only)
         kind = str(source["kind"])
         self._require_feature(kind)
-        if kind == "style_apply":
-            strategy = "original"
-
         if kind == "insight_analysis":
             response = self._retry_insight(
                 source,
@@ -118,20 +115,6 @@ class JobRetryService:
                 failed_only=failed_only,
                 idempotency_key=idempotency_key,
             )
-        elif strategy == "current" and kind in {"translation", "remove_text"}:
-            response = self._retry_translation(
-                source,
-                selected_items,
-                failed_only=failed_only,
-                idempotency_key=idempotency_key,
-            )
-        elif strategy == "current" and kind == "detect":
-            response = self._retry_detection(
-                source,
-                selected_items,
-                failed_only=failed_only,
-                idempotency_key=idempotency_key,
-            )
         else:
             response = self._clone_original(
                 source,
@@ -148,12 +131,7 @@ class JobRetryService:
         }
 
     def _require_feature(self, kind: str) -> None:
-        if kind in {"translation", "remove_text", "detect", "text_import"}:
-            self.public_access.require_feature("translation")
-        elif kind == "style_apply":
-            self.public_access.require_feature("translation")
-            self.public_access.require_feature("editMode")
-        elif kind in {
+        if kind in {
             "insight_analysis",
             "insight_export",
             "vector_rebuild",
@@ -577,26 +555,6 @@ class JobRetryService:
             }
         return credentials
 
-    def _retry_translation(
-        self,
-        source: Mapping[str, Any],
-        selected_items: list[Mapping[str, Any]],
-        *,
-        failed_only: bool,
-        idempotency_key: str,
-    ) -> dict[str, object]:
-        raise NotImplementedError("translation retry is not supported in knowledge-only mode")
-
-    def _retry_detection(
-        self,
-        source: Mapping[str, Any],
-        selected_items: list[Mapping[str, Any]],
-        *,
-        failed_only: bool,
-        idempotency_key: str,
-    ) -> dict[str, object]:
-        raise NotImplementedError("detection retry is not supported in knowledge-only mode")
-
     def _retry_insight(
         self,
         source: Mapping[str, Any],
@@ -982,21 +940,6 @@ class JobRetryService:
             for item in selected_items
         )
         config = _json_object(source.get("config_json"))
-        if str(source["kind"]) in {
-            "translation",
-            "remove_text",
-            "detect",
-        }:
-            if str(source["kind"]) in {"translation", "remove_text"}:
-                self.public_access.enforce_translation_command(config)
-            config = self.public_access.apply_resolved_translation(
-                config,
-                page_ids=(
-                    ()
-                    if str(source["kind"]) == "detect"
-                    else tuple(requested_page_ids)
-                ),
-            )
         display = _json_object(source.get("target_display_json"))
         spec = JobSpec(
             kind=str(source["kind"]),

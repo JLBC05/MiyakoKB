@@ -2500,7 +2500,7 @@ export interface components {
         /** @enum {string} */
         JobStatus: "queued" | "running" | "paused" | "cancelled" | "completed" | "completed_with_errors" | "failed" | "interrupted";
         /** @enum {string} */
-        JobKind: "translation" | "remove_text" | "detect" | "style_apply" | "text_import" | "container_import" | "web_extract" | "web_import_commit" | "export" | "insight_analysis" | "insight_export" | "vector_rebuild" | "continuation" | "derived_rebuild";
+        JobKind: "container_import" | "web_extract" | "web_import_commit" | "export" | "insight_analysis" | "insight_export" | "vector_rebuild" | "continuation" | "derived_rebuild";
         JobProgressCurrentStep: {
             kind: string;
             itemId: components["schemas"]["Uuid"];

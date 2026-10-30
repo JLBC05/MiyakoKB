@@ -383,7 +383,7 @@ def test_real_conversion_ends_unfinished_graph_preserves_completed_items(root):
     progress = {"jobStatus": "queued", "executionMode": "sequential", "pools": [],
                 "totalItems": 2, "completedItems": 1, "failedItems": 0, "skippedItems": 0, "cancelledItems": 0}
     with closing(sqlite3.connect(root / "saber.sqlite3")) as db, db:
-        db.execute("INSERT INTO jobs(id,kind,status,config_json,latest_progress_json) VALUES ('job','translation','queued','{}',?)", (json.dumps(progress),))
+        db.execute("INSERT INTO jobs(id,kind,status,config_json,latest_progress_json) VALUES ('job','insight_analysis','queued','{}',?)", (json.dumps(progress),))
         db.execute("INSERT INTO job_items(id,job_id,ordinal,status,result_json) VALUES ('saved','job',1,'completed','{\"text\":\"saved translation\"}')")
         db.execute("INSERT INTO job_items(id,job_id,ordinal,status) VALUES ('pending','job',2,'pending')")
         db.execute("INSERT INTO job_steps(id,job_item_id,ordinal,kind,status,checkpoint_json) VALUES ('step','pending',1,'ocr','pending','{}')")

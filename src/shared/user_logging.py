@@ -29,11 +29,6 @@ STREAM_CHUNK_FIELD: Final = "saber_stream_chunk"
 STREAM_FRAME_PREFIX: Final = "@@SABER_STREAM@@"
 
 JOB_LABELS: Final = {
-    "translation": "漫画翻译",
-    "remove_text": "批量去字",
-    "detect": "文本检测",
-    "style_apply": "样式应用",
-    "text_import": "文本导入",
     "container_import": "文件导入",
     "export": "文件导出",
     "web_extract": "网页图片提取",

@@ -76,11 +76,6 @@ NONTERMINAL_JOB_STATUSES = (
     "interrupted",
 )
 JOB_KINDS = (
-    "translation",
-    "remove_text",
-    "detect",
-    "style_apply",
-    "text_import",
     "container_import",
     "web_extract",
     "web_import_commit",
@@ -766,16 +761,6 @@ Index(
     (literal(1) + jobs.c.id.is_(None).cast(Integer)),
     unique=True,
     sqlite_where=jobs.c.status.in_(EXECUTING_JOB_STATUSES),
-)
-Index(
-    "uq_jobs_one_nonterminal_translation_per_chapter",
-    jobs.c.chapter_id,
-    unique=True,
-    sqlite_where=and_(
-        jobs.c.kind == "translation",
-        jobs.c.status.in_(NONTERMINAL_JOB_STATUSES),
-        jobs.c.chapter_id.is_not(None),
-    ),
 )
 Index(
     "uq_jobs_one_nonterminal_web_commit_per_draft",
