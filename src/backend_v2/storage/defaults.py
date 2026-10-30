@@ -91,7 +91,7 @@ DEFAULT_INSIGHT_SETTINGS: dict[str, object] = {
         "batch": {
             "pagesPerBatch": 5,
             "contextBatchCount": 3,
-            "architecturePreset": "standard",
+            "architecturePreset": "chapter_based",
             "customLayers": [],
             "knowledgeMode": False,
             "extraEntities": ["characters", "locations", "abilities", "items", "concepts"],

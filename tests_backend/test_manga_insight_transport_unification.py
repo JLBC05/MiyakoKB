@@ -304,6 +304,7 @@ class MangaInsightSharedTransportTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         from src.core.manga_insight.config_models import EmbeddingConfig
         from src.core.manga_insight.embedding_client import EmbeddingClient
+        from src.shared.ai_transport import DEFAULT_EMBEDDING_REQUEST_TIMEOUT
 
         config = EmbeddingConfig(
             provider="custom",
@@ -325,7 +326,24 @@ class MangaInsightSharedTransportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client._transport.max_retries, 10)
         request = embed_mock.call_args.args[0]
-        self.assertIsNone(request.timeout)
+        # timeoutSeconds=0 必须落成「默认超时」，不能是 None（无限等待）：
+        # 2026-10-29 建久留美全书索引时，一批请求发出后连接静默死亡，
+        # 因为无超时所以既不返回也不重试，整步悬停在 832/1465。
+        self.assertEqual(request.timeout, DEFAULT_EMBEDDING_REQUEST_TIMEOUT)
+
+        configured = EmbeddingConfig(
+            provider="custom",
+            api_key="test-key",
+            model="embedding-model",
+            base_url="https://example.com/v1",
+            timeout_seconds=45,
+        )
+        with mock.patch(
+            "src.core.manga_insight.embedding_client.AsyncOpenAICompatibleTransport.embed",
+            new=mock.AsyncMock(return_value=[[0.1, 0.2]]),
+        ) as embed_mock:
+            await EmbeddingClient(configured).embed_batch(["第一页"])
+        self.assertEqual(embed_mock.call_args.args[0].timeout, 45)
 
     async def test_embedding_client_preserves_the_upstream_batch_and_order(self) -> None:
         from src.core.manga_insight.config_models import EmbeddingConfig

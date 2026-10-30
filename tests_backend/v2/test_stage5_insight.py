@@ -28,6 +28,7 @@ from src.backend_v2.insight.continuation import (
     ContinuationWorkerService,
 )
 from src.backend_v2.insight.derived import (
+    PAGE_VECTOR_DOCUMENT_MAX_CHARS,
     InsightDerivedCommandService,
     InsightDerivedRepository,
     InsightDerivedWorkerService,
@@ -3397,6 +3398,56 @@ def test_embedding_batches_reject_malformed_vectors(insight_platform) -> None:
     ]
     with pytest.raises(InsightConflict, match="dimensions do not match"):
         list(service._embedding_batches(records, config={}))
+
+
+def test_embedding_batches_respect_both_item_and_character_budgets(
+    insight_platform,
+) -> None:
+    """切批必须同时受条数与总字数约束。
+
+    Cloudflare qwen3-embedding 的 `input too big (code 3030)` 是整批口径：
+    实测 64×1000 字（6.4 万字）通过，而 32×4000 与 64×2000（12.8 万字）都失败，
+    且上游要 70~130 秒才报错，表现为建索引长时间无进展。
+    """
+    platform = insight_platform
+    seen: list[int] = []
+
+    class RecordingAlgorithms(FakeDerivedAlgorithms):
+        def embed_documents(self, documents, *, config):
+            seen.append(len(documents))
+            return [[0.5, 0.5] for _ in documents]
+
+    service = InsightDerivedWorkerService(
+        data_root=platform["data_root"],
+        engine=platform["engine"],
+        jobs=JobQueueRepository(platform["engine"]),
+        algorithms=RecordingAlgorithms(),
+        vector_store=FakeVectorStore(),
+    )
+
+    long_records = [
+        {"id": f"long-{index}", "document": "长" * 20000, "metadata": {}}
+        for index in range(5)
+    ]
+    batches = list(
+        service._embedding_batches(
+            long_records, config={}, batch_size=64, max_chars=48000
+        )
+    )
+    # 48000 / 20000 → 每批最多 2 条，总量不变。
+    assert [len(batch) for batch, _ in batches] == [2, 2, 1]
+    assert sum(len(batch) for batch, _ in batches) == 5
+
+    # 短文档仍按条数上限切（64 条 / 批）。
+    seen.clear()
+    short_records = [
+        {"id": f"short-{index}", "document": "短", "metadata": {}}
+        for index in range(100)
+    ]
+    short_batches = list(
+        service._embedding_batches(short_records, config={}, batch_size=64)
+    )
+    assert [len(batch) for batch, _ in short_batches] == [64, 36]
 
 
 @pytest.mark.parametrize(
@@ -7167,6 +7218,46 @@ def test_page_vector_document_carries_entities_and_events() -> None:
     assert build_page_vector_document({"characters": "not-a-list"}, "兜底") == "兜底"
 
 
+def test_page_vector_document_is_truncated_to_the_embedding_input_budget() -> None:
+    """事件异常密集的页必须截断，否则 embedding 会以 `input too big` 整步失败。
+
+    实测回归：FX战士久留美全书建索引时，一页的向量文档超出 Cloudflare
+    qwen3-embedding 的输入上限，`建立语义索引` 以
+    `API 错误 400: AiError: input too big` 失败，整本书没有向量索引。
+    """
+    analysis = {
+        "page_summary": "摘要" * 10,
+        "key_events": [{"summary": "关键事件" * 4000}],  # 约 16000 字符
+    }
+    document = build_page_vector_document(analysis, analysis["page_summary"])
+    assert len(document) == PAGE_VECTOR_DOCUMENT_MAX_CHARS
+    assert document.startswith("摘要" * 10)  # 截断保留开头（摘要优先）
+    # 未超限时不截断。
+    short = {"page_summary": "短摘要", "key_events": [{"summary": "短事件"}]}
+    assert build_page_vector_document(short, short["page_summary"]) == "短摘要\n短事件"
+
+
+def test_default_insight_settings_align_layers_to_chapter_boundaries() -> None:
+    """默认预设必须是 chapter_based，否则事件会在分析阶段跨话合并。
+
+    实测回归：standard 预设三层都不带 `alignToChapter`，一批 5 页可以横跨两话，
+    汇总出的关键事件因此同时挂着两话的页码（呪術廻戦重建前 291 条事件里 45 条跨章，
+    15.5%）。改成 chapter_based 后同一本书重建为 0 条跨章。
+    """
+    from src.backend_v2.storage.defaults import DEFAULT_INSIGHT_SETTINGS
+
+    batch = DEFAULT_INSIGHT_SETTINGS["analysis"]["batch"]
+    assert batch["architecturePreset"] == "chapter_based"
+    # 预设的展开由 resolver 负责：chapter_based 的前两层必须按章切窗。
+    from src.backend_v2.settings.resolver import _insight_layers
+
+    layers = _insight_layers("chapter_based", None)
+    assert layers[0]["alignToChapter"] is True
+    assert layers[1]["alignToChapter"] is True
+    # 全书级概览层不按章切分（跨全书是它的设计）。
+    assert layers[-1].get("alignToChapter") is False
+
+
 def test_page_citations_prefer_the_stored_summary_over_the_enriched_document() -> None:
     """引用必须引用本页真正写的内容，不能用拼过事件摘要的召回文档。
 
@@ -7730,7 +7821,9 @@ def test_cross_chapter_event_is_rejected_and_the_batch_retries(
         batch["pagesPerBatch"] = 4
         # 刻意不用 chapter_based：该预设按章节切批，批次永远不会跨话，
         # 也就测不到跨话事件的拒绝逻辑。standard 预设按页数窗口切批，
-        # 4 页窗口跨过 2 页 + 2 页的两章边界。
+        # 4 页窗口跨过 2 页 + 2 页的两章边界。这里显式钉住 standard，
+        # 不依赖 DEFAULT_INSIGHT_SETTINGS 的默认预设（默认已改为 chapter_based）。
+        batch["architecturePreset"] = "standard"
         connection.execute(
             update(app_settings)
             .where(app_settings.c.domain == "insight")

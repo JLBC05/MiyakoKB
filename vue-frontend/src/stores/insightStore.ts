@@ -93,7 +93,7 @@ export const useInsightStore = defineStore('insight', () => {
     batch: {
       pagesPerBatch: 5,
       contextBatchCount: 3,
-      architecturePreset: 'standard',
+      architecturePreset: 'chapter_based',
       customLayers: [],
     },
     prompts: {},

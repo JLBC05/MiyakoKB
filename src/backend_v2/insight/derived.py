@@ -929,6 +929,19 @@ PAGE_VECTOR_ENTITY_FIELDS = (
     ("items", "物品"),
 )
 
+# 单页向量文档的字符上限。个别页的关键事件异常密集（实测一页可达数万字），会超出
+# embedding 模型（Cloudflare @cf/qwen/qwen3-embedding-0.6b）的输入上限，让整个
+# 「建立语义索引」步骤以 `API 错误 400: input too big` 失败。只在超限时截断，且保留
+# 文档开头（摘要 → 出场实体 → 最早的关键事件），语义检索最有用信息都在前部。
+PAGE_VECTOR_DOCUMENT_MAX_CHARS = 4000
+
+# 单个 embedding 请求的总字符上限（不是单条）。Cloudflare
+# @cf/qwen/qwen3-embedding-0.6b 的上限作用在整批输入上：实测 64 条 × 1000 字
+# （6.4 万字）通过，32 条 × 4000 字与 64 条 × 2000 字（12.8 万字）都返回
+# `API 错误 400: input too big (code 3030)`，且上游要 70~130 秒才肯报错。
+# 因此除了单页文档截断，还必须按总字数切批；留足余量取 4.8 万字。
+EMBEDDING_BATCH_MAX_CHARS = 48_000
+
 
 def build_page_vector_document(analysis: Mapping[str, Any], summary: str) -> str:
     """把一页的分析结果拼成语义检索用的文档。
@@ -940,6 +953,9 @@ def build_page_vector_document(analysis: Mapping[str, Any], summary: str) -> str
 
     文档顺序固定（摘要 → 出场实体 → 关键事件），保证同一份分析永远产出同一段
     文本，向量可复现；空字段直接跳过，不给文档塞「无」这类噪声。
+
+    超过 ``PAGE_VECTOR_DOCUMENT_MAX_CHARS`` 时按字符截断（保留前部），
+    否则个别事件密集的页会撑爆 embedding 模型的输入上限。
     """
     parts: list[str] = [summary.strip()]
     for field, label in PAGE_VECTOR_ENTITY_FIELDS:
@@ -963,7 +979,10 @@ def build_page_vector_document(analysis: Mapping[str, Any], summary: str) -> str
             text = event.get("summary")
             if isinstance(text, str) and text.strip():
                 parts.append(text.strip())
-    return "\n".join(part for part in parts if part)
+    document = "\n".join(part for part in parts if part)
+    if len(document) > PAGE_VECTOR_DOCUMENT_MAX_CHARS:
+        document = document[:PAGE_VECTOR_DOCUMENT_MAX_CHARS]
+    return document
 
 
 def _required_boolean(value: object, field: str) -> bool:
@@ -6538,21 +6557,36 @@ class InsightDerivedWorkerService:
         *,
         config: Mapping[str, Any],
         batch_size: int = 64,
+        max_chars: int = EMBEDDING_BATCH_MAX_CHARS,
     ) -> Iterable[
         tuple[Sequence[Mapping[str, Any]], Sequence[Sequence[float]]]
     ]:
         expected_dimension: int | None = None
-        for offset in range(0, len(records), batch_size):
-            batch = records[offset : offset + batch_size]
-            documents = [
-                _required_string(
-                    row.get("document"),
-                    f"embedding record {offset + index + 1} document",
-                )
-                for index, row in enumerate(batch)
-            ]
+        documents = [
+            _required_string(
+                row.get("document"),
+                f"embedding record {index + 1} document",
+            )
+            for index, row in enumerate(records)
+        ]
+        cursor = 0
+        while cursor < len(documents):
+            # 同时受条数与总字数约束：上游的 input too big 是整批口径，
+            # 只按 64 条切会让长文档批次整体失败。
+            batch_indices: list[int] = []
+            batch_chars = 0
+            while cursor < len(documents) and len(batch_indices) < batch_size:
+                size = len(documents[cursor])
+                if batch_indices and batch_chars + size > max_chars:
+                    break
+                batch_indices.append(cursor)
+                batch_chars += size
+                cursor += 1
+            batch = [records[index] for index in batch_indices]
+            batch_documents = [documents[index] for index in batch_indices]
+            first_number = batch_indices[0] + 1
             embeddings = list(
-                self.algorithms.embed_documents(documents, config=config)
+                self.algorithms.embed_documents(batch_documents, config=config)
             )
             if len(embeddings) != len(batch):
                 raise InsightConflict("embedding result count mismatch")
@@ -6563,7 +6597,7 @@ class InsightDerivedWorkerService:
                     or not embedding
                 ):
                     raise InsightConflict(
-                        f"embedding result {offset + index + 1} is invalid"
+                        f"embedding result {first_number + index} is invalid"
                     )
                 if any(
                     isinstance(value, bool)
@@ -6572,7 +6606,7 @@ class InsightDerivedWorkerService:
                     for value in embedding
                 ):
                     raise InsightConflict(
-                        f"embedding result {offset + index + 1} contains invalid values"
+                        f"embedding result {first_number + index} contains invalid values"
                     )
                 if expected_dimension is None:
                     expected_dimension = len(embedding)

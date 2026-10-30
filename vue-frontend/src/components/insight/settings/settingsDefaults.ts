@@ -88,6 +88,6 @@ export function defaultRerankerConfig(provider: string): StoreRerankerConfig {
 export const DEFAULT_BATCH_CONFIG: BatchConfig = {
   pagesPerBatch: 5,
   contextBatchCount: 3,
-  architecturePreset: 'standard',
+  architecturePreset: 'chapter_based',
   customLayers: [],
 }

@@ -9,6 +9,7 @@ from typing import Any
 
 from src.shared.ai_transport import (
     AsyncOpenAICompatibleTransport,
+    DEFAULT_EMBEDDING_REQUEST_TIMEOUT,
     UnifiedChatRequest,
     UnifiedEmbeddingRequest,
 )
@@ -55,8 +56,12 @@ class EmbeddingClient:
             EMBEDDING_CAPABILITY,
             config.base_url,
         ) or ""
+        # 0 表示「用默认值」，不能翻译成「无限等待」：请求悬停时既无响应也无重试，
+        # 整个建索引步骤会卡死（2026-10-29 久留美全书 832/1465 处悬停的事故）。
         self._timeout = (
-            None if config.timeout_seconds == 0 else config.timeout_seconds
+            config.timeout_seconds
+            if config.timeout_seconds > 0
+            else DEFAULT_EMBEDDING_REQUEST_TIMEOUT
         )
         self._transport = AsyncOpenAICompatibleTransport(
             max_retries=config.transport_retries,

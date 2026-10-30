@@ -263,6 +263,17 @@ class UnifiedVisionRequest:
     def temperature(self) -> Optional[float]:
         return self.openai_options.request.temperature
 
+DEFAULT_EMBEDDING_REQUEST_TIMEOUT = 120.0
+"""向量请求的兜底超时（秒）。
+
+配置里 `timeoutSeconds=0` 表示「沿用默认值」。历史上这里退化成「无限等待」：
+2026-10-29 建久留美全书索引时，一批 64 条 embedding 请求发出后连接静默死亡，
+worker 既拿不到响应也不会重试，整个 `建立语义索引` 步骤悬停 —— 分页进度卡在
+832/1465，事后只能人工取消。向量接口的响应时间应在秒级，120 秒足以覆盖
+正常的 64 条批量（实测 7 秒/批），超时交给 transport/business 重试。
+"""
+
+
 @dataclass
 class UnifiedEmbeddingRequest:
     provider: str
@@ -272,7 +283,7 @@ class UnifiedEmbeddingRequest:
     credential_version_id: Optional[str] = None
     rpm_limit: int = 0
     base_url: Optional[str] = None
-    timeout: Optional[float] = None
+    timeout: Optional[float] = DEFAULT_EMBEDDING_REQUEST_TIMEOUT
 
     def __post_init__(self) -> None:
         _require_nonempty_string(self.provider, name="provider")
