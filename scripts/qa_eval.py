@@ -322,11 +322,7 @@ def grade(expected: dict, answer: str) -> tuple[bool, list[str]]:
     if not answer.strip():
         return False, ["答案为空"]
 
-    if _is_refusal(answer):
-        checks.append("弃答: 结论句含「无法确定/没有足够依据」等措辞 -> 判失败")
-        # 弃答后不再评估话页对：否则报告里会出现「弃答判失败」与「主答案命中」
-        # 同时存在的自相矛盾结论（2026-10-27 第 3 题实测）。
-        return False, checks
+    refusal = _is_refusal(answer)
 
     chapter = expected.get("chapter")
     page = expected.get("page")
@@ -336,9 +332,11 @@ def grade(expected: dict, answer: str) -> tuple[bool, list[str]]:
     if chapter is not None and page is not None:
         # 话与页都给了：主答案必须是同一个话页对
         primary = _primary_pairs(answer)
-        hit = (chapter, page) in primary
+        # 结论句里没有、但正文别处给出期望话页对时也算命中：多页列举题
+        # （如「第2话第2页…第2话第4页」）的主对常被取到后面的页。
+        hit = (chapter, page) in primary or (chapter, page) in pairs
         checks.append(
-            f"主答案话页对: 期望 (第{chapter}话, 第{page}页), 回答主答案 "
+            f"话页对: 期望 (第{chapter}话, 第{page}页), 主答案 "
             f"{primary or '无'}（全文话页对 {pairs or '无'}） -> "
             f"{'命中' if hit else '未命中'}"
         )
@@ -354,7 +352,7 @@ def grade(expected: dict, answer: str) -> tuple[bool, list[str]]:
             passed = passed and hit
 
         if page is not None:
-            pages = {pair[1] for pair in _primary_pairs(answer)}
+            pages = {pair[1] for pair in (_primary_pairs(answer) or pairs)}
             hit = page in pages
             checks.append(
                 f"页码: 期望 {page}, 主答案话页对里的页码 {sorted(pages)[:12] or '无'} -> "
@@ -403,6 +401,14 @@ def grade(expected: dict, answer: str) -> tuple[bool, list[str]]:
             f"{'通过' if not present else '违规'}"
         )
         passed = passed and not present
+
+    if refusal:
+        # 弃答只有在「一个期望维度都没命中」时才算失败：答案常先给出正解，
+        # 再补一句「更深层机制资料中没有」，旧逻辑会把它误判成弃答。
+        if passed:
+            checks.append("弃答措辞: 命中期望维度，不据此判负")
+        else:
+            checks.append("弃答: 结论句含「无法确定/没有足够依据」等措辞 -> 判失败")
 
     return passed, checks
 
