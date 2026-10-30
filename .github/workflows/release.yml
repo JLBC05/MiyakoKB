@@ -209,22 +209,22 @@ jobs:
           cache-dependency-path: |
             vue-frontend/package-lock.json
 
-      - name: Build v2 frontend
+      - name: Verify committed web bundle matches the sources
         working-directory: vue-frontend
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           npm ci
           npm run check:api
-          npm run build:check
+          # 比较的是「源码指纹」而不是「构建产物字节」：Vue 的 scoped 样式 id
+          # 由绝对路径派生，CI 上重建出的文件名与开发机永远不同，用
+          # git status 去比对会把每次发版都判成过期（v0.4.4 就是这样失败的）。
+          npm run check:build-fresh
 
-      - name: Verify generated frontend is current
+      - name: Build v2 frontend
+        working-directory: vue-frontend
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          $changes = @(git status --porcelain -- src/backend_v2/static/vue)
-          if ($changes.Count -ne 0) {
-            $changes | Write-Host
-            throw "Frontend build changed generated static assets"
-          }
+          npm run build:check
 
       # 后端契约测试不再在这里跑：windows-latest 上同一套 825 个用例本机 11 分钟、
       # runner 上 30 分钟仍未完成（三次复现，停在 [87%]）。已移到下面的

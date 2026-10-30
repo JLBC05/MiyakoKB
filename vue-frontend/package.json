@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader runner",
-    "build": "vite build --configLoader runner",
-    "build:check": "vue-tsc -b && vite build --configLoader runner",
+    "build": "vite build --configLoader runner && node scripts/stamp-build.mjs",
+    "build:check": "vue-tsc -b && vite build --configLoader runner && node scripts/stamp-build.mjs",
+    "check:build-fresh": "node scripts/stamp-build.mjs --check",
     "generate:api": "openapi-typescript ../openapi/v2.yaml -o src/api/generated/v2.ts",
     "check:api": "npm run generate:api && git diff --exit-code -- src/api/generated/v2.ts",
     "typecheck": "vue-tsc -b --pretty false",
