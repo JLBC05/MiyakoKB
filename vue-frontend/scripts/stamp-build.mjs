@@ -60,10 +60,19 @@ function collect() {
     .sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))
 }
 
+// 把行尾统一成 LF 再参与哈希：Git 在 Windows 上按 core.autocrlf 检出成 CRLF，
+// 同一份源码在不同机器上的字节不同，指纹必须与检出方式无关（v0.4.4 第二次失败即此原因）。
+// 只对能无损解码为 UTF-8 的文本文件做归一，二进制资源（图片/字体）按原始字节。
+function normalizedBytes(bytes) {
+  const text = bytes.toString('utf8')
+  if (Buffer.from(text, 'utf8').length !== bytes.length) return bytes
+  return Buffer.from(text.replace(/\r\n/g, '\n'), 'utf8')
+}
+
 function fingerprint() {
   const hash = createHash('sha256')
   for (const { full, rel } of collect()) {
-    const bytes = readFileSync(full)
+    const bytes = normalizedBytes(readFileSync(full))
     hash.update(rel, 'utf8')
     hash.update('\0', 'utf8')
     hash.update(String(bytes.length), 'utf8')
