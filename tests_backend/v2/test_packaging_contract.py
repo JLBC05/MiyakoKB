@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 from pathlib import Path
 
 from packaging.requirements import Requirement
@@ -121,12 +122,29 @@ def test_release_workflow_builds_the_triggering_revision() -> None:
     assert 'STORAGE_VERSION=$(jq -er .storageVersion version.json)' in workflow
     assert 'test -f "src/storage_migrator/schemas/$STORAGE_VERSION.sql"' in workflow
     assert "prerelease: false" in workflow
-    assert "git status --porcelain -- src/backend_v2/static/vue" in workflow
+    # 提交的前端产物用「源码指纹」校验：产物字节跨机器不可复现
+    # （Vue 的 scoped 样式 id 由绝对路径派生），所以门禁比较源码指纹而不是 git status。
+    assert "npm run check:build-fresh" in workflow
+    assert "git status --porcelain -- src/backend_v2/static/vue" not in workflow
     assert "python -m pytest tests_backend -q" in workflow
     assert "npm test" in workflow
     assert "npm run lint:ui:audit" in workflow
     assert 'echo "Build result: ${{ needs.build.result }}"' in workflow
     assert 'if [ "${{ needs.build.result }}" = "success" ]; then' in workflow
+
+
+def test_the_web_bundle_stamp_is_committed_and_wired_into_the_build() -> None:
+    package_json = (PROJECT_ROOT / "vue-frontend" / "package.json").read_text(
+        encoding="utf-8"
+    )
+    assert '"check:build-fresh": "node scripts/stamp-build.mjs --check"' in package_json
+    assert "node scripts/stamp-build.mjs" in package_json
+    assert (PROJECT_ROOT / "vue-frontend" / "scripts" / "stamp-build.mjs").is_file()
+    stamp = (PROJECT_ROOT / "src" / "backend_v2" / "static" / "vue" / "build-info.json").read_text(
+        encoding="utf-8"
+    )
+    source_hash = json.loads(stamp)["sourceHash"]
+    assert isinstance(source_hash, str) and len(source_hash) == 64
 
 
 def test_direct_runtime_dependencies_are_declared() -> None:
