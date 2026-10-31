@@ -10,6 +10,8 @@ import EntityBrowserPanel from '@/components/insight/EntityBrowserPanel.vue'
 import StorySynopsisPanel from '@/components/insight/StorySynopsisPanel.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import UiButton from '@/components/ui/UiButton.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
+import type { UiIconName } from '@/components/ui/iconRegistry'
 import * as insightApi from '@/api/insight'
 import { getBookDetail } from '@/api/bookshelf'
 import { resolveAnalysisStatus } from '@/utils/insightStatus'
@@ -21,10 +23,10 @@ const insightStore = useInsightStore()
 
 type GraphTabId = 'network' | 'entities' | 'synopsis'
 
-const graphTabs: Array<{ id: GraphTabId; label: string; icon: string }> = [
-  { id: 'network', label: '关系网络', icon: '🕸️' },
-  { id: 'entities', label: '实体浏览', icon: '🏷️' },
-  { id: 'synopsis', label: '故事梗概', icon: '📖' },
+const graphTabs: Array<{ id: GraphTabId; label: string; icon: UiIconName }> = [
+  { id: 'network', label: '关系网络', icon: 'share-2' },
+  { id: 'entities', label: '实体浏览', icon: 'tags' },
+  { id: 'synopsis', label: '故事梗概', icon: 'book-open' },
 ]
 
 const activeTab = ref<GraphTabId>('network')
@@ -200,7 +202,7 @@ watch(
             :class="{ 'graph-tab-btn--active': activeTab === tab.id }"
             @click="activeTab = tab.id"
           >
-            <span class="graph-tab-btn__icon">{{ tab.icon }}</span>
+            <UiIcon class="graph-tab-btn__icon" :name="tab.icon" :size="16" />
             <span>{{ tab.label }}</span>
           </UiButton>
         </div>
@@ -239,10 +241,10 @@ watch(
         <!-- 未选择书籍时的提示 -->
         <div v-else-if="!hasLoadedBook" class="graph-empty-container">
           <div class="graph-empty-card">
-            <span class="graph-empty-icon" aria-hidden="true">🏷️</span>
+            <UiIcon class="graph-empty-icon" name="tags" :size="28" aria-hidden="true" />
             <h2 class="graph-empty-title">请选择一本漫画</h2>
             <p class="graph-empty-desc">
-              在上方选择书籍即可查看由深度多模态分析生成的规范实体、别名对齐网络与全景世界观。
+              选择上方书籍后即可查看实体关系网络与世界观。
             </p>
           </div>
         </div>

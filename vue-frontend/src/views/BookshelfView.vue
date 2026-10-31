@@ -325,7 +325,7 @@ async function applyBatchTags() {
         @dismiss="dismissPublicTrialNotice"
       />
       <div class="bookshelf-toolbar">
-        <h1 class="bookshelf-toolbar__title">我的书架</h1>
+        <h1 class="bookshelf-toolbar__title"><UiIcon name="book-marked" :size="24" />我的书架</h1>
         <ProductActionRow
           class="bookshelf-toolbar__actions"
           aria-label="书架主要操作"
@@ -414,7 +414,7 @@ async function applyBatchTags() {
           :disabled="selectedBookCount === 0 || batchBusy"
           @click="handleBatchBuildKnowledge"
         >
-          ⚡ 批量生成知识库
+          批量生成知识库
         </UiButton>
         <UiButton
           variant="secondary"
@@ -480,7 +480,7 @@ async function applyBatchTags() {
           title="书架空空如也"
           description="点击&quot;导入漫画&quot;开始构建你的漫画知识库"
         >
-          <template #icon>📚</template>
+          <template #icon><UiIcon name="book-marked" :size="40" /></template>
           <template #actions>
             <UiButton variant="primary" @click="showImportModal = true">
               <UiIcon name="download" size="16" />
@@ -495,7 +495,7 @@ async function applyBatchTags() {
           title="未找到匹配的书籍"
           description="尝试调整搜索条件或标签筛选"
         >
-          <template #icon>🔍</template>
+          <template #icon><UiIcon name="search" :size="40" /></template>
         </ProductEmptyState>
       </div>
     </main>
@@ -585,12 +585,7 @@ async function applyBatchTags() {
   margin: 0;
   color: var(--color-text-default);
   font-weight: 700;
-  font-size: 1.8rem;
-}
-
-.bookshelf-toolbar__title::before {
-  content: '📚';
-  font-size: 1.5rem;
+  font-size: var(--font-size-lg, 20px);
 }
 
 .bookshelf-toolbar__actions {

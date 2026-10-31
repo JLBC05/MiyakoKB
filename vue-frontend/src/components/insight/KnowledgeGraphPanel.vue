@@ -7,6 +7,8 @@ import { getInsightGraph, type V2InsightGraphNode, type V2InsightGraphEdge } fro
 import UiButton from '@/components/ui/UiButton.vue'
 import UiInput from '@/components/ui/UiInput.vue'
 import UiNumberField from '@/components/ui/UiNumberField.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
+import type { UiIconName } from '@/components/ui/iconRegistry'
 
 const route = useRoute()
 const insightStore = useInsightStore()
@@ -31,13 +33,13 @@ let graph: G6Graph | null = null
 let isMounted = false
 let renderSequence = 0
 
-const categories = [
-  { key: 'all', label: '全部', icon: '🌐', color: '#8b5cf6' },
-  { key: 'characters', label: '角色', icon: '👤', color: '#a855f7' },
-  { key: 'abilities', label: '能力', icon: '⚡', color: '#eab308' },
-  { key: 'items', label: '物品', icon: '🎒', color: '#06b6d4' },
-  { key: 'locations', label: '地点', icon: '📍', color: '#10b981' },
-  { key: 'concepts', label: '概念', icon: '💡', color: '#f97316' },
+const categories: Array<{ key: string; label: string; icon: UiIconName; color: string }> = [
+  { key: 'all', label: '全部', icon: 'globe', color: '#9A9AA2' },
+  { key: 'characters', label: '角色', icon: 'users', color: '#9977CC' },
+  { key: 'abilities', label: '能力', icon: 'target', color: '#B26A00' },
+  { key: 'items', label: '物品', icon: 'folder-open', color: '#2E7D32' },
+  { key: 'locations', label: '地点', icon: 'map-pin', color: '#2F6F8F' },
+  { key: 'concepts', label: '概念', icon: 'sparkles', color: '#8A4F87' },
 ]
 
 function getCategoryColor(category: string): string {
@@ -316,7 +318,7 @@ onUnmounted(() => {
           :variant="selectedCategory === category.key ? 'primary' : 'secondary'"
           @click="selectedCategory = category.key"
         >
-          {{ category.icon }} {{ category.label }}
+          <UiIcon :name="category.icon" :size="14" /> {{ category.label }}
           <span class="knowledge-graph-panel__count">{{ categoryCounts[category.key] ?? 0 }}</span>
         </UiButton>
       </div>

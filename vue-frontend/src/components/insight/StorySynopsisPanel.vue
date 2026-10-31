@@ -8,6 +8,7 @@ import type { TimelineData, TimelineEvent, PlotThread, TimelineArc } from '@/typ
 import UiButton from '@/components/ui/UiButton.vue'
 import BaseModal from '@/components/common/BaseModal.vue'
 import UiSpinner from '@/components/ui/UiSpinner.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import { triggerBlobDownload } from '@/utils/browserDownload'
 import { downloadBlob } from '@/api/download'
@@ -157,13 +158,13 @@ function handleExportMarkdown() {
   lines.push(`# 漫画故事梗概与时间线\n`)
 
   if (storySummary.value) {
-    lines.push(`## 📖 故事概要\n`)
+    lines.push(`## 故事概要\n`)
     lines.push(storySummary.value)
     lines.push(`\n`)
   }
 
   if (displayCharacters.value.length > 0) {
-    lines.push(`## 👤 主要出场角色\n`)
+    lines.push(`## 主要出场角色\n`)
     for (const c of displayCharacters.value) {
       const aliasStr = c.aliases.length > 0 ? ` (别名: ${c.aliases.join('、')})` : ''
       lines.push(`- **${c.canonical_name}**${aliasStr}：出场频次 ${c.frequency} 次，首登场第 ${c.pages[0] ?? 1} 页`)
@@ -172,7 +173,7 @@ function handleExportMarkdown() {
   }
 
   if (plotArcs.value.length > 0) {
-    lines.push(`## 🗺️ 剧情核心阶段\n`)
+    lines.push(`## 剧情核心阶段\n`)
     for (const arc of plotArcs.value) {
       const range = arc.page_range ? ` (P.${arc.page_range.start} - P.${arc.page_range.end})` : ''
       lines.push(`### ${arc.name}${range}\n${arc.description}\n`)
@@ -181,7 +182,7 @@ function handleExportMarkdown() {
   }
 
   if (plotThreads.value.length > 0) {
-    lines.push(`## 🧵 关键伏笔与剧情线\n`)
+    lines.push(`## 关键伏笔与剧情线\n`)
     for (const thread of plotThreads.value) {
       lines.push(`- **[${thread.type} | ${thread.status}] ${thread.name}**：${thread.description || '暂无详细描述'}`)
     }
@@ -308,7 +309,7 @@ onMounted(() => {
           :disabled="isLoading || (!storySummary && timelineEvents.length === 0)"
           @click="handleExportMarkdown"
         >
-          📥 导出 Markdown
+          <UiIcon name="download" :size="14" /> 导出 Markdown
         </UiButton>
         <UiButton
           size="sm"
@@ -317,7 +318,7 @@ onMounted(() => {
           title="把实体网络、时间线、概览、逐页分析与角色资料打成一个 zip"
           @click="handleExportKnowledgeArchive"
         >
-          {{ isExportingArchive ? '导出中…' : '🗂️ 导出知识库' }}
+          <UiIcon name="folder-open" :size="14" /> {{ isExportingArchive ? '导出中…' : '导出知识库' }}
         </UiButton>
         <UiButton
           size="sm"
@@ -325,7 +326,7 @@ onMounted(() => {
           :disabled="isLoading || isRegenerating"
           @click="handleRegenerate"
         >
-          🔄 重新生成时间线
+          <UiIcon name="refresh" :size="14" /> 重新生成时间线
         </UiButton>
       </div>
     </header>
@@ -357,7 +358,7 @@ onMounted(() => {
 
     <!-- 空数据状态 -->
     <div v-else-if="!storySummary && timelineEvents.length === 0 && displayCharacters.length === 0" class="synopsis-empty">
-      <div class="synopsis-empty__icon">📖</div>
+      <UiIcon class="synopsis-empty__icon" name="book-open" :size="40" />
       <h3 class="synopsis-empty__title">暂无故事梗概</h3>
       <p class="synopsis-empty__desc">
         当前漫画尚未生成时间线与故事概要。可在漫画库或书籍详情页点击“构建知识库”启动深度分析。
@@ -376,7 +377,7 @@ onMounted(() => {
           <!-- 故事概要大卡片 -->
           <section class="synopsis-card synopsis-summary-card">
             <div class="synopsis-card__header">
-              <span class="synopsis-card__icon">📖</span>
+              <UiIcon class="synopsis-card__icon" name="book-open" :size="18" />
               <h3 class="synopsis-card__title">宏观故事概要</h3>
             </div>
             <div class="synopsis-summary-card__content">
@@ -393,7 +394,7 @@ onMounted(() => {
           <!-- 剧情核心阶段 (Plot Arcs) -->
           <section v-if="plotArcs.length > 0" class="synopsis-card">
             <div class="synopsis-card__header">
-              <span class="synopsis-card__icon">🗺️</span>
+              <UiIcon class="synopsis-card__icon" name="map-pin" :size="18" />
               <h3 class="synopsis-card__title">剧情核心阶段</h3>
             </div>
             <div class="synopsis-arcs-list">
@@ -412,7 +413,7 @@ onMounted(() => {
           <!-- 关键伏笔与悬念 (Plot Threads) -->
           <section v-if="plotThreads.length > 0" class="synopsis-card">
             <div class="synopsis-card__header">
-              <span class="synopsis-card__icon">🧵</span>
+              <UiIcon class="synopsis-card__icon" name="link" :size="18" />
               <h3 class="synopsis-card__title">关键伏笔与主线悬念</h3>
             </div>
             <div class="synopsis-threads-list">
@@ -444,7 +445,7 @@ onMounted(() => {
         <div class="synopsis-right-col">
           <section class="synopsis-card synopsis-characters-card">
             <div class="synopsis-card__header">
-              <span class="synopsis-card__icon">👤</span>
+              <UiIcon class="synopsis-card__icon" name="users" :size="18" />
               <h3 class="synopsis-card__title">核心主要角色</h3>
               <span class="synopsis-card__badge">{{ displayCharacters.length }} 位</span>
             </div>
@@ -466,7 +467,7 @@ onMounted(() => {
                   <div class="char-card__name-row">
                     <span class="char-card__name">{{ char.canonical_name }}</span>
                     <span class="char-card__freq" title="总出场频次">
-                      🔥 {{ char.frequency }}
+                      <UiIcon name="bar-chart" :size="12" /> {{ char.frequency }}
                     </span>
                   </div>
                   <div class="char-card__slug">
@@ -494,7 +495,7 @@ onMounted(() => {
       <!-- 下方全宽：关键剧情时间线 (Story Timeline) -->
       <section class="synopsis-card synopsis-timeline-card">
         <div class="synopsis-card__header">
-          <span class="synopsis-card__icon">⏳</span>
+          <UiIcon class="synopsis-card__icon" name="clock" :size="18" />
           <h3 class="synopsis-card__title">剧情关键发展时间线</h3>
           <span class="synopsis-card__badge">{{ timelineEvents.length }} 个节点</span>
         </div>
@@ -521,7 +522,7 @@ onMounted(() => {
               <div class="timeline-content-card">
                 <div class="timeline-card__meta">
                   <span v-if="event.page_numbers?.length" class="timeline-card__page-tag">
-                    📖 P.{{ event.page_numbers.join(', ') }}
+                    <UiIcon name="file-text" :size="12" /> P.{{ event.page_numbers.join(', ') }}
                   </span>
                   <span v-if="event.importance" class="timeline-card__imp-tag">
                     {{ event.importance }}
@@ -545,7 +546,7 @@ onMounted(() => {
                     class="timeline-card__thumb-img"
                     loading="lazy"
                   />
-                  <div class="timeline-card__thumb-hover">🔍 放大</div>
+                  <div class="timeline-card__thumb-hover"><UiIcon name="search" :size="14" /> 放大</div>
                 </div>
               </div>
             </div>
@@ -590,7 +591,6 @@ onMounted(() => {
   --synopsis-accent-whisper-violet: rgba(139, 92, 246, 0.1);
   --synopsis-accent-soft: rgba(139, 92, 246, 0.2);
   --synopsis-accent: #8b5cf6;
-  --synopsis-accent-red: #ec4899;
   --synopsis-accent-amber: #f59e0b;
   --synopsis-accent-soft-amber: rgba(245, 158, 11, 0.15);
   --synopsis-accent-whisper-amber: rgba(245, 158, 11, 0.12);
@@ -606,7 +606,7 @@ onMounted(() => {
   --synopsis-surface: var(--synopsis-accent-whisper);
   --synopsis-surface-gray: var(--synopsis-accent-whisper-violet);
   --synopsis-shadow-gray-mid: var(--synopsis-accent-soft);
-  --synopsis-surface-gray-mid: linear-gradient(135deg, var(--synopsis-accent), var(--synopsis-accent-red));
+  --synopsis-surface-gray-mid: var(--synopsis-accent);
   --synopsis-text: var(--synopsis-accent-amber);
   --synopsis-surface-gray-mid-alt2: var(--synopsis-accent-soft-amber);
   --synopsis-surface-gray-mid-alt3: var(--synopsis-accent-whisper-amber);

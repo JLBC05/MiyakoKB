@@ -9,6 +9,7 @@ import { useInsightStore } from '@/stores/insightStore'
 import ProductComposer from '@/components/product/ProductComposer.vue'
 import ProductScrollStack from '@/components/product/ProductScrollStack.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 
 const { getQAStatusMock, sendChatMock } = vi.hoisted(() => ({
   getQAStatusMock: vi.fn(),
@@ -147,7 +148,9 @@ describe('QAPanel Markdown rendering', () => {
       title: '智能问答',
       tone: 'neutral',
     })
-    expect(emptyState.get('.product-status-banner__icon-text').text()).toBe('💬')
+    expect(emptyState.find('.product-status-banner__icon-text').exists()).toBe(false)
+    expect(emptyState.find('.product-status-banner__icon.ui-icon').exists()).toBe(true)
+    expect(emptyState.findComponent(UiIcon).props('name')).toBe('message')
     expect(wrapper.text()).toContain('针对已分析的漫画内容提问，获取精准回答')
   })
 

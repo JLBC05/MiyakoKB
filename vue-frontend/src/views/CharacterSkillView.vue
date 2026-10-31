@@ -7,6 +7,7 @@ import BookSelector from '@/components/insight/BookSelector.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiNumberField from '@/components/ui/UiNumberField.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 import { getBookDetail } from '@/api/bookshelf'
 import {
   buildInsightCharacterSkill,
@@ -682,7 +683,7 @@ watch(
 
       <div v-else-if="!bookId" class="character-skill-empty">
         <div class="character-skill-empty__card">
-          <span class="character-skill-empty__icon" aria-hidden="true">🎭</span>
+          <UiIcon class="character-skill-empty__icon" name="users" :size="40" aria-hidden="true" />
           <h2 class="character-skill-empty__title">请选择一本漫画</h2>
           <p class="character-skill-empty__desc">
             选好书籍后，可以从实体知识网络中挑选角色，生成带人格层与页码引用的角色 Skill 档案。
@@ -803,7 +804,7 @@ watch(
                 :aria-selected="activeKind === 'skill'"
                 @click="activeKind = 'skill'"
               >
-                🎭 角色 Skill
+                <UiIcon name="users" :size="16" /> 角色 Skill
               </UiButton>
               <UiButton
                 variant="tab"
@@ -813,7 +814,7 @@ watch(
                 :aria-selected="activeKind === 'card'"
                 @click="activeKind = 'card'"
               >
-                🃏 角色卡
+                <UiIcon name="file-text" :size="16" /> 角色卡
               </UiButton>
             </div>
 

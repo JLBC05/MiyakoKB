@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import ProductChipList from '@/components/product/ProductChipList.vue'
 import type { ProductChipItem } from '@/components/product/ProductChipList.vue'
 import UiButton from '@/components/ui/UiButton.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 import UiIconButton from '@/components/ui/UiIconButton.vue'
 import type { BookData } from '@/types/api'
 
@@ -67,7 +68,7 @@ function handleCoverError(): void {
         :alt="`${book.title} 封面`"
         @error="handleCoverError"
       >
-      <div v-else class="book-detail-summary__cover-placeholder" aria-label="无封面">📖</div>
+      <div v-else class="book-detail-summary__cover-placeholder" aria-label="无封面"><UiIcon name="book-open" :size="40" /></div>
     </div>
     <div class="book-detail-summary__meta">
       <h3 class="book-detail-summary__title">{{ book.title }}</h3>
@@ -108,8 +109,6 @@ function handleCoverError(): void {
 
 <style scoped>
 .book-detail-summary {
-  --book-detail-summary-cover-shadow: var(--shadow-medium);
-
   display: flex;
   align-items: flex-start;
   gap: 24px;
@@ -121,8 +120,8 @@ function handleCoverError(): void {
   overflow: hidden;
   border-radius: 12px;
   aspect-ratio: 3 / 4;
-  background: linear-gradient(135deg, var(--color-action-brand-fill, var(--color-action-brand)) 0%, var(--color-action-brand-fill-strong, var(--color-action-brand-strong)) 100%);
-  box-shadow: 0 8px 24px var(--book-detail-summary-cover-shadow);
+  background: var(--color-surface-secondary);
+  box-shadow: none;
 }
 
 .book-detail-summary__cover-image {

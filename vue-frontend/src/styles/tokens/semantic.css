@@ -1,151 +1,152 @@
 :root {
   color-scheme: light;
 
-  --color-action-primary: #3498db;
-  --color-action-primary-hover: #2980b9;
-  --color-action-brand: #667eea;
-  --color-action-brand-strong: #764ba2;
-  --color-action-success: #28a745;
-  --color-action-success-strong: #20c997;
-  --color-action-success-bright: #00ff88;
-  --color-action-success-bright-active: #00cc6a;
+  /* 强调色：全站唯一彩色（品牌紫） */
+  --color-action-primary: #9977CC;
+  --color-action-primary-hover: #7E5CB3;
+  --color-action-brand: #9977CC;
+  --color-action-brand-strong: #7E5CB3;
+  --color-action-success: #2E7D32;
+  --color-action-success-strong: #2E7D32;
 
-  --color-status-success: #5cb85c;
-  --color-status-error: #d9534f;
-  --color-status-error-hover: #d43f3a;
-  --color-status-error-active: #c9302c;
-  --color-status-warning: #f0ad4e;
-  --color-status-info: #17a2b8;
-  --color-status-warning-surface: #fff3cd;
-  --color-status-warning-surface-soft: #fff8e6;
+  /* 状态色：低饱和，不做整块实心主按钮 */
+  --color-status-success: #2E7D32;
+  --color-status-error: #C0392B;
+  --color-status-error-hover: #A93226;
+  --color-status-warning: #B26A00;
+  --color-status-info: #4A5568;
+  --color-status-warning-surface: #FBF3E4;
+  --color-status-warning-surface-soft: #FDF8EF;
 
-  --color-surface-app: #f8fafc;
-  --color-surface-base: #fff;
+  /* 面：中性灰 */
+  --color-surface-app: #F7F7F8;
+  --color-surface-base: #FFFFFF;
   --color-surface-card: var(--color-surface-base);
-  --color-surface-input: #f9fafc;
-  --color-surface-muted: #f3f4f6;
-  --color-surface-neutral-muted: #f1f5f9;
-  --color-surface-subtle: #f5f5f5;
-  --color-surface-hover: #e5e7eb;
-  --color-surface-interactive-hover: #f0f4f8;
-  --color-surface-quiet: #f8fafc;
-  --color-surface-raised: rgba(255, 255, 255, 0.72);
-  --color-surface-brand: #6366f1;
-  --color-surface-brand-strong: #4f46e5;
-  --color-surface-danger-soft: rgba(217, 55, 55, .12);
-  --color-surface-inverse: #1a1a2e;
-  --color-surface-inverse-raised: #2d2d44;
+  --color-surface-input: #FFFFFF;
+  --color-surface-muted: #F2F2F3;
+  --color-surface-neutral-muted: #F2F2F3;
+  --color-surface-subtle: #F2F2F3;
+  --color-surface-hover: #ECECEE;
+  --color-surface-interactive-hover: #F2F2F3;
+  --color-surface-quiet: #F7F7F8;
+  --color-surface-raised: rgba(255, 255, 255, 0.9);
+  --color-surface-brand: #9977CC;
+  --color-surface-brand-strong: #7E5CB3;
+  --color-surface-danger-soft: rgba(192, 57, 43, .1);
+  --color-surface-inverse: #1F1F22;
+  --color-surface-inverse-raised: #2A2A2E;
 
   --color-overlay-inverse-subtle: rgba(255, 255, 255, .1);
   --color-overlay-inverse-soft: rgba(255, 255, 255, .15);
   --color-overlay-inverse-raised: rgba(255, 255, 255, .18);
   --color-overlay-inverse-muted: rgba(255, 255, 255, .2);
   --color-overlay-inverse-emphasis: rgba(255, 255, 255, .25);
-  --color-overlay-backdrop-solid: #1a202c;
+  --color-overlay-backdrop-solid: #1F1F22;
   --color-overlay-scrim-subtle: rgba(0, 0, 0, .3);
   --color-overlay-scrim: rgba(0, 0, 0, .5);
   --color-overlay-backdrop-strong: rgba(0, 0, 0, .7);
 
-  --color-text-default: #333;
-  --color-text-strong: var(--color-overlay-backdrop-solid);
-  --color-text-secondary: #666;
-  --color-text-supporting: #777;
-  --color-text-muted: #999;
-  --color-text-heading: #2c3e50;
-  --color-text-inverse: #fff;
-  --color-text-brand: #6366f1;
-  --color-text-link-strong: #1f5fc3;
-  --color-text-danger: #dc3545;
+  /* 文字 */
+  --color-text-default: #1F1F22;
+  --color-text-strong: #1F1F22;
+  --color-text-secondary: #6B6B72;
+  --color-text-supporting: #6B6B72;
+  --color-text-muted: #9A9AA2;
+  --color-text-heading: #1F1F22;
+  --color-text-inverse: #FFFFFF;
+  --color-text-brand: #6B4FA0;
+  --color-text-link-strong: #6B4FA0;
+  --color-text-danger: #C0392B;
 
-  --color-border-default: #e0e0e0;
-  --color-border-subtle: #ddd;
-  --color-border-muted: #e2e8f0;
-  --color-border-input: #e0e6ed;
-  --color-border-soft: #eee;
-  --color-border-brand: #6366f1;
-  --color-border-brand-gradient: #667eea;
+  /* 边框 */
+  --color-border-default: #E4E4E7;
+  --color-border-subtle: #E4E4E7;
+  --color-border-muted: #E4E4E7;
+  --color-border-input: #D9D9DE;
+  --color-border-soft: #ECECEE;
+  --color-border-brand: #9977CC;
+  --color-border-brand-gradient: #9977CC;
 
-  --color-focus-brand-soft: rgba(99, 102, 241, .1);
-  --color-focus-brand-subtle: rgba(102, 126, 234, 0.16);
+  --color-focus-brand-soft: rgba(153, 119, 204, .12);
+  --color-focus-brand-subtle: rgba(153, 119, 204, .24);
 
-  --shadow-soft: rgba(0, 0, 0, .08);
-  --shadow-medium: rgba(0, 0, 0, .12);
-  --shadow-action-brand: rgba(102, 126, 234, .4);
+  --shadow-soft: rgba(0, 0, 0, .06);
+  --shadow-medium: rgba(0, 0, 0, .1);
+  --shadow-action-brand: rgba(153, 119, 204, .28);
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --color-action-primary: #60a5fa;
-  --color-action-primary-hover: #3b82f6;
-  --color-action-brand: #818cf8;
-  --color-action-brand-strong: #a78bfa;
-  --color-action-success: #34d399;
-  --color-action-success-strong: #10b981;
+  --color-action-primary: #A98EDA;
+  --color-action-primary-hover: #B9A2E4;
+  --color-action-brand: #A98EDA;
+  --color-action-brand-strong: #C4B0EA;
+  --color-action-success: #6BBF73;
+  --color-action-success-strong: #6BBF73;
 
-  --color-status-success: #34d399;
-  --color-status-error: #f87171;
-  --color-status-error-hover: #ef4444;
-  --color-status-error-active: #dc2626;
-  --color-status-warning: #fbbf24;
-  --color-status-info: #38bdf8;
-  --color-status-warning-surface: rgba(251, 191, 36, .18);
-  --color-status-warning-surface-soft: rgba(251, 191, 36, .12);
+  --color-status-success: #6BBF73;
+  --color-status-error: #E57368;
+  --color-status-error-hover: #EF8A80;
+  --color-status-warning: #D9A441;
+  --color-status-info: #A0A8B4;
+  --color-status-warning-surface: rgba(217, 164, 65, .15);
+  --color-status-warning-surface-soft: rgba(217, 164, 65, .1);
 
-  --color-surface-app: #111827;
-  --color-surface-base: #172033;
+  --color-surface-app: #161618;
+  --color-surface-base: #1F1F22;
   --color-surface-card: var(--color-surface-base);
-  --color-surface-input: #101827;
-  --color-surface-muted: #1f2937;
-  --color-surface-neutral-muted: #1e293b;
-  --color-surface-subtle: #1e293b;
-  --color-surface-hover: #263447;
-  --color-surface-interactive-hover: #1d4ed8;
-  --color-surface-quiet: #111827;
-  --color-surface-raised: rgba(23, 32, 51, .86);
-  --color-surface-brand: #6366f1;
-  --color-surface-brand-strong: #7c3aed;
-  --color-surface-danger-soft: rgba(248, 113, 113, .16);
+  --color-surface-input: #26262A;
+  --color-surface-muted: #26262A;
+  --color-surface-neutral-muted: #26262A;
+  --color-surface-subtle: #2A2A2E;
+  --color-surface-hover: #303036;
+  --color-surface-interactive-hover: #303036;
+  --color-surface-quiet: #161618;
+  --color-surface-raised: rgba(31, 31, 34, .88);
+  --color-surface-brand: #A98EDA;
+  --color-surface-brand-strong: #C4B0EA;
+  --color-surface-danger-soft: rgba(229, 115, 104, .16);
 
-  --color-overlay-backdrop-solid: #020617;
-  --color-overlay-scrim-subtle: rgba(2, 6, 23, .42);
-  --color-overlay-scrim: rgba(2, 6, 23, .64);
-  --color-overlay-backdrop-strong: rgba(2, 6, 23, .78);
+  --color-overlay-backdrop-solid: #0E0E10;
+  --color-overlay-scrim-subtle: rgba(0, 0, 0, .42);
+  --color-overlay-scrim: rgba(0, 0, 0, .64);
+  --color-overlay-backdrop-strong: rgba(0, 0, 0, .78);
 
-  --color-text-default: #e5e7eb;
-  --color-text-strong: #f8fafc;
-  --color-text-secondary: #cbd5e1;
-  --color-text-supporting: #b6c2d1;
-  --color-text-muted: #94a3b8;
-  --color-text-heading: #f8fafc;
-  --color-text-brand: #a5b4fc;
-  --color-text-link-strong: #93c5fd;
-  --color-text-danger: #fca5a5;
+  --color-text-default: #F2F2F3;
+  --color-text-strong: #F2F2F3;
+  --color-text-secondary: #A8A8B0;
+  --color-text-supporting: #A8A8B0;
+  --color-text-muted: #75757D;
+  --color-text-heading: #F2F2F3;
+  --color-text-brand: #C4B0EA;
+  --color-text-link-strong: #C4B0EA;
+  --color-text-danger: #E57368;
 
-  --color-border-default: #334155;
-  --color-border-subtle: #475569;
-  --color-border-muted: #2d3a4f;
-  --color-border-input: #3b4a62;
-  --color-border-soft: #263447;
-  --color-border-brand: #818cf8;
-  --color-border-brand-gradient: #818cf8;
+  --color-border-default: #333338;
+  --color-border-subtle: #3A3A40;
+  --color-border-muted: #333338;
+  --color-border-input: #3A3A40;
+  --color-border-soft: #2A2A2E;
+  --color-border-brand: #A98EDA;
+  --color-border-brand-gradient: #A98EDA;
 
-  --color-focus-brand-soft: rgba(129, 140, 248, .18);
-  --color-focus-brand-subtle: rgba(129, 140, 248, .26);
+  --color-focus-brand-soft: rgba(169, 142, 218, .2);
+  --color-focus-brand-subtle: rgba(169, 142, 218, .3);
 
-  --shadow-soft: rgba(0, 0, 0, .28);
-  --shadow-medium: rgba(0, 0, 0, .36);
-  --shadow-action-brand: rgba(129, 140, 248, .36);
+  --shadow-soft: rgba(0, 0, 0, .3);
+  --shadow-medium: rgba(0, 0, 0, .4);
+  --shadow-action-brand: rgba(169, 142, 218, .3);
 
-  /* Dark-only fills; components fall back to their original light colors. */
-  --color-action-primary-fill: #2563eb;
-  --color-action-primary-fill-hover: #1d4ed8;
-  --color-action-brand-fill: #4f46e5;
-  --color-action-brand-fill-strong: #6d28d9;
-  --color-action-success-fill: #15803d;
-  --color-action-success-fill-strong: #166534;
-  --color-status-error-fill: #b91c1c;
-  --color-status-error-fill-hover: #991b1b;
-  --color-status-info-fill: #0e7490;
-  --color-text-on-warning: #1a1a2e;
+  /* Dark-only fills; 组件用 var(--color-*-fill, 回退) 读取 */
+  --color-action-primary-fill: #9977CC;
+  --color-action-primary-fill-hover: #7E5CB3;
+  --color-action-brand-fill: #9977CC;
+  --color-action-brand-fill-strong: #7E5CB3;
+  --color-action-success-fill: #2E7D32;
+  --color-action-success-fill-strong: #256327;
+  --color-status-error-fill: #A93226;
+  --color-status-error-fill-hover: #922B21;
+  --color-status-info-fill: #3A3A40;
+  --color-text-on-warning: #1F1F22;
 }

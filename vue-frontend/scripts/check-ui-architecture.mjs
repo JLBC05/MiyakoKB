@@ -561,8 +561,11 @@ function collectSourceCustomPropertyReferencesFromPath(path, refs) {
   if (isTokenFile(normalizedPath)) {
     return
   }
-  for (const token of collectSourceCustomPropertyReferencesFromContent(readFileSync(path, 'utf8'))) {
-    refs.add(token)
+  const fileContent = readFileSync(path, 'utf8')
+  for (const styleContent of extractStyleContents(fileContent, path)) {
+    for (const token of collectSourceCustomPropertyReferencesFromContent(styleContent)) {
+      refs.add(token)
+    }
   }
 }
 

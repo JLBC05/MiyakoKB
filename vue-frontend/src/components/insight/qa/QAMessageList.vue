@@ -53,7 +53,6 @@ watch(
         icon-name="message"
         title="智能问答"
       >
-        <template #icon>💬</template>
         针对已分析的漫画内容提问，获取精准回答
       </ProductStatusBanner>
     </template>

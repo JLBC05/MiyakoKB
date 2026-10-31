@@ -11,6 +11,8 @@ import { confirmProductAction } from '@/composables/useProductConfirm'
 import { showToast } from '@/utils/toast'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiInput from '@/components/ui/UiInput.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
+import type { UiIconName } from '@/components/ui/iconRegistry'
 
 const route = useRoute()
 const insightStore = useInsightStore()
@@ -26,13 +28,13 @@ const rebuildTaskId = ref('')
 const rebuildBookId = ref('')
 const rebuildProgressLabel = ref('')
 
-const categories = [
-  { key: 'all', label: '全部', icon: '🌐' },
-  { key: 'characters', label: '角色', icon: '👤' },
-  { key: 'abilities', label: '能力', icon: '⚡' },
-  { key: 'items', label: '物品', icon: '🎒' },
-  { key: 'locations', label: '地点', icon: '📍' },
-  { key: 'concepts', label: '概念', icon: '💡' },
+const categories: Array<{ key: string; label: string; icon: UiIconName }> = [
+  { key: 'all', label: '全部', icon: 'globe' },
+  { key: 'characters', label: '角色', icon: 'users' },
+  { key: 'abilities', label: '能力', icon: 'target' },
+  { key: 'items', label: '物品', icon: 'folder-open' },
+  { key: 'locations', label: '地点', icon: 'map-pin' },
+  { key: 'concepts', label: '概念', icon: 'sparkles' },
 ]
 
 const categoryCountMap = computed(() => {
@@ -72,13 +74,13 @@ const groupedEntities = computed(() => {
       {
         key: selectedCategory.value,
         label: categories.find(c => c.key === selectedCategory.value)?.label ?? selectedCategory.value,
-        icon: categories.find(c => c.key === selectedCategory.value)?.icon ?? '🏷️',
+        icon: categories.find(c => c.key === selectedCategory.value)?.icon ?? 'tags',
         list: filteredEntities.value,
       },
     ]
   }
 
-  const groups: Array<{ key: string; label: string; icon: string; list: V2InsightEntity[] }> = []
+  const groups: Array<{ key: string; label: string; icon: UiIconName; list: V2InsightEntity[] }> = []
   for (const cat of categories) {
     if (cat.key === 'all') continue
     const list = filteredEntities.value.filter(e => e.category === cat.key)
@@ -197,7 +199,7 @@ onMounted(() => {
           size="xs"
           @click="selectedCategory = cat.key"
         >
-          <span class="entity-filter-chip__icon">{{ cat.icon }}</span>
+          <UiIcon class="entity-filter-chip__icon" :name="cat.icon" :size="14" />
           <span class="entity-filter-chip__label">{{ cat.label }}</span>
           <span class="entity-filter-chip__count">{{ categoryCountMap[cat.key] ?? 0 }}</span>
         </UiButton>
@@ -254,7 +256,7 @@ onMounted(() => {
       v-else-if="!isLoading && entities.length > 0 && filteredEntities.length === 0"
       class="entity-browser-panel__empty"
     >
-      <span class="entity-browser-panel__empty-icon">🔍</span>
+      <UiIcon class="entity-browser-panel__empty-icon" name="search" :size="28" />
       <p class="entity-browser-panel__empty-text">没有匹配「{{ searchQuery }}」的实体</p>
       <p class="entity-browser-panel__empty-subtext">试试更短的关键词，或切换到其它分类。</p>
       <UiButton variant="secondary" size="sm" @click="searchQuery = ''">清除搜索</UiButton>
@@ -262,7 +264,7 @@ onMounted(() => {
 
     <!-- Empty State -->
     <div v-else-if="!isLoading && entities.length === 0" class="entity-browser-panel__empty">
-      <span class="entity-browser-panel__empty-icon">📭</span>
+      <UiIcon class="entity-browser-panel__empty-icon" name="folder-open" :size="28" />
       <p class="entity-browser-panel__empty-text">当前书籍暂无实体对齐数据</p>
       <p class="entity-browser-panel__empty-subtext">完成漫画洞察分析后将自动生成标准实体库与别名映射。</p>
     </div>
@@ -275,7 +277,7 @@ onMounted(() => {
         class="entity-group-section"
       >
         <div class="entity-group-section__header">
-          <span class="entity-group-section__icon">{{ group.icon }}</span>
+          <UiIcon class="entity-group-section__icon" :name="group.icon" :size="16" />
           <h3 class="entity-group-section__title">{{ group.label }}</h3>
           <span class="entity-group-section__badge">{{ group.list.length }}</span>
         </div>

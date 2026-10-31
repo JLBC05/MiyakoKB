@@ -830,10 +830,7 @@ onMounted(() => {
   --manga-import-surface-whisper: rgba(139, 92, 246, 0.08);
   --manga-import-stroke-light: rgba(139, 92, 246, 0.25);
   --manga-import-surface-whisper-white: rgba(255, 255, 255, 0.1);
-  --manga-import-surface: #8b5cf6;
   --manga-import-surface-violet: #a855f7;
-  --manga-import-surface-violet-mid: #c084fc;
-  --manga-import-surface-medium: rgba(255, 255, 255, 0.4);
   --manga-import-text-blue: #94a3b8;
   --manga-import-surface-whisper-red: rgba(239, 68, 68, 0.1);
   --manga-import-surface-whisper-amber: rgba(245, 158, 11, 0.1);
@@ -1116,34 +1113,18 @@ onMounted(() => {
 .progress-bar-fill {
   height: 100%;
   border-radius: 9999px;
-  background: linear-gradient(90deg, var(--manga-import-surface) 0%, var(--manga-import-surface-violet) 50%, var(--manga-import-surface-violet-mid) 100%);
+  background: var(--color-action-primary);
   transition: width 0.15s ease-out;
   position: relative;
   overflow: hidden;
 }
 
 .progress-bar-glare {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    var(--manga-import-surface-medium) 50%,
-    transparent 100%
-  );
-  animation: progress-glare-move 1.5s infinite;
-}
-
-@keyframes progress-glare-move {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
+  display: none;
 }
 
 .progress-sub-text {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--color-text-secondary, var(--manga-import-text-blue));
   padding-left: 24px;
 }

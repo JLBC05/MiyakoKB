@@ -28,13 +28,12 @@ withDefaults(defineProps<{
   min-width: 0;
   gap: 6px;
   padding: 6px 12px;
-  border-radius: 20px;
+  border-radius: var(--radius-pill, 999px);
   background: var(--product-header-meta-pill-background, var(--color-surface-muted));
   color: var(--product-header-meta-pill-text, var(--color-text-default));
   font-family: var(--product-header-meta-pill-font, var(--font-mono, 'Consolas', 'Monaco', monospace));
-  font-size: 0.85rem;
+  font-size: var(--font-size-xs, 12px);
   line-height: 1.2;
-  backdrop-filter: blur(4px);
 }
 
 .product-header-meta-pill__label {

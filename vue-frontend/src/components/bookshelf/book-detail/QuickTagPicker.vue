@@ -94,10 +94,6 @@ function addExistingTag(id: string | number): void {
 }
 
 .quick-tag-picker__list {
-  --quick-tag-picker-new-background-start: var(--color-focus-brand-soft);
-  --quick-tag-picker-new-background-end: color-mix(in srgb, var(--color-action-brand-strong) 10%, transparent);
-  --quick-tag-picker-new-background-hover-start: var(--color-focus-brand-subtle);
-  --quick-tag-picker-new-background-hover-end: color-mix(in srgb, var(--color-action-brand-strong) 18%, transparent);
   --quick-tag-picker-new-border: var(--shadow-action-brand);
   --quick-tag-picker-new-border-hover: color-mix(in srgb, var(--color-action-brand) 60%, transparent);
 
@@ -126,13 +122,13 @@ function addExistingTag(id: string | number): void {
 }
 
 .quick-tag-picker__item--new {
-  --product-record-card-background: linear-gradient(135deg, var(--quick-tag-picker-new-background-start) 0%, var(--quick-tag-picker-new-background-end) 100%);
+  --product-record-card-background: var(--color-surface-secondary);
   --product-record-card-border: var(--quick-tag-picker-new-border);
   --product-record-card-accent: var(--quick-tag-picker-new-border-hover);
 }
 
 .quick-tag-picker__item--new:hover {
-  --product-record-card-background: linear-gradient(135deg, var(--quick-tag-picker-new-background-hover-start) 0%, var(--quick-tag-picker-new-background-hover-end) 100%);
+  --product-record-card-background: var(--color-surface-hover);
   --product-record-card-border: var(--quick-tag-picker-new-border-hover);
 }
 

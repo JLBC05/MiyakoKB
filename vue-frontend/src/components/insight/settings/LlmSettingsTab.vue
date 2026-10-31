@@ -152,7 +152,7 @@ useInsightSettingsDraft<StoreLlmConfig>({
 
     <!-- useSameAsVlm=true 时显示提示卡片 -->
     <div v-if="useSameAsVlm" class="llm-vlm-synced-notice">
-      ✅ LLM 将自动复用 VLM 的配置（模型、Base URL、API Key），无需单独设置。
+      LLM 将自动复用 VLM 的配置（模型、Base URL、API Key），无需单独设置。
     </div>
 
     <!-- useSameAsVlm=false 时显示独立配置项 -->
@@ -227,9 +227,6 @@ useInsightSettingsDraft<StoreLlmConfig>({
   --llm-settings-surface: #f5f5f5;
   --llm-settings-stroke: #e0e0e0;
   --llm-settings-text: #666;
-  --llm-settings-surface-teal: #ecfdf5;
-  --llm-settings-stroke-teal: #a7f3d0;
-  --llm-settings-text-teal: #065f46;
   --ui-number-field-width: 100%;
   --ui-number-field-input-width: 100%;
   --ui-number-field-text-align: left;
@@ -262,11 +259,11 @@ useInsightSettingsDraft<StoreLlmConfig>({
 
 .llm-vlm-synced-notice {
   padding: 12px 16px;
-  background: var(--color-success-subtle, var(--llm-settings-surface-teal));
-  border: 1px solid var(--color-success-border, var(--llm-settings-stroke-teal));
-  border-radius: 8px;
-  color: var(--color-success-text, var(--llm-settings-text-teal));
-  font-size: 0.88em;
+  background: var(--color-surface-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control, 8px);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs, 12px);
   line-height: 1.5;
 }
 </style>

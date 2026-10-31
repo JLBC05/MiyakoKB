@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import UiButton from '@/components/ui/UiButton.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 import ProductChipList from '@/components/product/ProductChipList.vue'
 import type { ProductChipItem } from '@/components/product/ProductChipList.vue'
 import ProductSearchField from '@/components/product/ProductSearchField.vue'
@@ -117,7 +118,7 @@ onUnmounted(clearPendingSearch)
         title="搜索"
         @click="handleSearch"
       >
-        🔍
+        <UiIcon name="search" :size="16" />
       </UiButton>
     </template>
 

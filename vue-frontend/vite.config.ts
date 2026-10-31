@@ -48,6 +48,12 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     host: true,
+    watch: {
+      // 避免编辑器原子写入的 .tmpdir 临时文件把 Windows 原生 watcher 打挂 (EBUSY)
+      ignored: ['**/*.tmpdir/**', '**/.*.tmpdir/**', '**/*.tmp', '**/.*.tmp'],
+      usePolling: true,
+      interval: 500,
+    },
     fs: {
       allow: [workspaceRoot],
     },

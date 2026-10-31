@@ -7,6 +7,7 @@ import { useToast } from '@/utils/toast'
 import { useAuthStore } from '@/stores/authStore'
 import { useDialogLifecycle } from '@/composables/useDialogLifecycle'
 import UiButton from '@/components/ui/UiButton.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 import ReaderCanvas from '@/components/reader/ReaderCanvas.vue'
 import ReaderControls from '@/components/reader/ReaderControls.vue'
 import ReaderProgress from '@/components/reader/ReaderProgress.vue'
@@ -336,7 +337,7 @@ watch(
       aria-label="打开阅读菜单"
       @click="controls = true"
     >
-      ☰ 菜单
+      <UiIcon name="list" :size="16" /> 菜单
     </UiButton>
     <div class="reader-workspace">
       <div class="reader-stage">

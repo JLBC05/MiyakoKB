@@ -7,6 +7,7 @@ import UiField from '@/components/ui/UiField.vue'
 import UiInput from '@/components/ui/UiInput.vue'
 import UiSelect from '@/components/ui/UiSelect.vue'
 import UiCheckbox from '@/components/ui/UiCheckbox.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import { useInsightStore } from '@/stores/insightStore'
 import { useSettingsAutoSave } from '@/composables/useSettingsAutoSave'
@@ -339,7 +340,6 @@ async function handleManualSave(): Promise<void> {
         <aside class="settings-sidebar">
           <div class="settings-sidebar__header">
             <h2 class="settings-sidebar__title">系统设置</h2>
-            <p class="settings-sidebar__subtitle">MiyakoKB 核心分析与模型参数</p>
           </div>
 
           <div class="settings-search">
@@ -361,10 +361,9 @@ async function handleManualSave(): Promise<void> {
               :class="{ 'settings-nav__item--active': activeTab === tab.id }"
               @click="activeTab = tab.id"
             >
-              <span class="settings-nav__icon">{{ tab.icon }}</span>
+              <UiIcon class="settings-nav__icon" :name="tab.icon" :size="18" />
               <div class="settings-nav__text">
                 <span class="settings-nav__label">{{ tab.label }}</span>
-                <span class="settings-nav__desc">{{ tab.desc }}</span>
               </div>
             </UiButton>
           </nav>
@@ -521,7 +520,9 @@ async function handleManualSave(): Promise<void> {
                     >
                       <div class="category-card__header">
                         <span class="category-card__title">{{ cat.label }}</span>
-                        <span class="category-card__check">{{ extraEntities.includes(cat.key) ? '✓' : '+' }}</span>
+                        <span class="category-card__check">
+                          <UiIcon :name="extraEntities.includes(cat.key) ? 'check' : 'plus'" :size="14" />
+                        </span>
                       </div>
                       <span class="category-card__desc">{{ cat.desc }}</span>
                     </div>
@@ -590,6 +591,21 @@ async function handleManualSave(): Promise<void> {
   grid-template-columns: 320px 1fr;
   gap: 24px;
   align-items: start;
+}
+
+@media (--breakpoint-lg-down) {
+  .settings-main {
+    padding: 16px;
+  }
+
+  .settings-container {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .settings-sidebar {
+    position: static;
+  }
 }
 
 .settings-sidebar {

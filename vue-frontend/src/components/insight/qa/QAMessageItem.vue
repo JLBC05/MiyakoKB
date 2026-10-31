@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import ProductChipList from '@/components/product/ProductChipList.vue'
 import type { ProductChipItem } from '@/components/product/ProductChipList.vue'
 import ProductMessageBubble from '@/components/product/ProductMessageBubble.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 import type { QACitation, QAMessage } from '@/types/insight'
 
 const props = defineProps<{
@@ -90,7 +91,7 @@ function selectCitation(id: string | number): void {
           role="status"
           aria-label="检索状态提示"
         >
-          <span class="qa-retrieval-warnings__icon">⚠️</span>
+          <UiIcon class="qa-retrieval-warnings__icon" name="alert-triangle" :size="14" />
           <span class="qa-retrieval-warnings__text">{{ retrievalWarnings.join(' ') }}</span>
         </div>
 
@@ -108,7 +109,7 @@ function selectCitation(id: string | number): void {
           v-if="message.resolvedEntities?.matched_entities?.length"
           class="qa-resolved-entities"
         >
-          <span class="qa-entities-icon">🏷️</span>
+          <UiIcon class="qa-entities-icon" name="tags" :size="14" />
           <span class="qa-entities-label">基于实体知识库：</span>
           <span class="qa-entities-list">
             {{ message.resolvedEntities.matched_entities.map(e => e.canonical_name).join('、') }}

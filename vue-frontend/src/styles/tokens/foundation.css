@@ -13,8 +13,17 @@
 /* Breakpoint custom media live here so PostCSS can load them before component styles. */
 
 :root {
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  /* Radius：两档 + 药丸（见 DESIGN.md） */
+  --radius-md: 8px;   /* 控件 */
+  --radius-lg: 12px;  /* 卡片 / 容器 */
+  --radius-control: 8px;
+  --radius-container: 12px;
+  --radius-pill: 999px;
+
+  /* 间距档 */
+  --space-3: 12px;
+  --space-4: 16px;
+
   --z-local: 1;
   --z-local-toolbar: 10;
   --z-local-overlay: 15;
@@ -25,8 +34,17 @@
   --z-popover: 1200;
   --z-toast: 1300;
 
-  --font-sans: 'Arial', sans-serif;
+  --font-sans: 'Arial', 'Microsoft YaHei', sans-serif;
   --font-mono: 'Consolas', 'Monaco', monospace;
 
-  --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  /* 字号 4 档（见 DESIGN.md） */
+  --font-size-xs: 12px;
+  --font-size-sm: 14px;
+  --font-size-lg: 20px;
+
+  /* 卡片平放：不再用常驻投影，仅浮层用轻阴影 */
+  --card-shadow: none;
+
+  /* 动效只做颜色/透明度反馈 */
+  --motion-fast: 150ms ease;
 }

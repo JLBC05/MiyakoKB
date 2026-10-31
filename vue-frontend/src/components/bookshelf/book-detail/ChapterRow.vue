@@ -68,7 +68,7 @@ const canSelect = computed(() => imageCount.value > 0)
       <div class="chapter-row__info">
         <span class="chapter-row__order">#{{ index + 1 }}</span>
         <span class="chapter-row__title">{{ chapter.title }}</span>
-        <span v-if="analyzed" class="chapter-row__badge-analyzed">✓ 知识库已构建</span>
+        <span v-if="analyzed" class="chapter-row__badge-analyzed"><UiIcon name="check" :size="12" />知识库已构建</span>
         <span class="chapter-row__meta">{{ imageCount }} 张图片</span>
         <TaskStatusBadge
           :chapter-id="chapter.id"
@@ -81,8 +81,7 @@ const canSelect = computed(() => imageCount.value > 0)
         justify="end"
       >
         <UiButton
-          variant="primary"
-          tone="success"
+          variant="secondary"
           size="xs"
           class="chapter-row__read-action"
           :disabled="imageCount === 0"

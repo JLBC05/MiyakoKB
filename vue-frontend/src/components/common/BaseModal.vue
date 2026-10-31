@@ -274,7 +274,7 @@ watch(
 }
 
 .ui-modal__overlay--effect-blur-sm {
-  backdrop-filter: blur(4px);
+  background-color: var(--base-modal-overlay-background);
 }
 
 .ui-modal__container {
@@ -313,7 +313,7 @@ watch(
 }
 
 .ui-modal__container--frame-soft {
-  border-radius: 16px;
+  border-radius: var(--radius-container, 12px);
 }
 
 .ui-modal__container--frame-floating {
@@ -322,13 +322,13 @@ watch(
 
 .ui-modal__container--frame-outlined {
   border: 1px solid var(--color-border-default);
-  border-radius: 18px;
+  border-radius: var(--radius-container, 12px);
   box-shadow: 0 24px 64px var(--shadow-medium);
 }
 
 .ui-modal__container--frame-warning {
   border: 2px solid var(--color-status-warning);
-  border-radius: 16px;
+  border-radius: var(--radius-container, 12px);
   box-shadow: 0 25px 80px var(--color-overlay-backdrop-strong);
 }
 
@@ -344,11 +344,7 @@ watch(
 
 .ui-modal__header--brand {
   padding: 20px 25px;
-  background: linear-gradient(
-    135deg,
-    var(--color-action-primary-fill, var(--color-action-primary)) 0%,
-    var(--color-action-primary-fill-hover, var(--color-action-primary-hover)) 100%
-  );
+  background: var(--color-action-primary);
   color: var(--color-text-inverse);
 }
 

@@ -51,7 +51,7 @@ function toggleAll() {
 
 <template>
   <div class="chapter-list">
-    <ProductSectionHeader title="章节列表" :heading-level="3">
+    <ProductSectionHeader :title="`章节列表 (${chapters.length})`" :heading-level="3">
       <template #actions>
         <UiButton
           v-if="chapters.length"

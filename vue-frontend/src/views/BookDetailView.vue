@@ -288,7 +288,7 @@ watch(bookId, newId => {
               :alt="loadedBook.title"
               class="book-header-card__cover"
             />
-            <div v-else class="book-header-card__cover-placeholder">📖</div>
+            <div v-else class="book-header-card__cover-placeholder"><UiIcon name="book-open" :size="40" /></div>
           </div>
 
           <div class="book-header-card__info">
@@ -318,9 +318,8 @@ watch(bookId, newId => {
               </UiButton>
 
               <UiButton
-                variant="primary"
+                variant="secondary"
                 size="md"
-                tone="success"
                 class="action-btn--success"
                 @click="goToQa"
               >
@@ -343,7 +342,7 @@ watch(bookId, newId => {
                 @click="showRebuildConfirm = true"
               >
                 <UiIcon name="refresh" size="18" />
-                <span>重建知识库（不重跑页分析）</span>
+                <span>重建知识库</span>
               </UiButton>
 
               <UiButton
@@ -361,10 +360,6 @@ watch(bookId, newId => {
         <!-- 章节列表模块 -->
         <section class="book-chapters-section">
           <div class="chapters-card">
-            <div class="chapters-card__header">
-              <h2 class="chapters-card__title">章节目录 ({{ chapters.length }})</h2>
-            </div>
-
             <ChapterList
               :chapters="chapters"
               :drag-over-chapter-index="dragOverChapterIndex"
@@ -455,13 +450,12 @@ watch(bookId, newId => {
 }
 
 .book-detail-page {
-  --book-detail-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.03);
-  --book-detail-shadow-cover: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --book-detail-brand-deep: #7e5bb4;
-  --book-detail-brand-gradient: linear-gradient(135deg, var(--color-brand-primary) 0%, var(--book-detail-brand-deep) 100%);
-  --book-detail-success-surface: rgba(16, 185, 129, 0.15);
-  --book-detail-success-border: rgba(16, 185, 129, 0.3);
-  --book-detail-success-text: #10b981;
+  --book-detail-shadow-card: none;
+  --book-detail-shadow-cover: none;
+  --book-detail-brand-gradient: var(--color-brand-primary);
+  --book-detail-success-surface: color-mix(in srgb, var(--color-action-success) 12%, transparent);
+  --book-detail-success-border: color-mix(in srgb, var(--color-action-success) 30%, transparent);
+  --book-detail-success-text: var(--color-action-success);
 
   background-color: var(--color-bg-base);
   color: var(--color-text-primary);

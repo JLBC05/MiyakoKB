@@ -6,6 +6,7 @@ import ProductRecordCard from '@/components/product/ProductRecordCard.vue'
 import ProductHeaderAction from '@/components/product/ProductHeaderAction.vue'
 import { computed, ref, watch } from 'vue'
 import UiCheckbox from '@/components/ui/UiCheckbox.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 import TaskStatusBadge from '@/components/task-center/TaskStatusBadge.vue'
 
 interface Props {
@@ -86,7 +87,9 @@ function handleImageError() {
           loading="lazy"
           @error="handleImageError"
         >
-        <div v-else class="book-card__cover-placeholder" aria-label="无封面">📖</div>
+        <div v-else class="book-card__cover-placeholder" aria-label="无封面">
+          <UiIcon name="book-open" :size="40" />
+        </div>
       </div>
 
       <div class="book-card__info">
@@ -99,13 +102,13 @@ function handleImageError() {
             :title="knowledgeStatus?.status === 'completed' ? '知识库已构建完成' : knowledgeStatus?.status === 'partial' ? `已构建 ${knowledgeStatus.analyzedChapters} / ${knowledgeStatus.totalChapters} 话` : '尚未构建知识库'"
           >
             <template v-if="knowledgeStatus?.status === 'completed'">
-              ✓ 已构建知识库
+              <span class="knowledge-badge__dot" />已构建知识库
             </template>
             <template v-else-if="knowledgeStatus?.status === 'partial'">
-              ⚡ 部分构建 ({{ knowledgeStatus.analyzedChapters }}/{{ knowledgeStatus.totalChapters }}话)
+              <span class="knowledge-badge__dot" />部分构建 {{ knowledgeStatus.analyzedChapters }}/{{ knowledgeStatus.totalChapters }}话
             </template>
             <template v-else>
-              ○ 未构建知识库
+              <span class="knowledge-badge__dot" />未构建知识库
             </template>
           </span>
         </div>
@@ -120,7 +123,7 @@ function handleImageError() {
             class="build-knowledge-btn"
             variant="solid"
             tone="primary"
-            label="⚡ 构建知识库"
+            label="构建知识库"
             title="开始构建该漫画的知识库"
             @click.stop="emit('buildKnowledge')"
           />
@@ -153,19 +156,15 @@ function handleImageError() {
   --product-record-card-radius: var(--radius-lg);
   --product-record-card-padding: 0;
   --product-record-card-gap: 0;
-  --product-record-card-shadow: 0 4px 12px var(--book-card-shadow);
-  --product-record-card-shadow-hover: 0 12px 32px var(--book-card-hover-shadow);
-  --book-card-hover-border: var(--color-focus-brand-subtle);
-  --book-card-shadow: var(--shadow-soft);
-  --book-card-hover-shadow: var(--shadow-medium);
-  --book-card-cover-overlay: var(--color-overlay-backdrop-strong);
-  --book-card-cover-placeholder: var(--color-text-inverse);
+  --product-record-card-shadow: none;
+  --product-record-card-shadow-hover: none;
+  --book-card-hover-border: var(--color-border-strong);
+  --book-card-cover-placeholder: var(--color-text-muted);
 
   display: block;
-  border: 0;
   overflow: hidden;
   position: relative;
-  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  transition: border-color var(--motion-fast, 150ms ease);
 }
 
 .book-card-shell__selection,
@@ -196,23 +195,14 @@ function handleImageError() {
   pointer-events: none;
 }
 
-.book-card:hover {
-  transform: translateY(-6px) scale(1.02);
-  box-shadow: 0 12px 32px var(--book-card-hover-shadow);
-}
-
 .book-card:hover::after,
 .book-card:focus-visible::after {
   border-color: var(--book-card-hover-border);
 }
 
-.book-card:active {
-  transform: translateY(-2px) scale(1.01);
-}
-
 .book-card__cover {
   aspect-ratio: 3 / 4;
-  background: linear-gradient(135deg, var(--color-action-brand-fill, var(--color-action-brand)) 0%, var(--color-action-brand-fill-strong, var(--color-action-brand-strong)) 100%);
+  background: var(--color-surface-secondary);
   display: block;
   overflow: hidden;
   position: relative;
@@ -225,33 +215,11 @@ function handleImageError() {
   height: 100%;
   object-fit: cover;
   object-position: center;
-  transition: transform 0.3s ease;
 }
 
-.book-card:hover .book-card__cover-image,
-.book-card:focus-visible .book-card__cover-image {
-  transform: scale(1.05);
-}
-
+/* 去掉 hover 缩放与遮罩文字，只保留描边反馈 */
 .book-card__cover::before {
-  content: '查看详情';
-  position: absolute;
-  inset: 0;
-  background: var(--book-card-cover-overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text-inverse);
-  font-size: 0.9rem;
-  font-weight: 500;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-  z-index: var(--z-local);
-}
-
-.book-card:hover .book-card__cover::before,
-.book-card:focus-visible .book-card__cover::before {
-  opacity: 1;
+  display: none;
 }
 
 .book-card__cover-placeholder {
@@ -260,10 +228,9 @@ function handleImageError() {
   left: 50%;
   transform: translate(-50%, -50%);
   color: var(--book-card-cover-placeholder);
-  font-size: 3rem;
-  font-weight: 400;
-  letter-spacing: 0;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .book-card__info {
@@ -274,7 +241,7 @@ function handleImageError() {
 }
 
 .book-card__title {
-  font-size: 0.95rem;
+  font-size: var(--font-size-sm, 14px);
   font-weight: 600;
   color: var(--color-text-default);
   margin: 0;
@@ -294,19 +261,29 @@ function handleImageError() {
 }
 
 .book-card__chapter-count {
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs, 12px);
   color: var(--color-text-supporting);
   margin: 0;
 }
 
 .knowledge-badge {
-  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-xs, 12px);
   font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 9999px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill, 999px);
   line-height: 1.2;
   white-space: nowrap;
-  letter-spacing: 0.02em;
+}
+
+.knowledge-badge__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentcolor;
+  flex: 0 0 auto;
 }
 
 .knowledge-badge.completed {
@@ -338,21 +315,16 @@ function handleImageError() {
 
 .build-knowledge-btn {
   --product-header-action-padding: 4px 10px;
-  --product-header-action-radius: 6px;
+  --product-header-action-radius: var(--radius-control, 8px);
   --product-header-action-min-height: 26px;
-  --product-header-action-font-size: 0.78rem;
+  --product-header-action-font-size: var(--font-size-xs, 12px);
   --product-header-action-gap: 4px;
 
   font-weight: 600;
-  transition: opacity 0.2s, transform 0.1s;
+  transition: opacity var(--motion-fast, 150ms ease);
 }
 
 .build-knowledge-btn:hover {
   opacity: 0.9;
-  transform: translateY(-1px);
-}
-
-.build-knowledge-btn:active {
-  transform: translateY(0);
 }
 </style>

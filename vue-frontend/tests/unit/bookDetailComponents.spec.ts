@@ -153,7 +153,8 @@ describe('bookshelf detail child components', () => {
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.book-detail-summary__cover-image').exists()).toBe(false)
-    expect(wrapper.get('.book-detail-summary__cover-placeholder').text()).toBe('📖')
+    expect(wrapper.get('.book-detail-summary__cover-placeholder').text()).toBe('')
+    expect(wrapper.get('.book-detail-summary__cover-placeholder').find('.ui-icon').exists()).toBe(true)
     expect(wrapper.get('.book-detail-summary__cover-placeholder').attributes('aria-label')).toBe('无封面')
 
     await wrapper.setProps({
@@ -327,7 +328,7 @@ describe('bookshelf detail child components', () => {
     const header = wrapper.getComponent(ProductSectionHeader)
 
     expect(header.props()).toMatchObject({
-      title: '章节列表',
+      title: '章节列表 (0)',
       headingLevel: 3,
     })
     expect(header.text()).toContain('新建章节')
@@ -393,7 +394,7 @@ describe('bookshelf detail child components', () => {
     const buttonVariants = wrapper.getComponent(ProductActionRow).findAllComponents(UiButton)
       .map(button => button.props('variant'))
     expect(buttonVariants).toEqual([
-      'primary',
+      'secondary',
       'card-action',
       'plain-danger',
     ])
@@ -517,9 +518,9 @@ describe('bookshelf detail child components', () => {
     ).match(/<style scoped>([\s\S]*)<\/style>/)?.[1] ?? ''
 
     expect(modalStyle).not.toMatch(/--book-detail-(accent|cover-shadow|new-tag)/)
-    expect(summaryStyle).toContain('--book-detail-summary-cover-shadow: var(--shadow-medium)')
+    expect(summaryStyle).not.toContain('--book-detail-summary-cover-shadow')
     expect(summaryStyle).not.toMatch(/--ui-button-/)
-    expect(quickTagStyle).toContain('--quick-tag-picker-new-background-start: var(--color-focus-brand-soft)')
+    expect(quickTagStyle).not.toContain('--quick-tag-picker-new-background')
     expect(quickTagStyle).not.toContain('tag-color-dot')
     expect(quickTagStyle).not.toContain('quick-tag-name')
 

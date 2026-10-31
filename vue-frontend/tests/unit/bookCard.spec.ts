@@ -63,7 +63,8 @@ describe('BookCard', () => {
 
     expect(wrapper.find('img').exists()).toBe(false)
     expect(wrapper.findAll('.book-card__cover-placeholder')).toHaveLength(1)
-    expect(wrapper.find('.book-card__cover-placeholder').text()).toBe('📖')
+    expect(wrapper.find('.book-card__cover-placeholder').text()).toBe('')
+    expect(wrapper.find('.book-card__cover-placeholder .ui-icon').exists()).toBe(true)
     expect(wrapper.find('.book-card__cover-placeholder').attributes('aria-label')).toBe('无封面')
   })
 
@@ -93,7 +94,9 @@ describe('BookCard', () => {
   it('reveals the cover action overlay on keyboard focus as well as hover', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/components/bookshelf/BookCard.vue'), 'utf8')
 
-    expect(source).toContain('.book-card:focus-visible .book-card__cover::before')
+    expect(source).toContain('.book-card:hover::after')
+    expect(source).toContain('.book-card:focus-visible::after')
+    expect(source).toContain('.book-card__cover::before {\n  display: none;')
   })
 
   it('keeps book card internals under the card owner', () => {

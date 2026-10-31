@@ -8,6 +8,7 @@ import BookSelector from '@/components/insight/BookSelector.vue'
 import QAPanel from '@/components/insight/QAPanel.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import UiButton from '@/components/ui/UiButton.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 import * as insightApi from '@/api/insight'
 import { getBookDetail } from '@/api/bookshelf'
 import { resolveAnalysisStatus } from '@/utils/insightStatus'
@@ -209,10 +210,10 @@ watch(
         <!-- 未选择书籍时的提示 -->
         <div v-else-if="!hasLoadedBook" class="qa-empty-container">
           <div class="qa-empty-card">
-            <span class="qa-empty-icon" aria-hidden="true">💬</span>
+            <UiIcon class="qa-empty-icon" name="message" :size="40" aria-hidden="true" />
             <h2 class="qa-empty-title">请选择一本漫画</h2>
             <p class="qa-empty-desc">
-              在上方选择书籍即可开启剧情考证与智能问答。系统将基于向量索引和实体图谱进行精确溯源检索。
+              选择上方书籍后即可开始剧情问答。
             </p>
           </div>
         </div>

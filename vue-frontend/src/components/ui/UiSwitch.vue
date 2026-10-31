@@ -101,7 +101,7 @@ function toggle(): void {
 }
 
 .ui-switch--checked .ui-switch__track {
-  background: var(--ui-switch-track-checked-background, linear-gradient(135deg, var(--color-action-success) 0%, var(--color-action-success-strong) 100%));
+  background: var(--ui-switch-track-checked-background, var(--color-action-success));
 }
 
 .ui-switch--checked .ui-switch__thumb {

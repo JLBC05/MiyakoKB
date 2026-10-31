@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import ProductThemeToggle from '@/components/product/ProductThemeToggle.vue'
 import UiButton from '@/components/ui/UiButton.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
+import type { UiIconName } from '@/components/ui/iconRegistry'
 
 defineProps<{
   bookTitle?: string
@@ -23,15 +25,15 @@ interface NavItem {
   name: string
   path: string
   label: string
-  icon: string
+  icon: UiIconName
 }
 
 const navItems: NavItem[] = [
-  { name: 'bookshelf', path: '/', label: '漫画库', icon: '📚' },
-  { name: 'graph', path: '/graph', label: '知识图谱', icon: '🏷️' },
-  { name: 'qa', path: '/qa', label: '智能问答', icon: '💬' },
-  { name: 'characters', path: '/characters', label: '蒸馏角色', icon: '🎭' },
-  { name: 'settings', path: '/settings', label: '设置', icon: '⚙️' },
+  { name: 'bookshelf', path: '/', label: '漫画库', icon: 'book-marked' },
+  { name: 'graph', path: '/graph', label: '知识图谱', icon: 'tags' },
+  { name: 'qa', path: '/qa', label: '智能问答', icon: 'message' },
+  { name: 'characters', path: '/characters', label: '蒸馏角色', icon: 'users' },
+  { name: 'settings', path: '/settings', label: '设置', icon: 'settings' },
 ]
 
 function isItemActive(item: NavItem): boolean {
@@ -74,7 +76,7 @@ function handleNavClick(item: NavItem) {
         </div>
       </div>
 
-      <!-- 中间：核心四大导航项 -->
+      <!-- 中间：核心五大导航项 -->
       <nav class="miyako-navbar__nav" aria-label="主导航">
         <UiButton
           v-for="item in navItems"
@@ -82,9 +84,11 @@ function handleNavClick(item: NavItem) {
           variant="tab"
           class="miyako-navbar__nav-btn"
           :class="{ 'miyako-navbar__nav-btn--active': isItemActive(item) }"
+          :title="item.label"
+          :aria-label="item.label"
           @click="handleNavClick(item)"
         >
-          <span class="miyako-navbar__nav-icon" aria-hidden="true">{{ item.icon }}</span>
+          <UiIcon :name="item.icon" :size="18" class="miyako-navbar__nav-icon" />
           <span class="miyako-navbar__nav-label">{{ item.label }}</span>
         </UiButton>
       </nav>
@@ -105,7 +109,7 @@ function handleNavClick(item: NavItem) {
               'miyako-navbar__task-signal--paused': !taskCenter.currentJobs.some(job => job.status === 'running') && taskCenter.currentJobs.some(job => job.status === 'paused'),
             }"
           />
-          <span class="miyako-navbar__task-icon" aria-hidden="true">📋</span>
+          <UiIcon name="list" :size="18" class="miyako-navbar__task-icon" />
           <span class="miyako-navbar__task-label">任务中心</span>
           <span
             v-if="taskCenter.activeCount + taskCenter.queuedCount > 0"
@@ -123,9 +127,8 @@ function handleNavClick(item: NavItem) {
 
 <style scoped>
 .miyako-navbar {
-  --miyako-navbar-shadow-bar: 0 1px 3px rgba(0, 0, 0, 0.04);
-  --miyako-navbar-shadow-active: 0 1px 3px rgba(0, 0, 0, 0.08);
-  --miyako-navbar-tint-hover: rgba(153, 119, 204, 0.08);
+  --miyako-navbar-shadow-active: none;
+  --miyako-navbar-tint-hover: var(--color-surface-hover);
 
   position: sticky;
   top: 0;
@@ -134,14 +137,14 @@ function handleNavClick(item: NavItem) {
   height: 58px;
   background-color: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
-  box-shadow: var(--miyako-navbar-shadow-bar);
-  transition: background-color 0.2s, border-color 0.2s;
+  transition: background-color var(--motion-fast, 150ms ease), border-color var(--motion-fast, 150ms ease);
 }
 
 .miyako-navbar__container {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   max-width: 1680px;
   height: 100%;
   margin: 0 auto;
@@ -152,7 +155,8 @@ function handleNavClick(item: NavItem) {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-width: 180px;
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .miyako-navbar__brand {
@@ -162,8 +166,9 @@ function handleNavClick(item: NavItem) {
   text-decoration: none;
   color: var(--color-text-primary);
   font-weight: 700;
-  font-size: 1.25rem;
+  font-size: var(--font-size-lg, 20px);
   letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 
 .miyako-navbar__logo-icon {
@@ -185,8 +190,9 @@ function handleNavClick(item: NavItem) {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.9rem;
+  font-size: var(--font-size-sm, 14px);
   color: var(--color-text-secondary);
+  min-width: 0;
 }
 
 .miyako-navbar__book-separator {
@@ -205,11 +211,12 @@ function handleNavClick(item: NavItem) {
 .miyako-navbar__nav {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   background-color: var(--color-surface-secondary);
   padding: 4px;
-  border-radius: 10px;
+  border-radius: var(--radius-control, 8px);
   border: 1px solid var(--color-border);
+  flex: 0 0 auto;
 }
 
 .miyako-navbar__nav-btn {
@@ -217,14 +224,14 @@ function handleNavClick(item: NavItem) {
   align-items: center;
   gap: 6px;
   padding: 6px 14px;
-  border-radius: 7px;
+  border-radius: 6px;
   border: none;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--font-size-sm, 14px);
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: background-color var(--motion-fast, 150ms ease), color var(--motion-fast, 150ms ease);
 }
 
 .miyako-navbar__nav-btn:hover {
@@ -241,15 +248,16 @@ function handleNavClick(item: NavItem) {
 }
 
 .miyako-navbar__nav-icon {
-  font-size: 1rem;
-  line-height: 1;
+  display: inline-flex;
+  flex: 0 0 auto;
 }
 
 .miyako-navbar__right {
   display: flex;
   align-items: center;
-  gap: 16px;
-  min-width: 180px;
+  gap: 12px;
+  min-width: 0;
+  flex: 0 0 auto;
   justify-content: flex-end;
 }
 
@@ -264,14 +272,15 @@ function handleNavClick(item: NavItem) {
   gap: 6px;
   height: 34px;
   padding: 0 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-control, 8px);
   border: 1px solid var(--color-border);
   background-color: var(--color-surface-secondary);
   color: var(--color-text-primary);
-  font-size: 0.84rem;
+  font-size: var(--font-size-xs, 12px);
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s ease;
+  white-space: nowrap;
+  transition: background-color var(--motion-fast, 150ms ease), border-color var(--motion-fast, 150ms ease), color var(--motion-fast, 150ms ease);
 }
 
 .miyako-navbar__task-btn:hover {
@@ -281,30 +290,25 @@ function handleNavClick(item: NavItem) {
 }
 
 .miyako-navbar__task-icon {
-  font-size: 1rem;
+  display: inline-flex;
+  flex: 0 0 auto;
 }
 
+/* 任务状态点：静态色点，去掉发光与脉冲 */
 .miyako-navbar__task-signal {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background-color: var(--color-text-muted);
+  flex: 0 0 auto;
 }
 
 .miyako-navbar__task-signal--active {
   background-color: var(--color-status-success);
-  box-shadow: 0 0 6px var(--color-status-success);
-  animation: pulse-signal 1.5s infinite;
 }
 
 .miyako-navbar__task-signal--paused {
   background-color: var(--color-status-warning);
-}
-
-@keyframes pulse-signal {
-  0% { transform: scale(0.95); opacity: 0.8; }
-  50% { transform: scale(1.2); opacity: 1; }
-  100% { transform: scale(0.95); opacity: 0.8; }
 }
 
 .miyako-navbar__task-badge {
@@ -314,14 +318,48 @@ function handleNavClick(item: NavItem) {
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
-  border-radius: 9px;
+  border-radius: var(--radius-pill, 999px);
   background-color: var(--color-brand-primary);
   color: var(--color-text-inverse);
-  font-size: 0.72rem;
+  font-size: var(--font-size-xs, 12px);
   font-weight: 700;
 }
 
-.miyako-navbar__login-link:hover {
-  background-color: var(--color-border);
+/* 移动端：导航仅图标横排，任务中心仅图标+角标，避免换行与竖向堆叠 */
+@media (--breakpoint-md-down) {
+  .miyako-navbar__container {
+    padding: 0 12px;
+    gap: 8px;
+  }
+
+  .miyako-navbar__nav-btn {
+    padding: 8px 10px;
+  }
+
+  .miyako-navbar__nav-label {
+    display: none;
+  }
+
+  .miyako-navbar__task-label {
+    display: none;
+  }
+
+  .miyako-navbar__task-btn {
+    padding: 0 8px;
+  }
+}
+
+@media (--breakpoint-xs-down) {
+  .miyako-navbar__brand-name {
+    display: none;
+  }
+
+  .miyako-navbar__book-badge {
+    display: none;
+  }
+
+  .miyako-navbar__nav-btn {
+    padding: 8px;
+  }
 }
 </style>

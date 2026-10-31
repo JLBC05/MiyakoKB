@@ -59,7 +59,6 @@ withDefaults(defineProps<{
   --internal-product-page-header-logo-size: 40px;
   --internal-product-page-header-logo-shadow: none;
   --internal-product-page-header-gap: 15px;
-  --internal-product-page-header-reader-shadow: var(--shadow-medium);
   --product-header-meta-pill-background: var(--color-surface-muted);
   --product-header-meta-pill-text: var(--color-text-default);
 
@@ -171,8 +170,8 @@ withDefaults(defineProps<{
   min-height: 64px;
   margin: 0;
   padding: 8px 24px;
-  background: linear-gradient(135deg, var(--color-action-brand-fill, var(--color-action-brand)) 0%, var(--color-action-brand-fill-strong, var(--color-action-brand-strong)) 100%);
-  box-shadow: 0 2px 20px var(--shadow-action-brand);
+  background: var(--color-action-brand);
+  box-shadow: none;
 }
 
 .product-page-header--brand .product-page-header__content {
@@ -254,7 +253,6 @@ withDefaults(defineProps<{
   --internal-product-page-header-content-padding: 0;
   --internal-product-page-header-content-radius: 0;
   --internal-product-page-header-shadow: transparent;
-  --internal-product-page-header-reader-shadow: var(--shadow-medium);
   --internal-product-page-header-gap: 12px;
   --product-header-action-context-surface: var(--color-overlay-inverse-soft);
   --product-header-action-context-border: var(--color-overlay-inverse-raised);
@@ -277,8 +275,8 @@ withDefaults(defineProps<{
   margin: 0;
   padding: 0 16px;
   color: var(--color-text-inverse);
-  background: linear-gradient(135deg, var(--color-action-brand-fill, var(--color-action-brand)) 0%, var(--color-action-brand-fill-strong, var(--color-action-brand-strong)) 100%);
-  box-shadow: 0 2px 10px var(--product-page-header-reader-shadow, var(--internal-product-page-header-reader-shadow));
+  background: var(--color-action-brand);
+  box-shadow: none;
 }
 
 .product-page-header--reader .product-page-header__content {

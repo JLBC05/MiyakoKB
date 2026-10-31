@@ -11,6 +11,7 @@ import { showToast } from '@/utils/toast'
 import BaseModal from '@/components/common/BaseModal.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiField from '@/components/ui/UiField.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 
 interface Props {
   bookId?: string | null
@@ -198,7 +199,7 @@ async function saveBook() {
               alt="封面预览"
             >
             <div v-else class="book-modal__cover-placeholder">
-              <span class="book-modal__upload-icon" aria-hidden="true">📷</span>
+              <UiIcon class="book-modal__upload-icon" name="camera" :size="32" aria-hidden="true" />
               <span>点击或拖拽上传封面</span>
             </div>
           </div>
