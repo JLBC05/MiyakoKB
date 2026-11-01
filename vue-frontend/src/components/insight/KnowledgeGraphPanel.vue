@@ -3,7 +3,13 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import type { Graph as G6Graph } from '@antv/g6'
 import { useInsightStore } from '@/stores/insightStore'
-import { getInsightGraph, type V2InsightGraphNode, type V2InsightGraphEdge } from '@/api/v2/insight'
+import { useBookshelfStore } from '@/stores/bookshelfStore'
+import {
+  getInsightGraph,
+  getInsightGraphForBooks,
+  type V2InsightGraphNode,
+  type V2InsightGraphEdge,
+} from '@/api/v2/insight'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiInput from '@/components/ui/UiInput.vue'
 import UiNumberField from '@/components/ui/UiNumberField.vue'
@@ -12,11 +18,30 @@ import type { UiIconName } from '@/components/ui/iconRegistry'
 
 const route = useRoute()
 const insightStore = useInsightStore()
+const bookshelfStore = useBookshelfStore()
+
+const MAX_MULTI_BOOKS = 10
+
+type GraphNodeWithBook = V2InsightGraphNode & { bookId?: string }
+type GraphEdgeWithBook = V2InsightGraphEdge & { bookId?: string }
+
+interface BookGroupMeta {
+  bookId: string
+  bookTitle: string
+  color: string
+}
+
+// 多书对比时用于区分不同书的边框颜色（与类别填充色叠加，不冲突）。
+const BOOK_BORDER_COLORS = ['#9977CC', '#2F6F8F', '#B26A00', '#2E7D32', '#8A4F87', '#C0392B', '#16A085', '#7F8C8D', '#D35400', '#2C3E50']
 
 const isLoading = ref(false)
 const errorMessage = ref('')
-const rawNodes = ref<V2InsightGraphNode[]>([])
-const rawEdges = ref<V2InsightGraphEdge[]>([])
+const rawNodes = ref<GraphNodeWithBook[]>([])
+const rawEdges = ref<GraphEdgeWithBook[]>([])
+const bookGroups = ref<BookGroupMeta[]>([])
+
+const multiBookMode = ref(false)
+const selectedBookIds = ref<string[]>([])
 
 const selectedCategory = ref<string>('all')
 const minWeight = ref<number | null>(2)
@@ -50,6 +75,23 @@ function getCategoryColor(category: string): string {
 function getCategoryLabel(category: string): string {
   const match = categories.find(item => item.key === category)
   return match ? match.label : category
+}
+
+function getBookBorderColor(bookId: string | undefined): string {
+  if (!bookId) return '#ffffff'
+  const index = bookGroups.value.findIndex(group => group.bookId === bookId)
+  if (index < 0) return '#ffffff'
+  return BOOK_BORDER_COLORS[index % BOOK_BORDER_COLORS.length]
+}
+
+function toggleBookSelection(bookId: string): void {
+  const current = selectedBookIds.value
+  if (current.includes(bookId)) {
+    selectedBookIds.value = current.filter(id => id !== bookId)
+    return
+  }
+  if (current.length >= MAX_MULTI_BOOKS) return
+  selectedBookIds.value = [...current, bookId]
 }
 
 const categoryCounts = computed(() => {
@@ -150,6 +192,9 @@ function buildGraphData(): { nodes: unknown[]; edges: unknown[] } {
         size,
         fill: getCategoryColor(node.category),
         labelText: showLabels.value ? node.name : '',
+        // 多书对比时，用边框颜色区分不同书（单书模式保持白色边框）。
+        stroke: multiBookMode.value ? getBookBorderColor((node as GraphNodeWithBook).bookId) : '#ffffff',
+        lineWidth: multiBookMode.value ? 3 : 1.5,
       },
     }
   })
@@ -255,8 +300,46 @@ function resetView(): void {
 
 async function loadGraphData(): Promise<void> {
   const queryBook = typeof route?.query?.book === 'string' ? route.query.book.trim() : ''
-  const bookId = insightStore.currentBookId || queryBook
-  if (!bookId) {
+  const singleBookId = insightStore.currentBookId || queryBook
+
+  // 多书对比模式：需要至少两本已选书。
+  if (multiBookMode.value && selectedBookIds.value.length > 1) {
+    isLoading.value = true
+    errorMessage.value = ''
+    try {
+      const data = await getInsightGraphForBooks(selectedBookIds.value, { minWeight: 1 })
+      if (!isMounted) return
+      const groups = 'groups' in data ? data.groups : []
+      const nodes: GraphNodeWithBook[] = []
+      const edges: GraphEdgeWithBook[] = []
+      const meta: BookGroupMeta[] = []
+      groups.forEach((group, index) => {
+        meta.push({
+          bookId: group.bookId,
+          bookTitle: group.bookTitle || group.bookId,
+          color: BOOK_BORDER_COLORS[index % BOOK_BORDER_COLORS.length],
+        })
+        for (const node of group.nodes ?? []) nodes.push({ ...node, bookId: group.bookId })
+        for (const edge of group.edges ?? []) edges.push({ ...edge, bookId: group.bookId })
+      })
+      rawNodes.value = nodes
+      rawEdges.value = edges
+      bookGroups.value = meta
+      selectedNodeId.value = null
+      selectedEdgeId.value = null
+      await nextTick()
+      await renderGraph()
+    } catch (error) {
+      if (!isMounted) return
+      errorMessage.value = error instanceof Error ? error.message : '加载多书关系图谱数据失败'
+    } finally {
+      if (isMounted) isLoading.value = false
+    }
+    return
+  }
+
+  bookGroups.value = []
+  if (!singleBookId) {
     rawNodes.value = []
     rawEdges.value = []
     selectedNodeId.value = null
@@ -266,7 +349,7 @@ async function loadGraphData(): Promise<void> {
   isLoading.value = true
   errorMessage.value = ''
   try {
-    const data = await getInsightGraph(bookId, { minWeight: 1 })
+    const data = await getInsightGraph(singleBookId, { minWeight: 1 })
     if (!isMounted) return
     rawNodes.value = data.nodes ?? []
     rawEdges.value = data.edges ?? []
@@ -290,8 +373,30 @@ watch(
   },
 )
 
+// 切换多书对比模式或改选书目时，需要重新拉取数据（数据结构从扁平变为分组）。
+watch(
+  () => [multiBookMode.value, selectedBookIds.value.join(',')],
+  () => {
+    if (!isMounted) return
+    void loadGraphData()
+  },
+)
+
+async function toggleMultiBookMode(): Promise<void> {
+  multiBookMode.value = !multiBookMode.value
+  if (multiBookMode.value && selectedBookIds.value.length === 0) {
+    // 默认带上当前书（若已在书架列表中）。
+    const current = insightStore.currentBookId
+    if (current) selectedBookIds.value = [current]
+    if (bookshelfStore.books.length === 0) await bookshelfStore.loadBooks()
+  } else if (!multiBookMode.value) {
+    selectedBookIds.value = []
+  }
+}
+
 onMounted(() => {
   isMounted = true
+  if (bookshelfStore.books.length === 0) void bookshelfStore.loadBooks()
   void loadGraphData()
 })
 
@@ -350,6 +455,32 @@ onUnmounted(() => {
           {{ showLabels ? '隐藏标签' : '显示标签' }}
         </UiButton>
         <UiButton size="sm" variant="secondary" @click="resetView">重置视图</UiButton>
+        <UiButton
+          size="sm"
+          :variant="multiBookMode ? 'primary' : 'secondary'"
+          @click="toggleMultiBookMode"
+        >
+          <UiIcon name="layers" :size="14" /> 多书对比
+        </UiButton>
+      </div>
+    </div>
+
+    <div v-if="multiBookMode" class="knowledge-graph-panel__book-picker">
+      <span class="knowledge-graph-panel__book-picker-label">
+        选择书籍（最多 {{ MAX_MULTI_BOOKS }} 本，已选 {{ selectedBookIds.length }}）
+      </span>
+      <div class="knowledge-graph-panel__book-list">
+        <UiButton
+          v-for="book in bookshelfStore.books"
+          :key="book.id"
+          size="xs"
+          :variant="selectedBookIds.includes(book.id) ? 'primary' : 'secondary'"
+          class="knowledge-graph-panel__book-chip"
+          :disabled="!selectedBookIds.includes(book.id) && selectedBookIds.length >= MAX_MULTI_BOOKS"
+          @click="toggleBookSelection(book.id)"
+        >
+          {{ book.title || book.id }}
+        </UiButton>
       </div>
     </div>
 
@@ -357,6 +488,10 @@ onUnmounted(() => {
       <span>节点 {{ activeNodes.length }}</span>
       <span>关系 {{ activeEdges.length }}</span>
       <span>平均度 {{ averageDegree }}</span>
+      <span v-for="group in bookGroups" :key="group.bookId" class="knowledge-graph-panel__book-legend">
+        <span class="knowledge-graph-panel__book-swatch" :style="{ backgroundColor: group.color }" />
+        {{ group.bookTitle }}
+      </span>
       <span class="knowledge-graph-panel__hint">滚轮缩放 · 拖拽画布平移 · 拖拽节点 · 点击查看详情</span>
     </div>
 
@@ -470,6 +605,29 @@ onUnmounted(() => {
   width: 84px;
 }
 
+.knowledge-graph-panel__book-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.knowledge-graph-panel__book-picker-label {
+  flex: none;
+}
+
+.knowledge-graph-panel__book-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.knowledge-graph-panel__book-chip {
+  border-radius: 999px;
+}
+
 .knowledge-graph-panel__stats {
   display: flex;
   flex-wrap: wrap;
@@ -480,6 +638,18 @@ onUnmounted(() => {
 
 .knowledge-graph-panel__hint {
   margin-left: auto;
+}
+
+.knowledge-graph-panel__book-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.knowledge-graph-panel__book-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
 }
 
 .knowledge-graph-panel__body {

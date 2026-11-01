@@ -1387,7 +1387,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Entity co-occurrence graph built from the active entity-alignment artifact. */
+        /**
+         * @description Entity co-occurrence graph built from the active entity-alignment artifact.
+         *     Single book returns a flat graph; passing `bookIds` (comma-separated or repeated,
+         *     up to 10 books) merges each book's graph into grouped results without merging
+         *     entities across books.
+         */
         get: operations["getInsightGraph"];
         put?: never;
         post?: never;
@@ -4153,6 +4158,15 @@ export interface components {
         InsightGraphData: {
             nodes: components["schemas"]["InsightGraphNode"][];
             edges: components["schemas"]["InsightGraphEdge"][];
+        };
+        InsightGraphGroup: {
+            bookId: components["schemas"]["Uuid"];
+            bookTitle: string;
+            nodes: components["schemas"]["InsightGraphNode"][];
+            edges: components["schemas"]["InsightGraphEdge"][];
+        };
+        InsightGraphGroups: {
+            groups: components["schemas"]["InsightGraphGroup"][];
         };
     };
     responses: {
@@ -6976,8 +6990,14 @@ export interface operations {
     };
     getInsightGraph: {
         parameters: {
-            query: {
-                book_id: components["schemas"]["Uuid"];
+            query?: {
+                /** @description Single-book selector. Required when `bookIds` is absent. */
+                book_id?: components["schemas"]["Uuid"];
+                /**
+                 * @description Comma-separated list of book ids (or repeated). Up to 10 books.
+                 *     When present, the response is grouped per book.
+                 */
+                bookIds?: components["schemas"]["Uuid"][];
                 category?: string;
                 min_weight?: number;
             };
@@ -6987,13 +7007,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Entity nodes and weighted co-occurrence edges. */
+            /** @description Entity nodes and weighted co-occurrence edges (flat for single book, grouped for `bookIds`). */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["InsightGraphData"];
+                    "application/json": components["schemas"]["InsightGraphData"] | components["schemas"]["InsightGraphGroups"];
                 };
             };
             422: components["responses"]["ValidationError"];

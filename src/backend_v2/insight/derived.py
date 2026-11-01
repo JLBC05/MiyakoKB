@@ -942,6 +942,9 @@ PAGE_VECTOR_DOCUMENT_MAX_CHARS = 4000
 # 因此除了单页文档截断，还必须按总字数切批；留足余量取 4.8 万字。
 EMBEDDING_BATCH_MAX_CHARS = 48_000
 
+# 多书横向图谱一次最多合并的书本数（每本约 250 节点，过多会拖垮前端渲染）。
+MAX_MULTI_BOOK_GRAPH_BOOKS = 10
+
 
 def build_page_vector_document(analysis: Mapping[str, Any], summary: str) -> str:
     """把一页的分析结果拼成语义检索用的文档。
@@ -4806,6 +4809,57 @@ class InsightDerivedRepository:
                         })
 
             return {"nodes": nodes, "edges": edges}
+
+    def get_graph_data_multi(
+        self,
+        *,
+        book_ids: Sequence[str],
+        category: str | None = None,
+        min_weight: int = 1,
+    ) -> dict[str, Any]:
+        """多书实体关系图谱。
+
+        单本 -> 保持扁平 ``{"nodes": [], "edges": []}``（与 :meth:`get_graph_data` 完全一致）。
+        多本 -> ``{"groups": [{"bookId", "bookTitle", "nodes", "edges"}]}``。
+
+        **跨书不合并实体**：同名实体分属不同书时各归各组。归并键概念上是「书名 + 实体名」，
+        但实现上直接按书分组、组内复用单书逻辑，天然不会跨书并节点。
+
+        注意：现有边是**同书页共现**，结构上不可能跨书，因此多书模式下不存在 crossBook 边。
+        """
+        ids = [str(b).strip() for b in book_ids if str(b).strip()]
+        if not ids:
+            raise ValueError("book_ids is required")
+        if len(ids) > MAX_MULTI_BOOK_GRAPH_BOOKS:
+            raise ValueError(
+                f"book_ids must not contain more than {MAX_MULTI_BOOK_GRAPH_BOOKS} books"
+            )
+
+        if len(ids) == 1:
+            return self.get_graph_data(
+                book_id=ids[0], category=category, min_weight=min_weight
+            )
+
+        with self.engine.connect() as connection:
+            title_rows = connection.execute(
+                select(books.c.id, books.c.title).where(books.c.id.in_(ids))
+            ).mappings().all()
+        titles = {row["id"]: row["title"] for row in title_rows}
+
+        groups: list[dict[str, Any]] = []
+        for book_id in ids:
+            single = self.get_graph_data(
+                book_id=book_id, category=category, min_weight=min_weight
+            )
+            groups.append(
+                {
+                    "bookId": book_id,
+                    "bookTitle": titles.get(book_id, ""),
+                    "nodes": single["nodes"],
+                    "edges": single["edges"],
+                }
+            )
+        return {"groups": groups}
 
     def publish_timeline(
         self,

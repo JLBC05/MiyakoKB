@@ -48,6 +48,7 @@ from src.backend_v2.insight.continuation import (
     ContinuationRepository,
 )
 from src.backend_v2.insight.derived import (
+    MAX_MULTI_BOOK_GRAPH_BOOKS,
     InsightDerivedCommandService,
     InsightDerivedRepository,
 )
@@ -307,9 +308,6 @@ def create_insight_blueprint(
 
     @blueprint.get("/graph")
     def get_graph() -> Response:
-        book_id = request.args.get("book_id") or request.args.get("bookId")
-        if not book_id or not book_id.strip():
-            raise ValueError("book_id is required")
         category = request.args.get("category")
         if category is not None:
             category = category.strip() or None
@@ -318,6 +316,27 @@ def create_insight_blueprint(
             min_weight = max(1, int(min_weight_str))
         except (ValueError, TypeError):
             min_weight = 1
+
+        raw_book_ids = request.args.getlist("bookIds") or request.args.getlist("book_ids")
+        book_ids: list[str] = []
+        for chunk in raw_book_ids:
+            book_ids.extend(part.strip() for part in chunk.split(",") if part.strip())
+
+        if book_ids:
+            if len(book_ids) > MAX_MULTI_BOOK_GRAPH_BOOKS:
+                raise ValueError(
+                    f"bookIds must not contain more than {MAX_MULTI_BOOK_GRAPH_BOOKS} books"
+                )
+            graph_data = derived.get_graph_data_multi(
+                book_ids=book_ids,
+                category=category,
+                min_weight=min_weight,
+            )
+            return jsonify(graph_data)
+
+        book_id = request.args.get("book_id") or request.args.get("bookId")
+        if not book_id or not book_id.strip():
+            raise ValueError("book_id is required")
         graph_data = derived.get_graph_data(
             book_id=book_id.strip(),
             category=category,

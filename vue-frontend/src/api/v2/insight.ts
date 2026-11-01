@@ -225,6 +225,9 @@ export type V2InsightEntity = components['schemas']['InsightEntity']
 export type V2InsightGraphNode = components['schemas']['InsightGraphNode']
 export type V2InsightGraphEdge = components['schemas']['InsightGraphEdge']
 export type V2InsightGraphData = components['schemas']['InsightGraphData']
+export type V2InsightGraphGroup = components['schemas']['InsightGraphGroup']
+export type V2InsightGraphGroups = components['schemas']['InsightGraphGroups']
+export type V2InsightGraphResponse = V2InsightGraphData | V2InsightGraphGroups
 
 export function listInsightEntities(
   bookId: string,
@@ -245,6 +248,19 @@ export function getInsightGraph(
   return apiClient.get(`${ROOT}/graph`, {
     params: {
       book_id: bookId,
+      ...(options.category ? { category: options.category } : {}),
+      ...(options.minWeight ? { min_weight: options.minWeight } : {}),
+    },
+  })
+}
+
+export function getInsightGraphForBooks(
+  bookIds: string[],
+  options: { category?: string; minWeight?: number } = {}
+): Promise<V2InsightGraphResponse> {
+  return apiClient.get(`${ROOT}/graph`, {
+    params: {
+      bookIds: bookIds.join(','),
       ...(options.category ? { category: options.category } : {}),
       ...(options.minWeight ? { min_weight: options.minWeight } : {}),
     },

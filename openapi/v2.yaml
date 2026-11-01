@@ -1877,12 +1877,29 @@ paths:
     get:
       tags: [insight]
       operationId: getInsightGraph
-      description: Entity co-occurrence graph built from the active entity-alignment artifact.
+      description: |
+        Entity co-occurrence graph built from the active entity-alignment artifact.
+        Single book returns a flat graph; passing `bookIds` (comma-separated or repeated,
+        up to 10 books) merges each book's graph into grouped results without merging
+        entities across books.
       parameters:
         - name: book_id
           in: query
-          required: true
+          required: false
+          description: Single-book selector. Required when `bookIds` is absent.
           schema: {$ref: "#/components/schemas/Uuid"}
+        - name: bookIds
+          in: query
+          required: false
+          description: |
+            Comma-separated list of book ids (or repeated). Up to 10 books.
+            When present, the response is grouped per book.
+          schema:
+            type: array
+            maxItems: 10
+            items: {$ref: "#/components/schemas/Uuid"}
+          style: form
+          explode: false
         - name: category
           in: query
           required: false
@@ -1893,10 +1910,13 @@ paths:
           schema: {type: integer, minimum: 1, default: 1}
       responses:
         "200":
-          description: Entity nodes and weighted co-occurrence edges.
+          description: Entity nodes and weighted co-occurrence edges (flat for single book, grouped for `bookIds`).
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/InsightGraphData"}
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InsightGraphData"
+                  - $ref: "#/components/schemas/InsightGraphGroups"
         "422": {$ref: "#/components/responses/ValidationError"}
   /insight/books/{book_id}/chapters:
     get:
@@ -6922,3 +6942,18 @@ components:
       properties:
         nodes: {type: array, items: {$ref: "#/components/schemas/InsightGraphNode"}}
         edges: {type: array, items: {$ref: "#/components/schemas/InsightGraphEdge"}}
+    InsightGraphGroup:
+      type: object
+      additionalProperties: false
+      required: [bookId, bookTitle, nodes, edges]
+      properties:
+        bookId: {$ref: "#/components/schemas/Uuid"}
+        bookTitle: {type: string}
+        nodes: {type: array, items: {$ref: "#/components/schemas/InsightGraphNode"}}
+        edges: {type: array, items: {$ref: "#/components/schemas/InsightGraphEdge"}}
+    InsightGraphGroups:
+      type: object
+      additionalProperties: false
+      required: [groups]
+      properties:
+        groups: {type: array, items: {$ref: "#/components/schemas/InsightGraphGroup"}}

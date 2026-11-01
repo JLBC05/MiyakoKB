@@ -7854,3 +7854,116 @@ def test_cross_chapter_event_is_rejected_and_the_batch_retries(
         }
     assert spans[0][0] not in persisted
 
+
+def _publish_entity_alignment_artifact(
+    engine,
+    *,
+    book_id: str,
+    canonical_entities: list[dict],
+) -> None:
+    """直接写一条 active 的 entity_alignment 产物，供图谱读取测试使用。"""
+    with engine.begin() as connection:
+        connection.execute(
+            insert(analysis_artifacts).values(
+                id=str(uuid.uuid4()),
+                book_id=book_id,
+                kind="entity_alignment",
+                template="default",
+                status="ready",
+                revision=1,
+                is_active=True,
+                dependency_fingerprint="test-fingerprint",
+                payload_json=json.dumps(
+                    {"canonical_entities": canonical_entities}, ensure_ascii=False
+                ),
+            )
+        )
+
+
+def _entity(entity_id: str, name: str, pages: list[int], *, category: str = "characters") -> dict:
+    return {
+        "entity_id": entity_id,
+        "canonical_name": name,
+        "category": category,
+        "aliases": [],
+        "total_frequency": len(pages),
+        "pages": pages,
+    }
+
+
+def test_graph_data_multi_groups_books_without_merging_same_named_entities(
+    insight_platform,
+) -> None:
+    """多书图谱：按书分组，同名实体跨书各归各组、绝不合并。"""
+    platform = insight_platform
+    repository = InsightDerivedRepository(platform["engine"])
+    content = ContentRepository(platform["engine"])
+    book_a = str(platform["book"]["id"])
+    book_b = str(content.create_book(title="Second Book")["id"])
+
+    _publish_entity_alignment_artifact(
+        platform["engine"],
+        book_id=book_a,
+        canonical_entities=[
+            _entity("a1", "主角", [1, 2, 3]),
+            _entity("a2", "配角", [2, 3]),
+        ],
+    )
+    _publish_entity_alignment_artifact(
+        platform["engine"],
+        book_id=book_b,
+        canonical_entities=[
+            _entity("b1", "主角", [1, 5]),  # 与 A 书同名，但必须独立成组
+            _entity("b2", "反派", [5, 6]),
+        ],
+    )
+
+    result = repository.get_graph_data_multi(book_ids=[book_a, book_b])
+
+    assert set(result.keys()) == {"groups"}
+    groups = result["groups"]
+    assert [g["bookId"] for g in groups] == [book_a, book_b]
+    assert [g["bookTitle"] for g in groups] == ["Insight Book", "Second Book"]
+    # 每本书各自带自己的实体与边，跨书不合并
+    assert {n["id"] for n in groups[0]["nodes"]} == {"a1", "a2"}
+    assert {n["id"] for n in groups[1]["nodes"]} == {"b1", "b2"}
+    # A 书的边只在 a1--a2，B 书的边只在 b1--b2
+    assert {e["id"] for e in groups[0]["edges"]} == {"a1--a2"}
+    assert {e["id"] for e in groups[1]["edges"]} == {"b1--b2"}
+
+
+def test_graph_data_multi_single_book_keeps_flat_format(insight_platform) -> None:
+    """单书请求保持扁平 {nodes, edges} 格式，与 get_graph_data 一致。"""
+    platform = insight_platform
+    repository = InsightDerivedRepository(platform["engine"])
+    book_a = str(platform["book"]["id"])
+    _publish_entity_alignment_artifact(
+        platform["engine"],
+        book_id=book_a,
+        canonical_entities=[_entity("a1", "主角", [1, 2])],
+    )
+
+    result = repository.get_graph_data_multi(book_ids=[book_a])
+
+    assert set(result.keys()) == {"nodes", "edges"}
+    assert [n["id"] for n in result["nodes"]] == ["a1"]
+
+
+def test_graph_endpoint_rejects_more_than_ten_books(insight_platform) -> None:
+    """bookIds 超过 10 本 → 422 validation_error。"""
+    platform = insight_platform
+    app = Flask("graph-endpoint")
+    app.register_blueprint(
+        create_insight_blueprint(
+            engine=platform["engine"],
+            data_root=platform["data_root"],
+            qa_algorithms=FakeQAApiAlgorithms(),
+            profile=LOCAL_PROFILE,
+        )
+    )
+    too_many = ",".join(str(uuid.uuid4()) for _ in range(11))
+    response = app.test_client().get(f"/api/v2/insight/graph?bookIds={too_many}")
+    assert response.status_code == 422
+    assert response.get_json()["error"]["code"] == "validation_error"
+
+
