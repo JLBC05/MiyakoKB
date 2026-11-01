@@ -186,9 +186,9 @@ describe('apiClient error normalization', () => {
     const responseErrorHandler = responseUseMock.mock.calls[0]?.[1] as ResponseErrorHandler | undefined
     if (!responseErrorHandler) throw new Error('response error interceptor was not registered')
 
-    const received: Array<{ code: string; url: string; method: string }> = []
+    const received: Array<{ code: string; url: string; method: string; resource: string }> = []
     const unsubscribe = onApiConflict((detail) => {
-      received.push({ code: detail.code, url: detail.url, method: detail.method })
+      received.push({ code: detail.code, url: detail.url, method: detail.method, resource: detail.resource })
     })
 
     const conflict = Object.assign(new Error('Request failed with status code 409'), {
@@ -204,7 +204,7 @@ describe('apiClient error normalization', () => {
       const error = await responseErrorHandler(conflict).catch((value: unknown) => value)
       expect(error).toMatchObject({ status: 409, code: 'invalid_job_transition' })
       expect(received).toEqual([
-        { code: 'invalid_job_transition', url: '/api/v2/jobs/abc/cancel', method: 'post' },
+        { code: 'invalid_job_transition', url: '/api/v2/jobs/abc/cancel', method: 'post', resource: 'task' },
       ])
 
       // 非 409 不应广播，避免无关失败触发无谓刷新。

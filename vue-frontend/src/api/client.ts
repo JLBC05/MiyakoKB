@@ -26,6 +26,23 @@ export class ApiClientError extends Error implements ApiError {
 /** 统一冲突事件：任何 409 都会在 window 上广播一次，供 UI 统一刷新快照。 */
 export const CONFLICT_EVENT = 'miyako:conflict' as const
 
+/**
+ * 冲突按「被改的资源」分类，供 UI 决定刷新哪一块快照。
+ *
+ * - `settings`：设置 / 自定义模型供应商（`/settings/...`），乐观锁冲突后应重新拉取最新设置；
+ * - `task`：任务与批处理（`/jobs`、`/job-batches`），刷新任务中心；
+ * - `other`：其余 409（如续写项目、书籍章节顺序等），由具体页面自行处理。
+ */
+export type ConflictResource = 'settings' | 'task' | 'other'
+
+/** 从请求路径推断被改的资源类别。 */
+function classifyConflictResource(url: string): ConflictResource {
+  const path = String(url || '').toLowerCase()
+  if (path.includes('/settings') || path.includes('/credential')) return 'settings'
+  if (path.includes('/jobs') || path.includes('/job-batches')) return 'task'
+  return 'other'
+}
+
 export interface ConflictEventDetail {
   /** 后端返回的业务错误码，例如 ``revision_conflict`` / ``invalid_job_transition``。 */
   code: string
@@ -35,6 +52,8 @@ export interface ConflictEventDetail {
   url: string
   /** HTTP 方法（小写）。 */
   method: string
+  /** 被改的资源类别，UI 据此决定刷新哪块快照。 */
+  resource: ConflictResource
 }
 
 /**
@@ -145,11 +164,13 @@ class ApiClient {
         // 调用点各自弹一句「冲突」，用户不知道该刷新什么。这里统一广播一次，
         // 由 shell 层刷新任务中心与相关面板；调用点照旧展示各自的提示。
         if (apiError.status === 409 && typeof window !== 'undefined') {
+          const url = String(error.config?.url ?? '')
           const detail: ConflictEventDetail = {
             code: apiError.code,
             message: apiError.message,
-            url: String(error.config?.url ?? ''),
+            url,
             method: String(error.config?.method ?? 'get').toLowerCase(),
+            resource: classifyConflictResource(url),
           }
           window.dispatchEvent(new CustomEvent<ConflictEventDetail>(CONFLICT_EVENT, { detail }))
         }

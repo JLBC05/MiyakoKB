@@ -13,7 +13,7 @@ import { useTaskCenterStore } from '@/stores/taskCenterStore'
 import { useRuntimeStore } from '@/stores/runtimeStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useCustomAiProfileStore } from '@/stores/customAiProfileStore'
-import { onApiConflict, type ConflictEventDetail } from '@/api/client'
+import { useRevisionConflict } from '@/composables/useRevisionConflict'
 
 const settingsStore = useSettingsStore()
 const taskCenterStore = useTaskCenterStore()
@@ -22,7 +22,6 @@ const authStore = useAuthStore()
 const customAiProfileStore = useCustomAiProfileStore()
 const route = useRoute()
 const router = useRouter()
-let unsubscribeConflict: () => void = () => {}
 const routerReady = ref(false)
 const settingsLoading = ref(false)
 const loadedSettingsContext = ref<string | null>(null)
@@ -140,17 +139,29 @@ function handleAuthenticationRequired(): void {
  * 任务中心相关的冲突（job / batch / 队列类路径）只需要重新拉一次快照，
  * 用户的提示仍由各调用点自己给出，避免重复弹窗。
  */
-function handleApiConflict(detail: ConflictEventDetail): void {
-  const url = detail.url
-  const touchesJobs = url.includes('/jobs') || url.includes('/job-batches')
-  if (!touchesJobs) return
-  void taskCenterStore.refresh().catch(() => undefined)
-}
+/**
+ * 409 统一处理：后端告诉我们「你手上的快照已过期」。
+ *
+ * - 任务中心相关的冲突（job / batch / 队列类路径）：重新拉一次快照；
+ * - 设置 / 自定义模型供应商（乐观锁冲突）：自动重载最新设置并提示「已载入最新版本」，
+ *   由 `useRevisionConflict` 统一处理。
+ * 用户的可见提示由这两条通路各自给出，避免重复弹窗。
+ */
+useRevisionConflict({
+  reload: {
+    task: () => taskCenterStore.refresh().catch(() => undefined),
+    settings: async () => {
+      await Promise.all([
+        settingsStore.loadFromBackend().catch(() => undefined),
+        customAiProfileStore.load().catch(() => undefined),
+      ])
+    },
+  },
+})
 
 onMounted(async () => {
   appMounted = true
   window.addEventListener('saber:authentication-required', handleAuthenticationRequired)
-  unsubscribeConflict = onApiConflict(handleApiConflict)
   await router.isReady()
   if (appMounted) routerReady.value = true
 })
@@ -162,7 +173,6 @@ watch([routerReady, readerImmersiveMode, applicationContextReady, settingsContex
 onBeforeUnmount(() => {
   appMounted = false
   window.removeEventListener('saber:authentication-required', handleAuthenticationRequired)
-  unsubscribeConflict()
   taskCenterStore.disconnect()
 })
 </script>
