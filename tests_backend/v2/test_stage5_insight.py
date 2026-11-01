@@ -78,6 +78,9 @@ from src.backend_v2.insight.qa import (
     _lexical_terms,
     LEXICAL_RECALL_SCORE_BASE,
     LEXICAL_RECALL_SCORE_SPAN,
+    lexical_event_candidates,
+    _page_events_text,
+    LEXICAL_EVENT_MIN_MATCHES,
 )
 from src.backend_v2.insight.character_skill import character_profile_digest
 from src.backend_v2.insight.repository import (
@@ -8151,6 +8154,114 @@ def test_lexical_page_candidates_return_empty_without_terms() -> None:
         locations=_lexical_locations(),
     )
     assert candidates == []
+
+
+def _event_snapshot_pages():
+    """构造「事件发生页」与「事后描述页」：
+
+    - event-page：key_events 明确记载「斩断」动作（事件发生页）。
+    - aftermath-page：只有 summary 复述「被斩断后…」，key_events 写的是后续（重创/轰飞）。
+    - unrelated：完全不相关。
+    """
+    return [
+        {
+            "pageId": "event-page",
+            "pageNumber": 157,
+            "analysis": {
+                "page_summary": "特级咒灵斩断虎杖悠仁的右手手腕",
+                "key_events": [
+                    {"summary": "特级咒灵斩断虎杖悠仁的右手手腕", "event_type": "battle"},
+                ],
+            },
+        },
+        {
+            "pageId": "aftermath-page",
+            "pageNumber": 159,
+            "analysis": {
+                "page_summary": "虎杖悠仁的手腕被特级咒灵斩断后，右手断裂处喷出大量鲜血",
+                "key_events": [
+                    {"summary": "特级咒灵重创虎杖悠仁，反手重击将其轰飞", "event_type": "combat"},
+                ],
+            },
+        },
+        {
+            "pageId": "unrelated",
+            "pageNumber": 3,
+            "analysis": {
+                "page_summary": "虎杖与伏黑在教室里讨论社团活动",
+                "key_events": [{"summary": "两人在教室聊天"}],
+            },
+        },
+    ]
+
+
+def _event_locations():
+    return {
+        3: {"pageId": "unrelated", "pageNumber": 3},
+        157: {"pageId": "event-page", "pageNumber": 157},
+        159: {"pageId": "aftermath-page", "pageNumber": 159},
+    }
+
+
+def test_page_events_text_only_reads_key_events() -> None:
+    """_page_events_text 只取 key_events 摘要，不含 page_summary。"""
+    analysis = {
+        "page_summary": "事后描述：手腕被斩断后喷血",
+        "key_events": [{"summary": "特级咒灵斩断右手"}, {"summary": "重击轰飞"}],
+    }
+    text = _page_events_text(analysis)
+    assert "斩断右手" in text and "轰飞" in text
+    assert "事后描述" not in text
+
+
+def test_lexical_event_candidates_prefer_event_page_over_aftermath() -> None:
+    """事件发生页（key_events 命中动作）排在事后描述页之前。"""
+    candidates = lexical_event_candidates(
+        "英集少年院里虎杖悠仁被特级咒灵斩断右手是在第几话？",
+        snapshot_pages=_event_snapshot_pages(),
+        locations=_event_locations(),
+    )
+    assert candidates
+    assert candidates[0]["pageId"] == "event-page"
+    assert candidates[0]["id"] == "lexical_event_event-page"
+    assert candidates[0]["type"] == "page"
+    # 分数仍落在 lexical 召回区间。
+    assert LEXICAL_RECALL_SCORE_BASE <= candidates[0]["hybridScore"] <= (
+        LEXICAL_RECALL_SCORE_BASE + LEXICAL_RECALL_SCORE_SPAN
+    )
+
+
+def test_lexical_event_candidates_skip_pages_without_event_matches() -> None:
+    """key_events 完全无关的页面不入选（无关页被排除）。"""
+    candidates = lexical_event_candidates(
+        "英集少年院里虎杖悠仁被特级咒灵斩断右手是在第几话？",
+        snapshot_pages=_event_snapshot_pages(),
+        locations=_event_locations(),
+    )
+    page_ids = {item["pageId"] for item in candidates}
+    # 无关页（教室聊天）与问题无任何事件词重合 → 命中不足被排除。
+    assert "unrelated" not in page_ids
+    # 事件发生页必入选，且排在事后描述页之前（真实数据里事后页也会因「特级咒灵/
+    # 虎杖悠仁」等实体词命中，但重叠率低于事件页，故排在后面而非被排除）。
+    ordered = [item["pageId"] for item in candidates]
+    assert "event-page" in ordered
+    if "aftermath-page" in ordered:
+        assert ordered.index("event-page") < ordered.index("aftermath-page")
+
+
+def test_lexical_event_candidates_return_empty_without_terms() -> None:
+    """问题无可比实词时返回空。"""
+    candidates = lexical_event_candidates(
+        "？？？",
+        snapshot_pages=_event_snapshot_pages(),
+        locations=_event_locations(),
+    )
+    assert candidates == []
+
+
+def test_lexical_event_min_matches_is_at_least_two() -> None:
+    """门槛常量是 2（单个词命中不足以确认为事件发生页）。"""
+    assert LEXICAL_EVENT_MIN_MATCHES >= 2
 
 
 

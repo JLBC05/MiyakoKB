@@ -75,6 +75,7 @@ from src.backend_v2.insight.qa import (
     citations_for,
     entity_page_candidates,
     lexical_page_candidates,
+    lexical_event_candidates,
     page_locations,
     pinned_page_candidates,
     retrieval_diagnostics,
@@ -782,6 +783,15 @@ def create_insight_blueprint(
                     snapshot_pages=snapshot_pages,
                     locations=locations,
                 )
+                # 事件层补充召回：page_summary 会把「之前发生的事」当背景复述，单看
+                # summary 容易把「事后描述页」排到「事件发生页」前面（实测 #11）。这里
+                # 再按页面 key_events（本页实际发生的动作）单独扫一遍，命中动作词的
+                # 事件发生页补进候选，供模型研判「动作到底发生在哪一话」。
+                lexical_event_candidates_list = lexical_event_candidates(
+                    handle.question,
+                    snapshot_pages=snapshot_pages,
+                    locations=locations,
+                )
 
                 global_candidates: list[dict[str, Any]] = []
                 rankable: list[dict[str, Any]] = []
@@ -864,6 +874,20 @@ def create_insight_blueprint(
                     and value.get("pageId") not in evidence_page_ids
                     and value.get("pageId") not in chapter_fill_page_ids
                 ]
+                # 事件层补充召回页：排在最后，确保「事件发生页」进入窗口但绝不挤掉
+                # 语义最相关页。与前面所有已选页（含上面的 lexical_fill）去重。
+                lexical_fill_page_ids = {
+                    value.get("pageId") for value in lexical_fill
+                }
+                lexical_event_fill = [
+                    value
+                    for value in lexical_event_candidates_list
+                    if value.get("pageId") not in selected_page_ids
+                    and value.get("pageId") not in pinned_page_ids_set
+                    and value.get("pageId") not in evidence_page_ids
+                    and value.get("pageId") not in chapter_fill_page_ids
+                    and value.get("pageId") not in lexical_fill_page_ids
+                ]
                 candidates = (
                     global_candidates
                     + pinned_fill
@@ -871,6 +895,7 @@ def create_insight_blueprint(
                     + ranked
                     + evidence
                     + lexical_fill
+                    + lexical_event_fill
                 )
                 citations = citations_for(candidates, engine=engine, page_lookup=locations)
                 for citation in citations:

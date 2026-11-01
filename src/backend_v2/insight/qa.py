@@ -226,6 +226,13 @@ LEXICAL_RECALL_MIN_RATIO = 0.28
 # （0.95）与真实向量命中（1.0）。它确实命中了问题里的字面词，但仍逊于语义最相关页。
 LEXICAL_RECALL_SCORE_BASE = 0.50
 LEXICAL_RECALL_SCORE_SPAN = 0.40
+# 事件层补充召回：page_summary 常把「之前发生的事」当背景复述（如第 7 话第 1 页把
+# 「手腕被斩断后」写成背景，真正斩断发生在第 6 话第 18 页），单看 summary 会把事后
+# 描述页排到事件发生页前面（实测 #11 期望页 157 因此被 159 挤掉、连候选都进不去）。
+# 因此再从页面 key_events（本页实际发生了什么）单独扫一遍，命中动作词的页直接补进
+# 候选，保证「事件发生页」进入窗口供模型研判。门槛要求命中 ≥MIN 个事件词，避免噪声。
+LEXICAL_EVENT_LIMIT = 2
+LEXICAL_EVENT_MIN_MATCHES = 2
 # 从问题里认出「第 N 话」的三种写法：阿拉伯数字、全角数字、中文数字。
 _CHAPTER_ORDINAL_PATTERN = re.compile(
     r"第\s*([0-9０-９]{1,4}|[零一二三四五六七八九十百]{1,6})\s*[话話]"
@@ -2968,6 +2975,96 @@ def lexical_page_candidates(
         candidates.append(
             {
                 "id": f"lexical_page_{page_id}",
+                "type": "page",
+                "pageId": page_id,
+                "pageNumber": number,
+                "document": _page_document(number, analysis),
+                "hybridScore": round(score, 4),
+            }
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _page_events_text(analysis: Mapping[str, Any]) -> str:
+    """只取一个页面 payload 的 key_events 摘要文本（本页实际发生的事）。"""
+    events = analysis.get("key_events") or []
+    parts: list[str] = []
+    if isinstance(events, list):
+        for event in events:
+            if isinstance(event, Mapping) and event.get("summary"):
+                parts.append(str(event["summary"]))
+            elif isinstance(event, str) and event:
+                parts.append(event)
+    return "；".join(parts)
+
+
+def lexical_event_candidates(
+    question: str,
+    *,
+    snapshot_pages: Sequence[Mapping[str, Any]],
+    locations: Mapping[int, Mapping[str, Any]] | None = None,
+    limit: int = LEXICAL_EVENT_LIMIT,
+    min_matches: int = LEXICAL_EVENT_MIN_MATCHES,
+) -> list[dict[str, Any]]:
+    """按页面 key_events（本页实际发生的事件）字面重叠，补充召回「事件发生页」。
+
+    与 ``lexical_page_candidates``（对 summary+events 整篇打分）互补：后者会被
+    page_summary 里复述的背景事件带偏，把「事后描述页」排到「事件发生页」之前。
+    这里只对 ``key_events`` 打分，命中问题词达到 ``min_matches`` 的页面才入选，
+    确保真正发生该动作的页进入候选窗口。分数同样落在 LEXICAL_RECALL 区间内。
+    """
+    if not locations or limit < 1:
+        return []
+    terms = _lexical_terms(question)
+    if not terms:
+        return []
+    total_terms = len(terms)
+    by_page_id: dict[str, Mapping[str, Any]] = {}
+    for item in snapshot_pages:
+        if not isinstance(item, Mapping):
+            continue
+        page_id = item.get("pageId")
+        if isinstance(page_id, str) and page_id:
+            by_page_id.setdefault(page_id, item)
+
+    scored: list[tuple[float, int, str, int]] = []
+    for number, info in locations.items():
+        if not isinstance(info, Mapping):
+            continue
+        page_id = info.get("pageId")
+        if not isinstance(page_id, str) or not page_id:
+            continue
+        item = by_page_id.get(page_id)
+        if item is None:
+            continue
+        analysis = item.get("analysis")
+        if not isinstance(analysis, Mapping):
+            analysis = {}
+        event_terms = _lexical_terms(_page_events_text(analysis))
+        if not event_terms:
+            continue
+        overlap = len(terms & event_terms)
+        if overlap < min_matches:
+            continue
+        scored.append((overlap / total_terms, number, page_id, overlap))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for ratio, number, page_id, _overlap in scored:
+        if page_id in seen:
+            continue
+        seen.add(page_id)
+        item = by_page_id.get(page_id)
+        analysis = item.get("analysis") if item is not None else {}
+        if not isinstance(analysis, Mapping):
+            analysis = {}
+        score = LEXICAL_RECALL_SCORE_BASE + LEXICAL_RECALL_SCORE_SPAN * min(ratio, 1.0)
+        candidates.append(
+            {
+                "id": f"lexical_event_{page_id}",
                 "type": "page",
                 "pageId": page_id,
                 "pageNumber": number,
