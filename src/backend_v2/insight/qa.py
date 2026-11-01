@@ -214,6 +214,18 @@ CHAPTER_FILL_SCORE = 0.45
 # 向量结果，又保证它们稳进 top_k。
 MAX_PINNED_PAGES = 5
 PINNED_PAGE_SCORE = 0.95
+# 词法补充召回：向量检索只按语义近似挑页，对「某个具体事实出现在哪一页」这类提问
+# 容易漏召回——实测「两面宿傩吞下特级咒物恢复力量」的正确页（第 8 话第 19 页）在
+# 向量检索里根本进不了候选窗口，而它在按字面词（CJK bigram）重叠排序里稳定排第 1。
+# 因此在向量候选之外，再对全书页面摘要做一遍字面词重叠扫描，把高重叠页作为补充
+# 证据塞进候选（不替代向量结果）。候选上限与最低重叠门槛用于压掉噪声。
+LEXICAL_RECALL_LIMIT = 3
+# 归一化重叠率下限：overlap / 问题词数。太低说明只是零碎字面碰撞，不足以作为证据。
+LEXICAL_RECALL_MIN_RATIO = 0.28
+# 字面词重叠页的证据分：高于整章补页（0.45）与实体出场页（0.35），低于钉选页
+# （0.95）与真实向量命中（1.0）。它确实命中了问题里的字面词，但仍逊于语义最相关页。
+LEXICAL_RECALL_SCORE_BASE = 0.50
+LEXICAL_RECALL_SCORE_SPAN = 0.40
 # 从问题里认出「第 N 话」的三种写法：阿拉伯数字、全角数字、中文数字。
 _CHAPTER_ORDINAL_PATTERN = re.compile(
     r"第\s*([0-9０-９]{1,4}|[零一二三四五六七八九十百]{1,6})\s*[话話]"
@@ -2827,6 +2839,144 @@ def chapter_page_candidates(
                     "hybridScore": CHAPTER_FILL_SCORE,
                 }
             )
+    return candidates
+
+
+# 提问里的结构性/疑问性短语：切字面词前先剔除，否则「是在第几话」这类片段会污染
+# bigram 集，抬高无关页的重叠。按长度降序匹配，先删长的再删短的。
+_LEXICAL_STOP_PHRASES = (
+    "第一次见面",
+    "第一次",
+    "是在第几话",
+    "是在第几話",
+    "在第几话",
+    "第几话",
+    "第幾話",
+    "第几話",
+    "是在哪里",
+    "是在哪里",
+    "在哪一话",
+    "是哪个",
+    "是什么",
+    "有哪些",
+    "经历过",
+    "经历过哪些",
+    "在故事里",
+    "故事里",
+    "是在",
+    "的话",
+)
+_CJK_RUN_PATTERN = re.compile(r"[\u3400-\u9fff]+")
+_ASCII_WORD_PATTERN = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _lexical_terms(question: str) -> set[str]:
+    """把问题切成用于字面匹配的词集合（CJK bigram + ASCII 词）。
+
+    原先 ``preprocess_question`` 的 ``_TOKEN_PATTERN`` 用 ``[\\u3400-\\u9fff]{2,}``
+    贪婪匹配，整段中文会被并成一个超长 token（实测「两面宿傩吞下特级咒物恢复力量
+    是在第几话」变成一个 20 字的词），几乎不可能在任何页面里原样出现，导致字面
+    打分恒为 0、词法召回形同虚设。这里改用 bigram 切分，既能命中「吞下特级咒物」
+    这类短语，又不需要中文分词依赖。
+    """
+    if not isinstance(question, str) or not question.strip():
+        return set()
+    text = question
+    for phrase in _LEXICAL_STOP_PHRASES:
+        text = text.replace(phrase, " ")
+    terms: set[str] = set()
+    for run in _CJK_RUN_PATTERN.findall(text):
+        if len(run) == 1:
+            terms.add(run)
+        for index in range(len(run) - 1):
+            terms.add(run[index : index + 2])
+    for word in _ASCII_WORD_PATTERN.findall(text):
+        if len(word) >= 2:
+            terms.add(word.lower())
+    return terms
+
+
+def lexical_page_candidates(
+    question: str,
+    *,
+    snapshot_pages: Sequence[Mapping[str, Any]],
+    locations: Mapping[int, Mapping[str, Any]] | None = None,
+    limit: int = LEXICAL_RECALL_LIMIT,
+    min_ratio: float = LEXICAL_RECALL_MIN_RATIO,
+) -> list[dict[str, Any]]:
+    """按字面词（CJK bigram）重叠，对全书页面做一遍补充召回。
+
+    这是向量检索之外的第二条召回通路：向量按语义近似挑页，容易漏掉「某个具体
+    事实出现在哪一页」这类提问（正确页的字面措辞与问题高度重合，但语义向量距离
+    不一定最近）。这里对每页 ``summary + key_events`` 文档统计与问题的 bigram
+    重叠，把重叠率最高的若干页补进候选。
+
+    参数 ``min_ratio`` 是归一化重叠门槛（overlap / 问题词数），用于压掉只是零碎
+    字面碰撞的低相关页。
+    """
+    if not locations or limit < 1:
+        return []
+    terms = _lexical_terms(question)
+    if not terms:
+        return []
+    total_terms = len(terms)
+    by_page_id: dict[str, Mapping[str, Any]] = {}
+    for item in snapshot_pages:
+        if not isinstance(item, Mapping):
+            continue
+        page_id = item.get("pageId")
+        if isinstance(page_id, str) and page_id:
+            by_page_id.setdefault(page_id, item)
+
+    scored: list[tuple[float, int, str]] = []
+    for number, info in locations.items():
+        if not isinstance(info, Mapping):
+            continue
+        page_id = info.get("pageId")
+        if not isinstance(page_id, str) or not page_id:
+            continue
+        item = by_page_id.get(page_id)
+        if item is None:
+            continue
+        analysis = item.get("analysis")
+        if not isinstance(analysis, Mapping):
+            analysis = {}
+        document = _page_document(number, analysis)
+        page_terms = _lexical_terms(document)
+        if not page_terms:
+            continue
+        overlap = len(terms & page_terms)
+        if overlap <= 0:
+            continue
+        ratio = overlap / total_terms
+        if ratio < min_ratio:
+            continue
+        scored.append((ratio, number, page_id))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for ratio, number, page_id in scored:
+        if page_id in seen:
+            continue
+        seen.add(page_id)
+        item = by_page_id.get(page_id)
+        analysis = item.get("analysis") if item is not None else {}
+        if not isinstance(analysis, Mapping):
+            analysis = {}
+        score = LEXICAL_RECALL_SCORE_BASE + LEXICAL_RECALL_SCORE_SPAN * min(ratio, 1.0)
+        candidates.append(
+            {
+                "id": f"lexical_page_{page_id}",
+                "type": "page",
+                "pageId": page_id,
+                "pageNumber": number,
+                "document": _page_document(number, analysis),
+                "hybridScore": round(score, 4),
+            }
+        )
+        if len(candidates) >= limit:
+            break
     return candidates
 
 

@@ -74,6 +74,10 @@ from src.backend_v2.insight.qa import (
     pinned_page_candidates,
     PINNED_PAGE_SCORE,
     MAX_PINNED_PAGES,
+    lexical_page_candidates,
+    _lexical_terms,
+    LEXICAL_RECALL_SCORE_BASE,
+    LEXICAL_RECALL_SCORE_SPAN,
 )
 from src.backend_v2.insight.character_skill import character_profile_digest
 from src.backend_v2.insight.repository import (
@@ -8066,6 +8070,87 @@ def test_qa_command_rejects_too_many_pinned_pages(insight_platform) -> None:
             book_id=str(insight_platform["book"]["id"]),
             command={"question": "问题", "pinnedPageIds": too_many},
         )
+
+
+def _lexical_snapshot_pages():
+    return [
+        {
+            "pageId": "page-hit",
+            "pageNumber": 196,
+            "analysis": {
+                "page_summary": "两面宿傩吞下特级咒物宿傩之指，恢复被封印的力量",
+                "key_events": [
+                    {"summary": "宿傩将宿傩之指一口吞入腹中恢复力量"},
+                ],
+            },
+        },
+        {
+            "pageId": "page-far",
+            "pageNumber": 3,
+            "analysis": {"page_summary": "虎杖与伏黑在教室里讨论社团活动"},
+        },
+        {
+            "pageId": "page-mid",
+            "pageNumber": 50,
+            "analysis": {"page_summary": "虎杖悠仁吞下宿傩的手指"},
+        },
+    ]
+
+
+def _lexical_locations():
+    return {
+        3: {"pageId": "page-far", "pageNumber": 3},
+        50: {"pageId": "page-mid", "pageNumber": 50},
+        196: {"pageId": "page-hit", "pageNumber": 196},
+    }
+
+
+def test_lexical_terms_use_cjk_bigrams() -> None:
+    """问题被切成 CJK bigram + ASCII 词，而不是整段中文一个超长 token。"""
+    terms = _lexical_terms("两面宿傩吞下特级咒物")
+    # 若整段被并成一个 token，就只会有一个元素；这里应有多个 bigram。
+    assert len(terms) > 1
+    assert "咒物" in terms or "特级" in terms
+
+
+def test_lexical_page_candidates_rank_literal_overlap_first() -> None:
+    """字面重叠率最高的页面排在前面，且候选携带正确分数与字段。"""
+    candidates = lexical_page_candidates(
+        "两面宿傩吞下特级咒物恢复力量是在第几话？",
+        snapshot_pages=_lexical_snapshot_pages(),
+        locations=_lexical_locations(),
+    )
+    assert candidates
+    top = candidates[0]
+    assert top["pageId"] == "page-hit"
+    assert top["type"] == "page"
+    assert top["id"] == "lexical_page_page-hit"
+    # 分数落在 base + span*ratio 的取值区间内（ratio<=1）。
+    assert LEXICAL_RECALL_SCORE_BASE <= top["hybridScore"] <= (
+        LEXICAL_RECALL_SCORE_BASE + LEXICAL_RECALL_SCORE_SPAN
+    )
+    assert "宿傩" in top["document"]
+
+
+def test_lexical_page_candidates_drop_low_overlap_pages() -> None:
+    """重叠率低于门槛的低相关页不入选。"""
+    candidates = lexical_page_candidates(
+        "两面宿傩吞下特级咒物恢复力量是在第几话？",
+        snapshot_pages=_lexical_snapshot_pages(),
+        locations=_lexical_locations(),
+    )
+    page_ids = {item["pageId"] for item in candidates}
+    assert "page-far" not in page_ids
+
+
+def test_lexical_page_candidates_return_empty_without_terms() -> None:
+    """问题没有可比较的实词时返回空，不编造候选。"""
+    candidates = lexical_page_candidates(
+        "？？？",
+        snapshot_pages=_lexical_snapshot_pages(),
+        locations=_lexical_locations(),
+    )
+    assert candidates == []
 
 
 

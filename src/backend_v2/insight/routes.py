@@ -74,6 +74,7 @@ from src.backend_v2.insight.qa import (
     chapter_page_candidates,
     citations_for,
     entity_page_candidates,
+    lexical_page_candidates,
     page_locations,
     pinned_page_candidates,
     retrieval_diagnostics,
@@ -773,6 +774,14 @@ def create_insight_blueprint(
                     snapshot_pages=snapshot_pages,
                     locations=locations,
                 )
+                # 词法补充召回：向量检索按语义挑页，容易漏掉「具体事实出现在哪一页」
+                # 这类提问。这里按字面词（CJK bigram）重叠再扫一遍全书页面，把高重叠
+                # 页作为补充证据塞进候选（不替代向量结果）。
+                lexical_candidates = lexical_page_candidates(
+                    handle.question,
+                    snapshot_pages=snapshot_pages,
+                    locations=locations,
+                )
 
                 global_candidates: list[dict[str, Any]] = []
                 rankable: list[dict[str, Any]] = []
@@ -845,12 +854,23 @@ def create_insight_blueprint(
                 chapter_fill_page_ids = {
                     value.get("pageId") for value in chapter_fill
                 }
+                # 字面词高重叠页作为补充证据：排在向量命中与实体证据之后，避免挤掉
+                # 语义最相关的页面，但保证它们进入候选窗口供模型引用。与已选页面去重。
+                lexical_fill = [
+                    value
+                    for value in lexical_candidates
+                    if value.get("pageId") not in selected_page_ids
+                    and value.get("pageId") not in pinned_page_ids_set
+                    and value.get("pageId") not in evidence_page_ids
+                    and value.get("pageId") not in chapter_fill_page_ids
+                ]
                 candidates = (
                     global_candidates
                     + pinned_fill
                     + chapter_fill
                     + ranked
                     + evidence
+                    + lexical_fill
                 )
                 citations = citations_for(candidates, engine=engine, page_lookup=locations)
                 for citation in citations:
