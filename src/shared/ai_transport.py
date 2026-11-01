@@ -436,14 +436,26 @@ def _extract_chat_content_from_payload(payload: Dict[str, Any]) -> str:
 def _extract_stream_chunk(payload: Dict[str, Any]) -> str:
     if not isinstance(payload, dict):
         raise ValueError("AI 流响应必须是 JSON 对象")
+    # 途中错误帧（部分代理以 200 状态返回 {"error": {...}}）必须显式报错，
+    # 不能当作 keep-alive 静默跳过，否则会掩盖真实的提供方故障。
+    error = payload.get("error")
+    if error:
+        if isinstance(error, dict):
+            detail = error.get("message") or error.get("code") or "未知错误"
+        else:
+            detail = error
+        raise ValueError(f"AI 流响应返回错误: {detail}")
     choices = payload.get("choices")
     if choices == []:
         return ""
+    # 畸形/缺省 choices 帧（部分代理偶发的 keep-alive 或格式抖动）不应中断整条流：
+    # 无 content 贡献，按空 keep-alive 处理。若整条流全为畸形帧，下游的空回答守卫
+    # 与传输层重试（仅在未累积任何文本时）会兜底，不会静默返回空结果。
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-        raise ValueError("AI 流响应 choices 格式错误")
+        return ""
     delta = choices[0].get("delta")
     if not isinstance(delta, dict):
-        raise ValueError("AI 流响应 delta 格式错误")
+        return ""
     content = delta.get("content")
     if content is None:
         return ""

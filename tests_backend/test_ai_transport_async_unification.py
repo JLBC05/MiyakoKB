@@ -318,3 +318,49 @@ class AsyncTransportContractTests(unittest.IsolatedAsyncioTestCase):
                 base_url="https://example.com/v1",
                 endpoint="rerank",
             )
+
+
+class StreamChunkExtractionTests(unittest.TestCase):
+    """_extract_stream_chunk 应对畸形帧宽容、对错误帧严格报错。"""
+
+    def test_stream_chunk_extracts_content(self) -> None:
+        from src.shared.ai_transport import _extract_stream_chunk
+
+        self.assertEqual(
+            _extract_stream_chunk({"choices": [{"delta": {"content": "你好"}}]}),
+            "你好",
+        )
+
+    def test_stream_chunk_empty_choices_is_keepalive(self) -> None:
+        from src.shared.ai_transport import _extract_stream_chunk
+
+        self.assertEqual(_extract_stream_chunk({"choices": []}), "")
+
+    def test_stream_chunk_malformed_choices_is_skipped_not_raised(self) -> None:
+        from src.shared.ai_transport import _extract_stream_chunk
+
+        # 缺省 choices / choices 非列表 / choices[0] 非 dict：都按空 keep-alive 跳过。
+        self.assertEqual(_extract_stream_chunk({}), "")
+        self.assertEqual(_extract_stream_chunk({"choices": "oops"}), "")
+        self.assertEqual(_extract_stream_chunk({"choices": [None]}), "")
+        self.assertEqual(_extract_stream_chunk({"choices": [None, None]}), "")
+
+    def test_stream_chunk_malformed_delta_is_skipped_not_raised(self) -> None:
+        from src.shared.ai_transport import _extract_stream_chunk
+
+        self.assertEqual(_extract_stream_chunk({"choices": [{"delta": None}]}), "")
+        self.assertEqual(_extract_stream_chunk({"choices": [{}]}), "")
+
+    def test_stream_chunk_error_frame_raises(self) -> None:
+        from src.shared.ai_transport import _extract_stream_chunk
+
+        with self.assertRaisesRegex(ValueError, "AI 流响应返回错误"):
+            _extract_stream_chunk({"error": {"message": "rate limited"}})
+        with self.assertRaisesRegex(ValueError, "AI 流响应返回错误"):
+            _extract_stream_chunk({"error": "boom"})
+
+    def test_stream_chunk_non_string_content_raises(self) -> None:
+        from src.shared.ai_transport import _extract_stream_chunk
+
+        with self.assertRaisesRegex(ValueError, "delta.content"):
+            _extract_stream_chunk({"choices": [{"delta": {"content": 123}}]})
