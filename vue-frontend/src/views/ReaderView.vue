@@ -11,6 +11,7 @@ import UiIcon from '@/components/ui/UiIcon.vue'
 import ReaderCanvas from '@/components/reader/ReaderCanvas.vue'
 import ReaderControls from '@/components/reader/ReaderControls.vue'
 import ReaderProgress from '@/components/reader/ReaderProgress.vue'
+import QAPanel from '@/components/insight/QAPanel.vue'
 import {
   DEFAULT_READER_SETTINGS,
   READER_FITS,
@@ -50,6 +51,10 @@ const offset = ref(false)
 const controls = ref(true)
 const narrow = ref(false)
 const fullscreen = ref(false)
+const qaOpen = ref(false)
+const qaDrawer = ref<HTMLElement | null>(null)
+const currentPageId = computed(() => images.value[currentIndex.value]?.id ?? '')
+const qaPinnedPageIds = computed(() => (currentPageId.value ? [currentPageId.value] : []))
 let beforeFullscreen = true
 let media: MediaQueryList | undefined
 let mounted = false
@@ -129,6 +134,9 @@ function navigate(delta: number, fromEnd = false) {
     const next = currentIndex.value + delta
     if (next >= 0 && next < images.value.length) jump(next + 1)
   }
+}
+function navigateToPage(pageNumber: number) {
+  jump(pageNumber)
 }
 function updateSettings(value: ReaderSettings) {
   settings.value = value
@@ -232,6 +240,14 @@ function keydown(event: KeyboardEvent) {
   if (event.key.toLowerCase() === 'm') {
     event.preventDefault()
     controls.value = !controls.value
+    return
+  }
+  // 问答抽屉打开时，方向键/翻页键归抽屉，不能让它在背后翻页。
+  if (qaOpen.value) {
+    if (event.key.toLowerCase() === 'escape') {
+      event.preventDefault()
+      qaOpen.value = false
+    }
     return
   }
   if (modal.value) return
@@ -339,6 +355,16 @@ watch(
     >
       <UiIcon name="list" :size="16" /> 菜单
     </UiButton>
+    <UiButton
+      v-if="!qaOpen"
+      class="reader-qa-trigger"
+      variant="inverse"
+      size="sm"
+      aria-label="打开问答"
+      @click="qaOpen = true"
+    >
+      <UiIcon name="message" :size="16" /> 问一问
+    </UiButton>
     <div class="reader-workspace">
       <div class="reader-stage">
         <div v-if="error" class="reader-error" role="alert">
@@ -426,6 +452,31 @@ watch(
           @close="controls = false"
         />
       </div>
+      <div
+        v-if="qaOpen"
+        class="reader-qa-backdrop"
+        @click="qaOpen = false"
+      ></div>
+      <aside
+        v-if="qaOpen"
+        ref="qaDrawer"
+        class="reader-qa-drawer"
+        role="dialog"
+        aria-modal="false"
+        aria-label="漫画问答"
+      >
+        <div class="reader-qa-drawer__head">
+          <strong>问一问</strong>
+          <UiButton variant="ghost" size="xs" aria-label="关闭问答" @click="qaOpen = false">
+            <UiIcon name="x" :size="16" />
+          </UiButton>
+        </div>
+        <QAPanel
+          variant="drawer"
+          :pinned-page-ids="qaPinnedPageIds"
+          @navigate-page="navigateToPage"
+        />
+      </aside>
     </div>
   </AppShell>
 </template>
@@ -504,6 +555,50 @@ watch(
   z-index: var(--z-local-overlay);
   opacity: 0.75;
   background: var(--color-surface-inverse-raised);
+}
+
+.reader-qa-trigger {
+  position: absolute;
+  top: 12px;
+  right: 96px;
+  z-index: var(--z-local-overlay);
+  opacity: 0.85;
+  background: var(--color-surface-inverse-raised);
+}
+
+.reader-qa-trigger:hover,
+.reader-qa-trigger:focus-visible {
+  opacity: 1;
+}
+
+.reader-qa-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--color-overlay-scrim);
+  z-index: var(--z-local-panel);
+}
+
+.reader-qa-drawer {
+  display: flex;
+  flex-direction: column;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 92vw);
+  z-index: var(--z-local-panel);
+  background: var(--color-surface-base);
+  color: var(--color-text-primary);
+  border-left: 1px solid var(--color-border-muted);
+  box-shadow: -12px 0 40px var(--color-overlay-scrim);
+}
+
+.reader-qa-drawer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid var(--color-border-muted);
 }
 
 .reader-menu-trigger:hover,

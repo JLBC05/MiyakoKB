@@ -208,6 +208,12 @@ CHAPTER_FILL_PAGES_PER_CHAPTER = 6
 # 章内代表页的证据分：低于真实向量命中，高于实体出场页（它确实是本章正文，
 # 只是不确定与问题最相关）。
 CHAPTER_FILL_SCORE = 0.45
+# 阅读器内问答的「当前页/钉选页优先」候选上限：用户在阅读时把当前页（或手动钉的几页）
+# 作为强制候选塞进窗口。这些页是用户亲眼看到的证据，得分设为 0.95——低于真实向量
+# 命中（满分 1.0），高于实体出场页（0.35）与整章补页（0.45），既不挤掉真正相关的
+# 向量结果，又保证它们稳进 top_k。
+MAX_PINNED_PAGES = 5
+PINNED_PAGE_SCORE = 0.95
 # 从问题里认出「第 N 话」的三种写法：阿拉伯数字、全角数字、中文数字。
 _CHAPTER_ORDINAL_PATTERN = re.compile(
     r"第\s*([0-9０-９]{1,4}|[零一二三四五六七八九十百]{1,6})\s*[话話]"
@@ -243,9 +249,11 @@ def _validated_request_payload(
         "useParentChild",
         "vectorGeneration",
         "dependencyFingerprint",
+        "pinnedPageIds",
         "config",
     }
-    if set(value) != expected:
+    # pinnedPageIds 是后加字段：旧版本已存入的请求没有它，需向后兼容。
+    if set(value) - {"pinnedPageIds"} != expected - {"pinnedPageIds"}:
         raise QAConflict("stored QA request fields are invalid")
     for key in ("bookId", "question", "dependencyFingerprint"):
         if not isinstance(value[key], str) or not value[key]:
@@ -271,12 +279,19 @@ def _validated_request_payload(
             raise QAConflict(f"stored QA request {key} is invalid")
     if not isinstance(value["useParentChild"], bool):
         raise QAConflict("stored QA request useParentChild is invalid")
+    pinned = value.get("pinnedPageIds", [])
+    if (
+        not isinstance(pinned, list)
+        or any(not isinstance(item, str) or not item for item in pinned)
+    ):
+        raise QAConflict("stored QA request pinnedPageIds is invalid")
     if not isinstance(value["config"], Mapping):
         raise QAConflict("stored QA request config is invalid")
     return {
         **dict(value),
         "keywords": list(value["keywords"]),
         "queryVariants": list(value["queryVariants"]),
+        "pinnedPageIds": list(pinned),
         "config": dict(value["config"]),
     }
 
@@ -2082,6 +2097,7 @@ class InsightQACommandService:
             "useParentChild",
             "useReasoning",
             "useReranker",
+            "pinnedPageIds",
         }
         unknown = set(command) - allowed
         if unknown:
@@ -2116,6 +2132,19 @@ class InsightQACommandService:
             raise ValueError("threshold must be a finite number")
         if not 0 <= threshold <= 1:
             raise ValueError("threshold must be between 0 and 1")
+        raw_pinned = command.get("pinnedPageIds", [])
+        if not isinstance(raw_pinned, list):
+            raise ValueError("pinnedPageIds must be a list of page ids")
+        pinned_page_ids: list[str] = []
+        for item in raw_pinned:
+            if not isinstance(item, str) or not item:
+                raise ValueError("pinnedPageIds must be a list of non-empty strings")
+            if item not in pinned_page_ids:
+                pinned_page_ids.append(item)
+        if len(pinned_page_ids) > MAX_PINNED_PAGES:
+            raise ValueError(
+                f"pinnedPageIds must contain at most {MAX_PINNED_PAGES} ids"
+            )
         options = {
             "mode": mode,
             "useParentChild": _optional_boolean(
@@ -2135,6 +2164,7 @@ class InsightQACommandService:
             ),
             "topK": top_k,
             "threshold": threshold,
+            "pinnedPageIds": pinned_page_ids,
         }
         processed = preprocess_question(question)
         config = self.settings.resolve_insight(
@@ -2182,6 +2212,7 @@ class InsightQACommandService:
             "useParentChild": options["useParentChild"],
             "vectorGeneration": vector_generation,
             "dependencyFingerprint": snapshot.fingerprint,
+            "pinnedPageIds": pinned_page_ids,
             "config": config,
         }
         request_id, token = self.repository.create_vector_query(
@@ -2630,6 +2661,64 @@ def entity_page_candidates(
                     "hybridScore": ENTITY_EVIDENCE_SCORE,
                 }
             )
+    return candidates
+
+
+def pinned_page_candidates(
+    pinned_page_ids: Sequence[str],
+    *,
+    snapshot_pages: Sequence[Mapping[str, Any]],
+    locations: Mapping[int, Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Build forced candidates for the pages the reader pinned (current page etc.).
+
+    阅读器内问答时，用户往往就是对着「当前这一页」提问（「这页说的是谁」）。这类页
+    未必能靠向量检索命中，但它是用户亲眼看到的证据，必须强制进入候选窗口。得分设为
+    PINNED_PAGE_SCORE（0.95）：低于真实向量命中（1.0），高于实体出场页（0.35）与
+    整章补页（0.45），既不挤掉真正相关的向量结果，又保证稳进 top_k。
+    """
+    if not pinned_page_ids or not locations:
+        return []
+    # pageId -> pageNumber 反查（locations 以页码为键）。
+    page_number_by_id: dict[str, int] = {}
+    for number, info in locations.items():
+        if not isinstance(info, Mapping):
+            continue
+        page_id = info.get("pageId")
+        if isinstance(page_id, str) and page_id:
+            page_number_by_id.setdefault(page_id, number)
+    by_page_id: dict[str, Mapping[str, Any]] = {}
+    for item in snapshot_pages:
+        if not isinstance(item, Mapping):
+            continue
+        page_id = item.get("pageId")
+        if isinstance(page_id, str) and page_id:
+            by_page_id.setdefault(page_id, item)
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for page_id in pinned_page_ids:
+        if not isinstance(page_id, str) or not page_id or page_id in seen:
+            continue
+        item = by_page_id.get(page_id)
+        if item is None:
+            # 钉选页不在当前快照里（跨书/已删除）时跳过，不编造。
+            continue
+        analysis = item.get("analysis")
+        if not isinstance(analysis, Mapping):
+            analysis = {}
+        seen.add(page_id)
+        candidates.append(
+            {
+                "id": f"pinned_page_{page_id}",
+                "type": "page",
+                "pageId": page_id,
+                "pageNumber": page_number_by_id.get(page_id),
+                "document": _page_document(page_number_by_id.get(page_id), analysis),
+                "hybridScore": PINNED_PAGE_SCORE,
+                "pinned": True,
+            }
+        )
     return candidates
 
 

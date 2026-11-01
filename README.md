@@ -195,6 +195,8 @@ python saber_v2.py --role worker
 python saber_v2.py --role storage-migrator --data-dir <目录>
 ```
 
+> 公网（`public` profile）已内置强制安全头：`Content-Security-Policy`、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Permissions-Policy`、HSTS 等。若在前面加反向代理，请**保留**后端下发的这些响应头，不要覆盖。
+
 测试与门禁：
 
 ```bash

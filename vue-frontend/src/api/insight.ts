@@ -140,6 +140,7 @@ export type SendChatOptions = ChatStreamOptions & {
   useParentChild: boolean
   useReasoning: boolean
   useReranker: boolean
+  pinnedPageIds?: string[]
 }
 
 function requireQaEventData(
@@ -164,7 +165,14 @@ function requireQaCitations(value: unknown): QACitation[] {
     const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl : (typeof raw.source_url === 'string' ? raw.source_url : undefined)
     const excerpt = typeof raw.excerpt === 'string' ? raw.excerpt : undefined
     const source: QACitation['source'] =
-      raw.source === 'entity' ? 'entity' : raw.source === 'page' ? 'page' : undefined
+      raw.source === 'entity'
+        ? 'entity'
+        : raw.source === 'page'
+          ? 'page'
+          : raw.source === 'chapter'
+            ? 'chapter'
+            : undefined
+    const pinned = raw.pinned === true ? true : undefined
     const pageInChapter = typeof raw.pageInChapter === 'number' ? raw.pageInChapter : (typeof raw.page_in_chapter === 'number' ? raw.page_in_chapter : null)
     const globalPageNumber = typeof raw.globalPageNumber === 'number' ? raw.globalPageNumber : (typeof raw.global_page_number === 'number' ? raw.global_page_number : null)
     const rawSource = typeof raw.pageNumberSource === 'string' ? raw.pageNumberSource : raw.page_number_source
@@ -185,6 +193,7 @@ function requireQaCitations(value: unknown): QACitation[] {
       sourceUrl,
       excerpt,
       source,
+      pinned,
     }
   })
 }
@@ -865,6 +874,9 @@ export async function sendChat(
       useReranker: options.useReranker,
       topK: options.topK,
       threshold: options.threshold,
+      ...(options.pinnedPageIds && options.pinnedPageIds.length
+        ? { pinnedPageIds: options.pinnedPageIds }
+        : {}),
     }),
   })
   if (!response.ok) {

@@ -3608,6 +3608,7 @@ export interface components {
             useParentChild?: boolean;
             useReasoning?: boolean;
             useReranker?: boolean;
+            pinnedPageIds?: components["schemas"]["Uuid"][];
         };
         InsightCitation: {
             pageId: components["schemas"]["Uuid"] | null;
@@ -3616,6 +3617,9 @@ export interface components {
             sourceAnalysisId: components["schemas"]["Uuid"] | null;
             excerpt: string;
             score: number | null;
+            /** @enum {string} */
+            source?: "page" | "entity" | "chapter";
+            pinned?: boolean;
         };
         InsightCitationCommand: {
             pageId: components["schemas"]["Uuid"];

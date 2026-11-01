@@ -71,6 +71,9 @@ from src.backend_v2.insight.qa import (
     retrieval_diagnostics,
     _interleave_by_source,
     validate_retrieval_candidates,
+    pinned_page_candidates,
+    PINNED_PAGE_SCORE,
+    MAX_PINNED_PAGES,
 )
 from src.backend_v2.insight.character_skill import character_profile_digest
 from src.backend_v2.insight.repository import (
@@ -7965,5 +7968,104 @@ def test_graph_endpoint_rejects_more_than_ten_books(insight_platform) -> None:
     response = app.test_client().get(f"/api/v2/insight/graph?bookIds={too_many}")
     assert response.status_code == 422
     assert response.get_json()["error"]["code"] == "validation_error"
+
+
+def _pinned_snapshot_pages():
+    return [
+        {
+            "pageId": "page-a",
+            "pageNumber": 7,
+            "analysis": {"page_summary": "这是当前页的正文"},
+        },
+        {
+            "pageId": "page-b",
+            "pageNumber": 8,
+            "analysis": {"page_summary": "另一页"},
+        },
+    ]
+
+
+def _pinned_locations():
+    return {
+        7: {"pageId": "page-a", "pageNumber": 7},
+        8: {"pageId": "page-b", "pageNumber": 8},
+    }
+
+
+def test_pinned_page_candidates_are_forced_with_high_score() -> None:
+    """钉选页生成 source=page、pinned=True、hybridScore=PINNED_PAGE_SCORE 的强制候选。"""
+    candidates = pinned_page_candidates(
+        ["page-a"],
+        snapshot_pages=_pinned_snapshot_pages(),
+        locations=_pinned_locations(),
+    )
+    assert len(candidates) == 1
+    item = candidates[0]
+    assert item["pageId"] == "page-a"
+    assert item["type"] == "page"
+    assert item["pageNumber"] == 7
+    assert item["hybridScore"] == PINNED_PAGE_SCORE
+    assert item["pinned"] is True
+    # 0.95 低于真实向量满分 1.0，但高于实体出场页 0.35 / 整章补页 0.45。
+    assert 0.45 < PINNED_PAGE_SCORE < 1.0
+    assert "当前页的正文" in item["document"]
+
+
+def test_pinned_page_candidates_skip_pages_not_in_snapshot() -> None:
+    """钉选页不在当前快照里时跳过，不编造候选。"""
+    candidates = pinned_page_candidates(
+        ["page-a", "missing-page"],
+        snapshot_pages=_pinned_snapshot_pages(),
+        locations=_pinned_locations(),
+    )
+    assert [item["pageId"] for item in candidates] == ["page-a"]
+
+
+def test_qa_command_threads_pinned_page_ids_into_payload_and_options(
+    insight_platform,
+    monkeypatch,
+) -> None:
+    """pinnedPageIds 校验后同时进入 request_payload 与 handle.options。"""
+    captured: dict[str, object] = {}
+    service = InsightQACommandService(insight_platform["engine"])
+
+    class Snapshot:
+        source_run_id = None
+        fingerprint = "fingerprint"
+
+    monkeypatch.setattr(service.settings, "resolve_insight", lambda **_kwargs: {})
+    monkeypatch.setattr(service.derived, "snapshot", lambda **_kwargs: Snapshot())
+    monkeypatch.setattr(
+        service.derived,
+        "qa_status",
+        lambda **_kwargs: {"available": True, "generation": 1},
+    )
+
+    def create_vector_query(**kwargs):
+        captured.update(kwargs)
+        return "request-id", "connection-token"
+
+    monkeypatch.setattr(
+        service.repository, "create_vector_query", create_vector_query
+    )
+
+    handle = service.create(
+        book_id=str(insight_platform["book"]["id"]),
+        command={"question": "这一页说的是谁", "pinnedPageIds": ["page-a", "page-b"]},
+    )
+
+    assert captured["request_payload"]["pinnedPageIds"] == ["page-a", "page-b"]
+    assert handle.options["pinnedPageIds"] == ["page-a", "page-b"]
+
+
+def test_qa_command_rejects_too_many_pinned_pages(insight_platform) -> None:
+    """pinnedPageIds 超过上限 → ValueError。"""
+    too_many = [f"page-{index}" for index in range(MAX_PINNED_PAGES + 1)]
+    with pytest.raises(ValueError):
+        InsightQACommandService(insight_platform["engine"]).create(
+            book_id=str(insight_platform["book"]["id"]),
+            command={"question": "问题", "pinnedPageIds": too_many},
+        )
+
 
 

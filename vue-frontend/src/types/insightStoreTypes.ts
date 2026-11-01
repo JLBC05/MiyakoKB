@@ -53,7 +53,9 @@ export interface QACitation {
   chapterTitle?: string
   sourceUrl?: string
   excerpt?: string
-  source?: 'page' | 'entity'
+  source?: 'page' | 'entity' | 'chapter'
+  /** 用户在阅读器里钉选的当前页，作为强制候选带进来的证据。 */
+  pinned?: boolean
 }
 
 export interface QAMessage {

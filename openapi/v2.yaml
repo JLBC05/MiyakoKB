@@ -5938,6 +5938,10 @@ components:
         useParentChild: {type: boolean}
         useReasoning: {type: boolean}
         useReranker: {type: boolean}
+        pinnedPageIds:
+          type: array
+          maxItems: 5
+          items: {$ref: "#/components/schemas/Uuid"}
     InsightCitation:
       type: object
       additionalProperties: false
@@ -5961,6 +5965,8 @@ components:
             - type: "null"
         excerpt: {type: string}
         score: {type: [number, "null"]}
+        source: {type: string, enum: [page, entity, chapter]}
+        pinned: {type: boolean}
     InsightCitationCommand:
       type: object
       additionalProperties: false

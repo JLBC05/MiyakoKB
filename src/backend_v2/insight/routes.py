@@ -75,6 +75,7 @@ from src.backend_v2.insight.qa import (
     citations_for,
     entity_page_candidates,
     page_locations,
+    pinned_page_candidates,
     retrieval_diagnostics,
     select_candidates,
     validate_retrieval_candidates,
@@ -652,6 +653,7 @@ def create_insight_blueprint(
                     "useParentChild",
                     "useReasoning",
                     "useReranker",
+                    "pinnedPageIds",
                 }
             ),
         )
@@ -765,6 +767,12 @@ def create_insight_blueprint(
                     snapshot_pages=snapshot_pages,
                     locations=locations,
                 )
+                # 阅读器内问答：用户钉选/当前页强制进入候选（得分 0.95，见 qa.py）。
+                pinned_candidates = pinned_page_candidates(
+                    handle.options.get("pinnedPageIds") or [],
+                    snapshot_pages=snapshot_pages,
+                    locations=locations,
+                )
 
                 global_candidates: list[dict[str, Any]] = []
                 rankable: list[dict[str, Any]] = []
@@ -816,29 +824,40 @@ def create_insight_blueprint(
                 evidence_page_ids = {
                     value.get("pageId") for value in evidence
                 }
-                # 整章覆盖页不是「实体出场」证据，但在没有更相关命中时它提供了本章
-                # 正文，因此排在实体证据之前、并只补尚未出现的页。
+                # 钉选页是用户亲眼看到的证据，优先级最高：紧跟在全局材料之后，排在
+                # 章补页/向量命中之前，且不与已选页面重复。
+                pinned_fill = [
+                    value
+                    for value in pinned_candidates
+                    if value.get("pageId") not in selected_page_ids
+                ]
+                pinned_page_ids_set = {value.get("pageId") for value in pinned_fill}
+                # 点名章节的正文要排在向量命中之前：问「第 2 话发生了什么」时，
+                # 向量命中的是别的话里措辞相近的页面，本章页面反而排在它们后面，
+                # 模型的引用列表就变成了别的话。本章正文优先，其余命中跟随。
                 chapter_fill = [
                     value
                     for value in chapter_candidates
                     if value.get("pageId") not in selected_page_ids
+                    and value.get("pageId") not in pinned_page_ids_set
                     and value.get("pageId") not in evidence_page_ids
                 ]
                 chapter_fill_page_ids = {
                     value.get("pageId") for value in chapter_fill
                 }
-                # 点名章节的正文要排在向量命中之前：问「第 2 话发生了什么」时，
-                # 向量命中的是别的话里措辞相近的页面，本章页面反而排在它们后面，
-                # 模型的引用列表就变成了别的话。本章正文优先，其余命中跟随。
                 candidates = (
                     global_candidates
+                    + pinned_fill
                     + chapter_fill
                     + ranked
                     + evidence
                 )
                 citations = citations_for(candidates, engine=engine, page_lookup=locations)
                 for citation in citations:
-                    if citation.get("pageId") in evidence_page_ids:
+                    if citation.get("pageId") in pinned_page_ids_set:
+                        citation["source"] = "page"
+                        citation["pinned"] = True
+                    elif citation.get("pageId") in evidence_page_ids:
                         citation["source"] = "entity"
                     elif citation.get("pageId") in chapter_fill_page_ids:
                         citation["source"] = "chapter"

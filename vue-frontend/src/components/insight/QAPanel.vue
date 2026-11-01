@@ -15,6 +15,7 @@ import { confirmProductAction } from '@/composables/useProductConfirm'
 import { stepKindLabel } from '@/utils/taskDisplay'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import UiButton from '@/components/ui/UiButton.vue'
+import UiIcon from '@/components/ui/UiIcon.vue'
 import QAComposer from './qa/QAComposer.vue'
 import QAMessageList from './qa/QAMessageList.vue'
 import QAOptionsBar from './qa/QAOptionsBar.vue'
@@ -23,6 +24,20 @@ import QASaveNoteModal from './qa/QASaveNoteModal.vue'
 import { useQANoteModal } from './useQANoteModal'
 
 type QARepairAction = NonNullable<insightApi.QAStatusResponse['repairAction']>
+
+const props = withDefaults(
+  defineProps<{
+    /** 阅读器里当前页（或用户钉选页），作为强制候选带给检索。 */
+    pinnedPageIds?: string[]
+    /** panel = 独立问答页；drawer = 阅读器内抽屉。 */
+    variant?: 'panel' | 'drawer'
+  }>(),
+  { pinnedPageIds: () => [], variant: 'panel' }
+)
+const emit = defineEmits<{
+  (e: 'navigate-page', pageNumber: number): void
+}>()
+const pinnedPageIds = computed(() => props.pinnedPageIds ?? [])
 
 const insightStore = useInsightStore()
 const taskCenterStore = useTaskCenterStore()
@@ -194,6 +209,7 @@ async function sendQuestion(): Promise<void> {
       useParentChild: useParentChild.value,
       useReasoning: useReasoning.value,
       useReranker: useReranker.value,
+      ...(pinnedPageIds.value.length ? { pinnedPageIds: pinnedPageIds.value } : {}),
     }
     const response = await insightApi.sendChat(bookId, question, chatOptions)
 
@@ -545,6 +561,11 @@ function renderMarkdown(content: string): string {
 }
 
 function selectPage(pageNum: number): void {
+  // 阅读器内：直接跳到该页；独立问答页：沿用 store 的选择行为。
+  if (props.variant === 'drawer') {
+    emit('navigate-page', pageNum)
+    return
+  }
   insightStore.selectPage(pageNum)
 }
 
@@ -629,7 +650,12 @@ watch(
 </script>
 
 <template>
-  <div class="qa-panel">
+  <div class="qa-panel" :class="`qa-panel--${variant}`">
+    <div v-if="pinnedPageIds.length" class="qa-panel__pinned-badge" role="status">
+      <UiIcon name="map-pin" :size="13" />
+      当前页优先（{{ pinnedPageIds.length }} 页）
+    </div>
+
     <QAMessageList
       :messages="qaHistory"
       :render-markdown="renderMarkdown"
@@ -709,6 +735,26 @@ watch(
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+.qa-panel--drawer {
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.qa-panel__pinned-badge {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  align-self: flex-start;
+  margin: 10px 16px 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-text-primary);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-muted);
 }
 
 .qa-panel__input-shell {
