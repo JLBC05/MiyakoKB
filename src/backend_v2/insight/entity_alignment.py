@@ -84,7 +84,11 @@ class AlignmentConfig:
     max_output_tokens: int = 2500
     chapter_window: int = 1
     max_attempts_per_request: int = 3
-    parallel: int = 3
+    # 并发裁决请求数。单请求是「一次 LLM JSON 裁决」（一次网络往返，I/O 密集）。
+    # 久留美 1507 页实测：940 个请求、单请求墙面约 14 秒，串行约 3.6 小时；
+    # 提到 6（仍可被 INSIGHT_ALIGN_PARALLEL 覆盖，上限 8）可近似线性缩短，
+    # 由 run_request_batch 的连续失败软降级兜住上游限流。
+    parallel: int = 6
     generic_terms_path: str = ""
 
 
@@ -99,7 +103,7 @@ def resolve_alignment_config(**overrides: Any) -> AlignmentConfig:
         "max_output_tokens": _env_int("INSIGHT_ALIGN_OUTPUT_TOKENS", 2500, minimum=256, maximum=64000),
         "chapter_window": _env_int("INSIGHT_ALIGN_CHAPTER_WINDOW", 1, minimum=0, maximum=100),
         "max_attempts_per_request": _env_int("INSIGHT_ALIGN_ATTEMPTS", 3, minimum=1, maximum=6),
-        "parallel": _env_int("INSIGHT_ALIGN_PARALLEL", 3, minimum=1, maximum=8),
+        "parallel": _env_int("INSIGHT_ALIGN_PARALLEL", 6, minimum=1, maximum=8),
         "generic_terms_path": os.environ.get("INSIGHT_ALIGN_GENERIC_TERMS", "").strip(),
     }
     base.update({key: value for key, value in overrides.items() if value is not None})
@@ -929,6 +933,8 @@ class JudgeRunStats:
     input_tokens: int = 0
     output_tokens: int = 0
     elapsed_seconds: float = 0.0
+    peak_concurrency: int = 0
+    throttled_events: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -939,6 +945,8 @@ class JudgeRunStats:
             "estimatedInputTokens": self.input_tokens,
             "estimatedOutputTokens": self.output_tokens,
             "elapsedSeconds": round(self.elapsed_seconds, 2),
+            "peakConcurrency": self.peak_concurrency,
+            "throttledEvents": self.throttled_events,
         }
 
 
@@ -951,14 +959,29 @@ async def run_request_batch(
     progress: Callable[[int, int], None] | None = None,
     sleep: Callable[[float], Any] | None = None,
 ) -> tuple[dict[str, str], dict[str, ComponentDecision], JudgeRunStats]:
-    """并发执行所有请求：单请求失败只把该请求的候选边标为 UNCERTAIN，不丢实体。"""
+    """并发执行所有请求：单请求失败只把该请求的候选边标为 UNCERTAIN，不丢实体。
+
+    并发采用「动态许可」而非固定信号量：正常情况下最多 `config.parallel` 个请求同时在飞；
+    当连续失败（多为上游限流 429 / 超时 / 坏 JSON）达到阈值时，把有效并发**软降级**减半，
+    之后再随连续成功逐步恢复。这样高并发打上游时不会越打越慢，也不影响裁决语义
+    （失败请求仍按 MAX_ATTEMPTS 重试、最终标 UNCERTAIN，与单并发一致）。
+    """
     stats = JudgeRunStats()
     pair_states: dict[str, str] = {}
     component_decisions: dict[str, ComponentDecision] = {}
     started = time.monotonic()
-    semaphore = asyncio.Semaphore(max(1, config.parallel))
+    limit = max(1, config.parallel)
     done = 0
     lock = asyncio.Lock()
+
+    # 动态并发账本（均由 lock 保护）：有效上限、当前在飞数、连续失败/成功计数。
+    effective_limit = limit
+    in_flight = 0
+    failure_streak = 0
+    success_streak = 0
+    # 每 shrink_from 次连续失败把有效并发减半（下限 1）；恢复需要 recover_after 次连续成功。
+    shrink_threshold = 3
+    recover_after = max(4, limit)
 
     async def _sleep(seconds: float) -> None:
         if sleep is not None:
@@ -968,13 +991,46 @@ async def run_request_batch(
             return
         await asyncio.sleep(seconds)
 
+    async def _acquire() -> None:
+        """在有效并发额度内获取一个执行位（额度随失败/成功动态调整）。"""
+        nonlocal in_flight
+        while True:
+            async with lock:
+                if in_flight < effective_limit:
+                    in_flight += 1
+                    if in_flight > stats.peak_concurrency:
+                        stats.peak_concurrency = in_flight
+                    return
+            # 让出事件循环再重试获取额度；这里必须用真正的 asyncio.sleep（而非注入的
+            # sleep 桩），否则单测里注入的 no-op sleep 会让出不了控制权、造成忙等。
+            await asyncio.sleep(0)
+
+    async def _release(*, ok: bool) -> None:
+        nonlocal in_flight, effective_limit, failure_streak, success_streak
+        async with lock:
+            in_flight -= 1
+            if ok:
+                success_streak += 1
+                failure_streak = 0
+                if effective_limit < limit and success_streak >= recover_after:
+                    effective_limit += 1
+                    success_streak = 0
+            else:
+                failure_streak += 1
+                success_streak = 0
+                if failure_streak >= shrink_threshold and effective_limit > 1:
+                    effective_limit = max(1, effective_limit // 2)
+                    failure_streak = 0
+                    stats.throttled_events += 1
+
     async def _one(shard: RequestShard) -> None:
         nonlocal done
-        async with semaphore:
+        await _acquire()
+        succeeded = False
+        try:
             stats.requests += 1
             prompt = build_request_prompt(graph, shard)
             stats.input_tokens += _estimate_tokens(prompt)
-            succeeded = False
             for attempt in range(1, config.max_attempts_per_request + 1):
                 try:
                     payload = await client.generate_json(prompt=prompt, system=ALIGNMENT_SYSTEM_PROMPT)
@@ -997,15 +1053,17 @@ async def run_request_batch(
                 async with lock:
                     for edge_id in shard.edge_ids:
                         pair_states.setdefault(edge_id, UNCERTAIN)
-            async with lock:
-                done += 1
-                if progress is not None:
-                    try:
-                        progress(done, len(shards))
-                    except Exception:  # noqa: BLE001 - 进度回调不得影响裁决
-                        # 进度回调是观测层，抛异常不能拖垮正在跑的裁决；
-                        # 记 debug 便于排查「进度停了但任务还在跑」。
-                        LOGGER.debug("对齐进度回调失败，已忽略", exc_info=True)
+        finally:
+            await _release(ok=succeeded)
+        async with lock:
+            done += 1
+            if progress is not None:
+                try:
+                    progress(done, len(shards))
+                except Exception:  # noqa: BLE001 - 进度回调不得影响裁决
+                    # 进度回调是观测层，抛异常不能拖垮正在跑的裁决；
+                    # 记 debug 便于排查「进度停了但任务还在跑」。
+                    LOGGER.debug("对齐进度回调失败，已忽略", exc_info=True)
 
     if shards:
         await asyncio.gather(*[_one(shard) for shard in shards])

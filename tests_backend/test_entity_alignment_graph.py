@@ -404,3 +404,70 @@ def test_alignment_config_reads_environment_overrides(monkeypatch) -> None:
     assert config.max_edges_per_request == 2000
     assert config.parallel == 1
     assert resolve_alignment_config(top_k_per_node=2).top_k_per_node == 2
+
+
+def test_default_parallel_concurrency_is_six() -> None:
+    """久留美实测瓶颈是单请求墙面延迟（~14s），默认并发从 3 提到 6。"""
+    assert resolve_alignment_config().parallel == 6
+
+
+class _ConcurrencyProbeClient:
+    """记录真实并发峰值的假客户端：每个请求在飞时 +1，离开 -1。"""
+
+    def __init__(self, *, decide=None, delay: float = 0.0) -> None:
+        self.decide = decide or (lambda _category, _a, _b: UNCERTAIN)
+        self.delay = delay
+        self.active = 0
+        self.peak = 0
+
+    async def generate_json(self, *, prompt: str, system: str | None = None) -> dict:
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        try:
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            return _response_for(_prompt_payload(prompt), self.decide)
+        finally:
+            self.active -= 1
+
+
+def _many_shards(count: int):
+    names = [f"角色{index}" for index in range(1, count * 2 + 1)]
+    graph, config = _graph(names, link=lambda _cat, a, b: a[:2] == b[:2], max_nodes=2)
+    return graph, config, plan_requests(graph=graph, config=config)
+
+
+def test_run_batch_caps_in_flight_at_parallel_limit() -> None:
+    graph, config, shards = _many_shards(8)
+    assert len(shards) >= 8  # 确保有足够多请求能叠并发
+    config = resolve_alignment_config(
+        max_nodes_per_request=2, top_k_per_node=6, parallel=3,
+    )
+    client = _ConcurrencyProbeClient(delay=0.01)
+    _states, _components, stats = _run(graph, shards, config, client)
+
+    assert client.peak <= 3
+    assert 1 <= client.peak <= 3
+    assert stats.peak_concurrency == client.peak
+    assert stats.peak_concurrency <= 3
+
+
+def test_repeated_failures_soft_degrade_concurrency_but_still_finish() -> None:
+    """连续失败应触发软降级（throttled_events>0），且整轮仍正常收尾（不抛异常）。"""
+    graph, config, shards = _many_shards(10)
+    config = resolve_alignment_config(
+        max_nodes_per_request=2, top_k_per_node=6, parallel=4, max_attempts_per_request=1,
+    )
+
+    class _AlwaysFail:
+        async def generate_json(self, *, prompt: str, system: str | None = None) -> dict:
+            await asyncio.sleep(0)
+            raise RuntimeError("429 too many requests")
+
+    states, _components, stats = _run(graph, shards, config, _AlwaysFail())
+
+    # 全部请求失败 → 所有候选边降级为 UNCERTAIN，实体不丢
+    assert set(states.values()) == {UNCERTAIN}
+    assert stats.failed_requests == len(shards)
+    assert stats.throttled_events >= 1  # 触发过软降级
+
