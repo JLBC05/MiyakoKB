@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import sys
 import threading
+import time
 from typing import Any, Mapping
 import uuid
 import zipfile
@@ -612,7 +613,11 @@ def _run_job(platform, algorithms: FakeInsightAlgorithms, derived_algorithms=Non
 
 
 @pytest.mark.parametrize("failure", ("one_group", "all_groups", "overview", "embedding"))
-def test_analysis_keeps_successes_and_continues_after_postprocessing_failure(insight_platform, failure):
+def test_analysis_keeps_successes_and_continues_after_postprocessing_failure(insight_platform, failure, monkeypatch):
+    # 本用例用「第 1 次调用失败 → 第 0 组失败」来断言部分失败的持久化契约，依赖分组按
+    # unitIndex 顺序串行调用。P-c 引入同层并发后，调用顺序不再确定；这里把并发钉成 1
+    # 以保持该契约的可复现性（并发路径由 test_summary_layer_runs_groups_concurrently 覆盖）。
+    monkeypatch.setenv("INSIGHT_SUMMARY_PARALLEL", "1")
     platform = insight_platform
     book_id = str(platform["book"]["id"])
     with platform["engine"].begin() as connection:
@@ -673,6 +678,56 @@ def test_analysis_keeps_successes_and_continues_after_postprocessing_failure(ins
     assert _run_job(platform, algorithms) == "completed"
     assert algorithms.calls == []
     assert repository.get_run(retried["runId"])["successCount"] == 2
+
+
+class _ConcurrencyProbeDerived(FakeDerivedAlgorithms):
+    """记录 build_layer 的最大并发数与总墙钟，用于验证 P-c 同层并发。
+
+    每个分组 sleep 0.3s；若串行，2 组≈0.6s；并发（>=2）则≈0.3s。用锁维护活跃计数。
+    """
+
+    delay = 0.3
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._active = 0
+        self.max_concurrent = 0
+
+    def build_layer(self, inputs, *, layer, config):
+        with self._lock:
+            self._active += 1
+            self.max_concurrent = max(self.max_concurrent, self._active)
+        try:
+            time.sleep(self.delay)
+            return super().build_layer(inputs, layer=layer, config=config)
+        finally:
+            with self._lock:
+                self._active -= 1
+
+
+def test_summary_layer_runs_groups_concurrently(insight_platform, monkeypatch):
+    """P-c：同一 L0 层的多个分组应并发执行（而非串行）。"""
+    platform = insight_platform
+    book_id = str(platform["book"]["id"])
+    # 2 页 + pagesPerBatch=1 → L0 层 2 个分组。并发默认 3，足以让两组同时跑。
+    monkeypatch.setenv("INSIGHT_SUMMARY_PARALLEL", "3")
+    with platform["engine"].begin() as connection:
+        settings = json.loads(connection.execute(select(app_settings.c.payload_json).where(
+            app_settings.c.domain == "insight",
+        )).scalar_one())
+        settings["analysis"]["batch"]["pagesPerBatch"] = 1
+        connection.execute(update(app_settings).where(app_settings.c.domain == "insight")
+                           .values(payload_json=json.dumps(settings)))
+
+    InsightAnalysisCommandService(platform["engine"]).create_analysis_job(
+        command={"bookId": book_id, "scope": "full"}, idempotency_key="concurrent-layer",
+    )
+    probe = _ConcurrencyProbeDerived()
+    assert _run_job(platform, FakeInsightAlgorithms(), probe) == "completed"
+
+    # 关键证据：至少两个分组的 build_layer 在同一时刻重叠执行（串行时峰值为 1）。
+    # 注：整体墙钟含任务框架/落库等固定开销，故不用绝对耗时断言并发，只看重叠峰值。
+    assert probe.max_concurrent >= 2, f"expected concurrent layer runs, got {probe.max_concurrent}"
 
 
 def test_successful_page_is_visible_before_postprocessing(insight_platform):

@@ -13,6 +13,7 @@ from src.backend_v2.insight.entity_alignment import (
     DIFFERENT,
     SAME,
     UNCERTAIN,
+    AlignmentConfig,
     AlignmentProtocolError,
     EntityNode,
     apply_decisions,
@@ -409,6 +410,26 @@ def test_alignment_config_reads_environment_overrides(monkeypatch) -> None:
 def test_default_parallel_concurrency_is_six() -> None:
     """久留美实测瓶颈是单请求墙面延迟（~14s），默认并发从 3 提到 6。"""
     assert resolve_alignment_config().parallel == 6
+
+
+def test_default_request_packing_uses_bumped_node_and_edge_caps() -> None:
+    """P-b（v0.5.2）：久留美实测节点上限是请求数唯一瓶颈（token 预算从不触发、
+    单独放宽边上限 0 收益）；默认 max_nodes 24→32（请求 -25.3%）、max_edges 40→56。
+    """
+    config = resolve_alignment_config()
+    assert config.max_nodes_per_request == 32
+    assert config.max_edges_per_request == 56
+    assert AlignmentConfig().max_nodes_per_request == 32
+    assert AlignmentConfig().max_edges_per_request == 56
+
+
+def test_request_packing_env_overrides_still_apply(monkeypatch) -> None:
+    """P-b 的默认值升级不影响环境变量覆盖能力。"""
+    monkeypatch.setenv("INSIGHT_ALIGN_MAX_NODES", "40")
+    monkeypatch.setenv("INSIGHT_ALIGN_MAX_EDGES", "64")
+    config = resolve_alignment_config()
+    assert config.max_nodes_per_request == 40
+    assert config.max_edges_per_request == 64
 
 
 class _ConcurrencyProbeClient:

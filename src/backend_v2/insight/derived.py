@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
@@ -87,6 +88,22 @@ from src.shared.memory_errors import is_memory_allocation_error
 from src.shared.user_logging import json_details, log_result
 
 LOGGER = logging.getLogger("saber.worker.insight_derived")
+
+
+def _summary_parallelism() -> int:
+    """L0/L1 汇总层每层内多组并发的并发数（P-c，v0.5.2）。
+
+    单组汇总是一次阻塞式 LLM 调用（``build_layer`` 内部 ``asyncio.run``）；同一层内
+    各组彼此独立、可安全并发。并发度由环境变量 ``INSIGHT_SUMMARY_PARALLEL`` 控制，
+    默认 3、上限 8，与页面分析阶段的并发兜底保持一致。
+    """
+    raw = os.environ.get("INSIGHT_SUMMARY_PARALLEL", "").strip()
+    try:
+        value = int(raw) if raw else 3
+    except ValueError:
+        value = 3
+    return max(1, min(8, value))
+
 
 
 DERIVED_KINDS = frozenset(
@@ -6072,24 +6089,56 @@ class InsightDerivedWorkerService:
                         )
                     ).scalars())
                 failed_units = []
-                for unit in layer_units:
-                    self.jobs.assert_attempt_active(fence)
-                    if unit["unitIndex"] in completed_indices:
-                        continue
-                    try:
-                        content = self.algorithms.build_layer(
-                            unit["inputs"], layer=unit["layer"], config=config,
+                # P-c（v0.5.2）：同层内各分组彼此独立，LLM 调用并发执行以缩短壁钟时间
+                # （旧实现串行：每组一次阻塞 LLM 往返）。为保持「每组完成即持久化、断点可
+                # 续跑」的既有语义，LLM 调用放入线程池并发，但 checkpoint/publish 仍在主线程
+                # 按 unitIndex 顺序串行落库——既避免多线程写 SQLite 争锁，也保证 completedUnitCount
+                # 单调递增、与单线程行为一致。
+                pending_units = [
+                    unit for unit in layer_units
+                    if unit["unitIndex"] not in completed_indices
+                ]
+                parallelism = min(_summary_parallelism(), len(pending_units)) or 1
+
+                def _run_layer(unit: Mapping[str, Any]) -> Mapping[str, Any]:
+                    content = self.algorithms.build_layer(
+                        unit["inputs"], layer=unit["layer"], config=config,
+                    )
+                    if not isinstance(content, Mapping) or not contains_nonempty_text(content):
+                        raise InsightConflict(
+                            "summary layer algorithm returned an empty or non-object result"
                         )
-                        if not isinstance(content, Mapping) or not contains_nonempty_text(content):
-                            raise InsightConflict(
-                                "summary layer algorithm returned an empty or non-object result"
-                            )
-                    except AttemptFenced:
-                        raise
-                    except Exception as exc:
+                    return content
+
+                results: list[tuple[Mapping[str, Any], Any, BaseException | None]] = []
+                if parallelism <= 1:
+                    for unit in pending_units:
+                        try:
+                            content = _run_layer(unit)
+                            results.append((unit, content, None))
+                        except BaseException as exc:  # noqa: BLE001 - 分类在下方统一处理
+                            results.append((unit, None, exc))
+                else:
+                    with ThreadPoolExecutor(
+                        max_workers=parallelism,
+                        thread_name_prefix="summary-layer",
+                    ) as pool:
+                        futures = [(unit, pool.submit(_run_layer, unit)) for unit in pending_units]
+                        # 按提交顺序取回结果，保证落库顺序 == unitIndex 顺序。
+                        for unit, future in futures:
+                            try:
+                                results.append((unit, future.result(), None))
+                            except BaseException as exc:  # noqa: BLE001
+                                results.append((unit, None, exc))
+
+                for unit, content, error in results:
+                    self.jobs.assert_attempt_active(fence)
+                    if error is not None:
+                        if isinstance(error, AttemptFenced):
+                            raise error
                         failed_units.append({
                             "unitIndex": unit["unitIndex"],
-                            "error": redact_sensitive_text(str(exc)),
+                            "error": redact_sensitive_text(str(error)),
                         })
                         continue
                     completed = {**unit, "content": dict(content)}

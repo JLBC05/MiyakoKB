@@ -78,8 +78,12 @@ class AlignmentConfig:
 
     concept_min_pages: int = 3
     top_k_per_node: int = 4
-    max_nodes_per_request: int = 24
-    max_edges_per_request: int = 40
+    # P-b（v0.5.2 提速）：久留美实测候选图 6560 节点/17501 边，请求数由「节点上限」而非
+    # token 预算或边上限卡住——token/请求 p95 仅 ~3.1k，远低于 8k 预算。把单请求节点上限
+    # 24→32 使请求数下降 25.3%（1450→1083），边上限 40→56 作为配套余量（避免节点放宽后
+    # 反被边上限卡住；单独放宽边上限无收益）。CLI/环境变量仍可覆盖。
+    max_nodes_per_request: int = 32
+    max_edges_per_request: int = 56
     max_input_tokens: int = 8000
     max_output_tokens: int = 2500
     chapter_window: int = 1
@@ -97,8 +101,8 @@ def resolve_alignment_config(**overrides: Any) -> AlignmentConfig:
     base = {
         "concept_min_pages": _env_int("INSIGHT_ALIGN_CONCEPT_MIN_PAGES", 3, minimum=1, maximum=50),
         "top_k_per_node": _env_int("INSIGHT_ALIGN_TOP_K", 4, minimum=1, maximum=40),
-        "max_nodes_per_request": _env_int("INSIGHT_ALIGN_MAX_NODES", 24, minimum=2, maximum=400),
-        "max_edges_per_request": _env_int("INSIGHT_ALIGN_MAX_EDGES", 40, minimum=1, maximum=2000),
+        "max_nodes_per_request": _env_int("INSIGHT_ALIGN_MAX_NODES", 32, minimum=2, maximum=400),
+        "max_edges_per_request": _env_int("INSIGHT_ALIGN_MAX_EDGES", 56, minimum=1, maximum=2000),
         "max_input_tokens": _env_int("INSIGHT_ALIGN_INPUT_TOKENS", 8000, minimum=1000, maximum=200000),
         "max_output_tokens": _env_int("INSIGHT_ALIGN_OUTPUT_TOKENS", 2500, minimum=256, maximum=64000),
         "chapter_window": _env_int("INSIGHT_ALIGN_CHAPTER_WINDOW", 1, minimum=0, maximum=100),
